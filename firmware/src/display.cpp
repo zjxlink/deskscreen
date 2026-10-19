@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <LovyanGFX.hpp>
+#include <driver/i2c.h>
 #include <esp_heap_caps.h>
 #include <lvgl.h>
 
