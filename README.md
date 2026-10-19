@@ -33,6 +33,17 @@ pio device monitor           # 查看串口日志
 
 BOX-3 用 USB-C 连电脑就能烧录。如果烧录失败，按住 BOOT 键再按一下 RESET 键进入下载模式后重试。
 
+### 不装软件，用网页烧录
+
+每次推送代码，GitHub Actions 都会自动编译，并生成一个合并好的 `firmware-merged.bin`（在 Actions 页面对应运行记录底部的 Artifacts 里下载，`firmware-box3` 是 BOX-3 用的）。
+
+1. 用 Chrome 或 Edge 打开 https://espressif.github.io/esptool-js/
+2. 用 USB-C 连上设备，点 **Connect**，选择设备的串口
+3. Flash Address 填 `0x0`，选择 `firmware-merged.bin`，点 **Program**
+4. 烧完按一下 RESET 键
+
+本地编译时，这个文件也会生成在 `firmware/.pio/build/<环境名>/firmware-merged.bin`。
+
 ## 目录结构
 
 ```

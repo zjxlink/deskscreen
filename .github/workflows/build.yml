@@ -1,0 +1,42 @@
+name: Build firmware
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [box3, desk_v1]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            firmware/.pio/libdeps
+          key: pio-${{ matrix.env }}-${{ hashFiles('firmware/platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install platformio==6.1.16
+
+      - name: Build
+        working-directory: firmware
+        run: pio run -e ${{ matrix.env }}
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.env }}
+          path: firmware/.pio/build/${{ matrix.env }}/firmware-merged.bin
+          if-no-files-found: error
