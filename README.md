@@ -4,13 +4,24 @@
 
 ![界面预览](docs/preview.png)
 
-## 当前功能（v0.1）
+![GitHub 热力图](docs/preview-github.png)
+
+## 当前功能（v0.2）
 
 - 手机配网：首次开机设备会开一个 WiFi 热点，手机连上后选择家里的 WiFi 即可，不用装 App
 - 时间日期：NTP 自动对时（北京时间）
 - 天气：当前气温、天气、今日最高和最低气温、湿度。数据来自 [Open-Meteo](https://open-meteo.com)，免费，不需要 API Key，每 15 分钟刷新一次
 - 网页设置：同一 WiFi 下用浏览器打开 `http://deskscreen.local`（或屏幕上显示的 IP），可以设置城市（支持按城市名查坐标）和屏幕亮度
 - 重新配网：长按 BOOT 键 3 秒，或者在设置页面里点「重新配置 WiFi」
+- GitHub 贡献热力图：最近 24 周的贡献格子（配色和 GitHub 一致），以及今日贡献、连续天数、过去一年总数，每 30 分钟刷新
+- 多页面：点一下屏幕（BOX-3）或短按 BOOT 键切换页面；也可以在设置页面设定自动轮播间隔（默认 15 秒，填了 GitHub Token 才会轮播到 GitHub 页）
+
+### 设置 GitHub 热力图
+
+1. 打开 https://github.com/settings/tokens/new?description=DeskScreen 创建一个 classic Token，**不用勾选任何权限**（这样的 Token 只能读公开信息，泄露了也改不了你的任何东西），有效期按需选择
+2. 在设备设置页面的「GitHub Token」里粘贴并保存
+
+设备用内置的根证书校验 api.github.com 的 HTTPS 证书，Token 不会被中间人截获。Token 只保存在设备上，设置页面不会显示它。如果想统计私有仓库的贡献，需要在 GitHub 个人主页的贡献图设置里打开「Private contributions」。
 
 ## 硬件
 
@@ -48,7 +59,7 @@ BOX-3 用 USB-C 连电脑就能烧录。如果烧录失败，按住 BOOT 键再�
 
 ```
 firmware/
-  platformio.ini       编译配置（box3 / desk_v1 两个环境）
+  platformio.ini       编译配置（box3 / desk_v1 固件，native 单元测试）
   include/board.h      各板子的引脚定义
   include/lv_conf.h    LVGL 配置
   src/main.cpp         启动流程、主循环
@@ -56,9 +67,14 @@ firmware/
   src/ui.cpp           界面
   src/weather.cpp      后台拉取天气
   src/web_config.cpp   局域网设置页面
+  src/github.cpp       后台拉取 GitHub 贡献日历（GraphQL API）
+  src/github_parse.cpp 解析贡献日历、计算连续天数（不依赖硬件，有单元测试）
+  src/github_ca.h      api.github.com 的根证书
   src/settings.cpp     设置保存（NVS）
   src/fonts/           中文字体（自动生成，不要手改）
   tools/gen_fonts.py   中文字体生成脚本
+  tools/merge_bin.py   编译后生成单文件固件
+  test/                单元测试（pio test -e native，在电脑上运行）
 ```
 
 ## 中文字体
@@ -79,9 +95,10 @@ python3 tools/gen_fonts.py node_modules/@expo-google-fonts/noto-sans-sc/400Regul
 ## 路线图
 
 - [x] v0.1 时间、天气、配网、网页设置
-- [ ] GitHub 提交热力图、Star 数
+- [x] GitHub 贡献热力图
+- [ ] GitHub Star 数、仓库动态
 - [ ] 自选股和基金行情
-- [ ] 多页面切换（触摸或按键）
+- [x] 多页面切换（触摸或按键）
 - [ ] 番茄钟、待办事项
 - [ ] OTA 在线升级
 - [ ] 夜间自动调暗
