@@ -59,6 +59,14 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            firmware/.pio/libdeps
+          key: pio-native-${{ hashFiles('firmware/platformio.ini') }}
+          restore-keys: pio-native-
+
       - name: Install PlatformIO
         run: pip install platformio==6.1.16
 
