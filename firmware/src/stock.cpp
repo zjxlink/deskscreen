@@ -2,7 +2,6 @@
 
 #include <HTTPClient.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
 
 #include "net.h"
 #include "settings.h"
@@ -20,24 +19,25 @@ static StockStatus fetch(const StockCode *codes, int n, StockData &out, int &err
   char secids[512];
   if (!stock_build_secids(codes, n, secids, sizeof(secids))) return StockStatus::Error;
   String url =
-      "https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2"
+      "http://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2"
       "&fields=f2,f3,f4,f12,f13,f14&ut=bd1d9ddb04089700cf9c27f6f7426281&secids=";
   url += secids;
 
-  HttpsLock https;
-  // 行情是公开数据，不带任何凭据，先跳过证书校验
-  WiFiClientSecure client;
-  client.setInsecure();
-  client.setHandshakeTimeout(kTlsHandshakeTimeoutS);
+  // 行情是公开数据，不带任何凭据，用普通 HTTP：省掉 TLS 的内存和握手时间。
+  // 实机上 HTTPS 握手成功后服务器不回任何内容直接断开（-5），东方财富网页版本身也走 http
+  WiFiClient client;
   HTTPClient http;
   http.setTimeout(10000);
   if (!http.begin(client, url)) {
     error = HTTPC_ERROR_CONNECTION_REFUSED;
     return StockStatus::Error;
   }
+  // 默认的 User-Agent「ESP32HTTPClient」容易被网站的反爬规则拦掉，按浏览器的样子发
+  http.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36");
+  http.addHeader("Referer", "https://quote.eastmoney.com/");
   int status = http.GET();
   if (status != HTTP_CODE_OK) {
-    net_report(NetService::Stock, status, client);
+    net_report(NetService::Stock, status);
     error = status;
     http.end();
     return StockStatus::Error;
@@ -50,11 +50,11 @@ static StockStatus fetch(const StockCode *codes, int n, StockData &out, int &err
   DeserializationError err = deserializeJson(doc, body);
   if (err) {
     String detail = String("JSON: ") + err.c_str() + ", " + body.length() + " bytes";
-    net_report(NetService::Stock, kNetBadData, client, detail.c_str());
+    net_report(NetService::Stock, kNetBadData, detail.c_str());
     return StockStatus::Error;
   }
   StockStatus s = stock_parse(doc, codes, n, out);
-  net_report(NetService::Stock, s == StockStatus::Ok ? HTTP_CODE_OK : kNetBadData, client,
+  net_report(NetService::Stock, s == StockStatus::Ok ? HTTP_CODE_OK : kNetBadData,
              s == StockStatus::Ok ? nullptr : "unexpected data");
   return s;
 }
