@@ -18,6 +18,12 @@
 // GitHub 深色主题的贡献等级配色，0 级为空白格
 static const uint32_t kLevelColors[5] = {0x161B22, 0x0E4429, 0x006D32, 0x26A641, 0x39D353};
 
+// 行情涨跌配色，按 A 股习惯红涨绿跌
+#define COLOR_UP      lv_color_hex(0xDA3633)
+#define COLOR_DOWN    lv_color_hex(0x238636)
+#define COLOR_FLAT    lv_color_hex(0x30363D)
+#define COLOR_LINE    lv_color_hex(0x21262D)
+
 // 热力图格子尺寸：24 周 x 13px = 309px，正好放进 320 宽的屏幕
 static constexpr int kCell = 10;
 static constexpr int kGap = 3;
@@ -50,6 +56,17 @@ static lv_obj_t *lbl_gh_total;
 static lv_obj_t *gh_grid;
 static lv_obj_t *gh_cells[kGithubWeeks][7];
 static lv_obj_t *lbl_gh_msg;
+
+struct StockRow {
+  lv_obj_t *row;
+  lv_obj_t *name;
+  lv_obj_t *price;
+  lv_obj_t *pill;
+  lv_obj_t *pct;
+};
+static StockRow stock_rows[kMaxStocks];
+static lv_obj_t *lbl_stock_updated;
+static lv_obj_t *lbl_stock_msg;
 
 static lv_obj_t *make_screen() {
   lv_obj_t *scr = lv_obj_create(nullptr);
@@ -219,11 +236,69 @@ static void build_github() {
   lv_obj_align_to(less, prev, LV_ALIGN_OUT_LEFT_MID, -6, 0);
 }
 
+// 自选股：每行 名称 | 价格 | 涨跌幅，最多 6 行
+static void build_stocks() {
+  static constexpr int kRowH = 32;
+  static constexpr int kTop = 40;
+  lv_obj_t *scr = make_screen();
+  scr_pages[PAGE_STOCKS] = scr;
+
+  lv_obj_t *title = make_label(scr, &font_cn_16, COLOR_SUBTLE);
+  lv_label_set_text(title, "自选股");
+  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 12, 10);
+  dot_wifi[PAGE_STOCKS] = make_wifi_dot(scr);
+  lbl_stock_updated = make_label(scr, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_align_to(lbl_stock_updated, dot_wifi[PAGE_STOCKS], LV_ALIGN_OUT_LEFT_MID, -8, 0);
+
+  for (int i = 0; i < kMaxStocks; i++) {
+    StockRow &r = stock_rows[i];
+    r.row = lv_obj_create(scr);
+    lv_obj_remove_style_all(r.row);
+    lv_obj_set_size(r.row, SCREEN_W - 24, kRowH);
+    lv_obj_set_pos(r.row, 12, kTop + i * kRowH);
+    if (i < kMaxStocks - 1) {
+      lv_obj_set_style_border_side(r.row, LV_BORDER_SIDE_BOTTOM, 0);
+      lv_obj_set_style_border_width(r.row, 1, 0);
+      lv_obj_set_style_border_color(r.row, COLOR_LINE, 0);
+    }
+
+    r.name = make_label(r.row, &font_cn_16, COLOR_TEXT);
+    lv_obj_set_width(r.name, 120);
+    lv_label_set_long_mode(r.name, LV_LABEL_LONG_DOT);
+    lv_obj_align(r.name, LV_ALIGN_LEFT_MID, 0, 0);
+
+    r.price = make_label(r.row, &lv_font_montserrat_20, COLOR_TEXT);
+    lv_obj_set_width(r.price, 96);
+    lv_obj_set_style_text_align(r.price, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(r.price, LV_ALIGN_RIGHT_MID, -88, 0);
+
+    r.pill = lv_obj_create(r.row);
+    lv_obj_set_size(r.pill, 80, 24);
+    lv_obj_set_style_radius(r.pill, 4, 0);
+    lv_obj_set_style_border_width(r.pill, 0, 0);
+    lv_obj_set_style_pad_all(r.pill, 0, 0);
+    lv_obj_set_style_bg_color(r.pill, COLOR_FLAT, 0);
+    lv_obj_clear_flag(r.pill, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(r.pill, LV_ALIGN_RIGHT_MID, 0, 0);
+
+    r.pct = make_label(r.pill, &font_cn_16, lv_color_hex(0xFFFFFF));
+    lv_obj_center(r.pct);
+    lv_obj_add_flag(r.row, LV_OBJ_FLAG_HIDDEN);
+  }
+
+  lbl_stock_msg = make_label(scr, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_set_width(lbl_stock_msg, SCREEN_W - 32);
+  lv_obj_set_style_text_align(lbl_stock_msg, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(lbl_stock_msg, LV_ALIGN_CENTER, 0, 0);
+  lv_label_set_text(lbl_stock_msg, "获取中…");
+}
+
 void ui_init() {
   build_status();
   build_main();
   scr_pages[PAGE_CLOCK] = scr_main;
   build_github();
+  build_stocks();
 }
 
 void ui_show_status(const char *title, const char *detail) {
@@ -317,6 +392,53 @@ void ui_set_github(const GithubData &g) {
         lv_obj_set_style_bg_color(c, lv_color_hex(kLevelColors[lv > 4 ? 4 : lv]), 0);
       }
     }
+  }
+}
+
+void ui_set_stocks(const StockData &s) {
+  const char *msg = nullptr;
+  switch (s.status) {
+    case StockStatus::NotSet: msg = "请在设置页面填写自选股代码"; break;
+    case StockStatus::Loading: msg = "获取中…"; break;
+    case StockStatus::Error: msg = "获取失败，稍后自动重试"; break;
+    case StockStatus::Ok: break;
+  }
+  if (msg) {
+    lv_label_set_text(lbl_stock_msg, msg);
+    lv_obj_clear_flag(lbl_stock_msg, LV_OBJ_FLAG_HIDDEN);
+    for (StockRow &r : stock_rows) lv_obj_add_flag(r.row, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(lbl_stock_updated, "");
+    return;
+  }
+
+  lv_obj_add_flag(lbl_stock_msg, LV_OBJ_FLAG_HIDDEN);
+  if (s.updated[0]) lv_label_set_text_fmt(lbl_stock_updated, "%s 更新", s.updated);
+  lv_obj_align_to(lbl_stock_updated, dot_wifi[PAGE_STOCKS], LV_ALIGN_OUT_LEFT_MID, -8, 0);
+
+  // LVGL 自带的格式化不支持 %f，数字先用 snprintf 转成文字
+  char buf[24];
+  for (int i = 0; i < kMaxStocks; i++) {
+    StockRow &r = stock_rows[i];
+    if (i >= s.count) {
+      lv_obj_add_flag(r.row, LV_OBJ_FLAG_HIDDEN);
+      continue;
+    }
+    const StockQuote &q = s.quotes[i];
+    lv_obj_clear_flag(r.row, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(r.name, q.name);
+
+    if (!q.valid) {
+      lv_label_set_text(r.price, "--");
+      lv_label_set_text(r.pct, "--");
+      lv_obj_set_style_bg_color(r.pill, COLOR_FLAT, 0);
+      continue;
+    }
+    snprintf(buf, sizeof(buf), q.price < 10 ? "%.3f" : "%.2f", q.price);
+    lv_label_set_text(r.price, buf);
+    snprintf(buf, sizeof(buf), "%+.2f%%", q.change_pct);
+    lv_label_set_text(r.pct, buf);
+    lv_obj_set_style_bg_color(r.pill,
+                              q.change_pct > 0 ? COLOR_UP : q.change_pct < 0 ? COLOR_DOWN : COLOR_FLAT, 0);
   }
 }
 

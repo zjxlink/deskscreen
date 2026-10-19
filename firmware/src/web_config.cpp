@@ -5,6 +5,7 @@
 
 #include "github.h"
 #include "settings.h"
+#include "stock.h"
 #include "weather.h"
 
 static WebServer server(80);
@@ -52,6 +53,11 @@ label.check input{width:auto}
 <p class="hint">打开 <a href="https://github.com/settings/tokens/new?description=DeskScreen" target="_blank">GitHub 创建 Token</a>（classic），
 <b>不用勾选任何权限</b>，有效期按需选择，生成后复制粘贴到这里。Token 只保存在设备上，不会显示出来。</p>
 <label class="check"><input type="checkbox" name="gh_clear"> 清除已保存的 Token</label>
+<h2>自选股</h2>
+<label>股票代码（最多 6 个，用逗号或空格分隔）</label>
+<input name="stocks" value="%STOCKS%" placeholder="600519, 000001, 00700, AAPL">
+<p class="hint">A 股直接写 6 位代码；指数和深市代码冲突时加前缀，如 <b>sh000001</b> 是上证指数；
+港股写 5 位代码（如 00700）；美股写代码（如 AAPL）。ETF 和股票写法一样。数据来自东方财富，交易时段每 30 秒刷新。</p>
 <p><button type="submit">保存</button></p>
 </form>
 <hr>
@@ -101,6 +107,7 @@ static void handle_root() {
   page.replace("%LON%", String(s.lon, 4));
   page.replace("%BRIGHT%", String(s.brightness));
   page.replace("%PAGE_SEC%", String(s.page_seconds));
+  page.replace("%STOCKS%", html_escape(s.stocks));
   bool has_token = s.github_token.length() > 0;
   page.replace("%GH_STATE%", has_token ? "已设置" : "未设置");
   page.replace("%GH_PLACEHOLDER%", has_token ? "已设置，留空则不修改" : "ghp_...");
@@ -135,10 +142,16 @@ static void handle_save() {
     s.github_token = token;
   }
 
+  if (server.hasArg("stocks")) {
+    s.stocks = server.arg("stocks");
+    s.stocks.trim();
+  }
+
   settings_save(s);
   changed = true;
   weather_request_refresh();
   github_request_refresh();
+  stock_request_refresh();
 
   server.sendHeader("Location", "/?saved=1");
   server.send(303);

@@ -2,7 +2,7 @@
 """生成 LVGL 中文字体（Noto Sans SC，SIL OFL 协议，可商用）。
 
 LVGL 自带的 simsun_16_cjk 以繁体和日文为主，缺很多简体字，所以自己生成：
-  font_cn_16：ASCII + GB2312 一级汉字（3755 个常用字）+ 源码里用到的字，用于普通文字和城市名
+  font_cn_16：ASCII + GB2312 全部汉字（6763 个）+ 源码里用到的字，用于普通文字、城市名和股票名
   font_cn_24：ASCII + 源码里用到的字，用于标题和天气描述
 
 用法（需要 Node.js）：
@@ -25,14 +25,14 @@ OUT = SRC / "fonts"
 EXTRA = "，。：；！？、（）“”‘’《》…—·°℃％"
 
 
-def gb2312_level1():
+def gb2312_hanzi():
     chars = []
-    for hi in range(0xB0, 0xD8):
+    for hi in range(0xB0, 0xF8):  # 0xB0~0xD7 一级汉字，0xD8~0xF7 二级汉字
         for lo in range(0xA1, 0xFF):
             try:
                 chars.append(bytes([hi, lo]).decode("gb2312"))
             except UnicodeDecodeError:
-                pass  # 0xD7FA 之后是空位
+                pass  # 一级汉字区末尾的几个空位
     return chars
 
 
@@ -77,7 +77,7 @@ def main():
     ttf = sys.argv[1]
     OUT.mkdir(exist_ok=True)
     used = source_chars() | set(EXTRA)
-    build(ttf, "font_cn_16", 16, used | set(gb2312_level1()))
+    build(ttf, "font_cn_16", 16, used | set(gb2312_hanzi()))
     build(ttf, "font_cn_24", 24, used)
 
 

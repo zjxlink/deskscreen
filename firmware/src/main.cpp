@@ -8,6 +8,7 @@
 #include "display.h"
 #include "github.h"
 #include "settings.h"
+#include "stock.h"
 #include "ui.h"
 #include "weather.h"
 #include "web_config.h"
@@ -25,6 +26,7 @@ static Page page = PAGE_CLOCK;
 static uint32_t page_shown_at = 0;
 static uint8_t page_seconds = 0;
 static bool github_enabled = false;
+static bool stocks_enabled = false;
 
 static void apply_settings() {
   Settings s = settings_get();
@@ -32,6 +34,16 @@ static void apply_settings() {
   ui_set_city(s.city.c_str());
   page_seconds = s.page_seconds;
   github_enabled = s.github_token.length() > 0;
+  stocks_enabled = s.stocks.length() > 0;
+}
+
+// 自动轮播只轮到已经设置好的页面
+static bool page_enabled(Page p) {
+  switch (p) {
+    case PAGE_GITHUB: return github_enabled;
+    case PAGE_STOCKS: return stocks_enabled;
+    default: return true;
+  }
 }
 
 static void show_page(Page p, bool animate) {
@@ -40,20 +52,20 @@ static void show_page(Page p, bool animate) {
   ui_show_page(p, animate);
 }
 
-// 手动切换时轮流显示所有页面（没填 Token 也能看到 GitHub 页的提示）
+// 手动切换时轮流显示所有页面（没设置的页面也能看到提示）
 static void next_page() {
   show_page((Page)((page + 1) % PAGE_COUNT), true);
 }
 
-// 自动轮播：没填 Token 时只停在时钟页
 static void auto_rotate() {
   if (page_seconds == 0 || millis() - page_shown_at < page_seconds * 1000UL) return;
-  if (!github_enabled) {
-    if (page != PAGE_CLOCK) show_page(PAGE_CLOCK, true);
-    page_shown_at = millis();
-    return;
+  for (int k = 1; k <= PAGE_COUNT; k++) {
+    Page p = (Page)((page + k) % PAGE_COUNT);
+    if (page_enabled(p)) {
+      show_page(p, p != page);
+      return;
+    }
   }
-  next_page();
 }
 
 static void connect_wifi() {
@@ -127,6 +139,7 @@ void setup() {
   web_config_begin();
   weather_begin();
   github_begin();
+  stock_begin();
 
   String detail = "用同一 WiFi 下的手机或电脑打开\n#58A6FF http://" + WiFi.localIP().toString() +
                   "#\n或 #58A6FF http://" + kHostname + ".local#\n即可设置城市、亮度和 GitHub";
@@ -153,6 +166,9 @@ void loop() {
 
   static GithubData g;
   if (github_take_update(g)) ui_set_github(g);
+
+  static StockData st;
+  if (stock_take_update(st)) ui_set_stocks(st);
 
   static bool last_wifi = false;
   bool wifi = WiFi.isConnected();

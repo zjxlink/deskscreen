@@ -14,6 +14,7 @@ void settings_begin() {
   current.lon = prefs.getFloat("lon", 116.4074f);
   current.brightness = prefs.getUChar("bright", 180);
   current.github_token = prefs.getString("gh_token", "");
+  current.stocks = prefs.getString("stocks", "");
   current.page_seconds = prefs.getUChar("page_sec", 15);
 }
 
@@ -33,5 +34,6 @@ void settings_save(const Settings &s) {
   prefs.putFloat("lon", s.lon);
   prefs.putUChar("bright", s.brightness);
   prefs.putString("gh_token", s.github_token);
+  prefs.putString("stocks", s.stocks);
   prefs.putUChar("page_sec", s.page_seconds);
 }

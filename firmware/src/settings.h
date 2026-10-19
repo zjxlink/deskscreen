@@ -8,6 +8,7 @@ struct Settings {
   float lon;
   uint8_t brightness;  // 10~255
   String github_token;
+  String stocks;         // 自选股代码，逗号分隔
   uint8_t page_seconds;  // 自动切换页面的间隔，0 表示不自动切换
 };
 
