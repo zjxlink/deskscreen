@@ -4,6 +4,7 @@
 #include <WiFiManager.h>
 #include <lvgl.h>
 
+#include "audio.h"
 #include "board.h"
 #include "display.h"
 #include "github.h"
@@ -34,6 +35,8 @@ static Pomodoro pomo;
 static const char *pomo_msg = nullptr;  // 阶段结束时的提示文字
 static uint32_t pomo_msg_until = 0;
 static bool pomo_dirty = true;           // 番茄钟页需要立即刷新
+static bool sound_on = true;
+static bool sound_quiet_night = true;
 
 static void apply_settings() {
   Settings s = settings_get();
@@ -58,6 +61,10 @@ static void apply_settings() {
   pc.long_every = s.pomo_every;
   pomo.configure(pc);
   pomo_dirty = true;
+
+  sound_on = s.sound_on;
+  sound_quiet_night = s.sound_quiet_night;
+  audio_set_volume(s.sound_volume);
 }
 
 // 触摸、设置页面的番茄钟操作都走这里
@@ -81,6 +88,10 @@ static void update_pomodoro() {
     pomo_msg = pomo.phase() == PomoPhase::Focus ? "休息结束，点圆环开始" : "专注完成，休息一下吧";
     pomo_msg_until = now + kPomoMsgMs;
     pomo_dirty = true;
+    // 夜间时段默认不响，只点亮屏幕
+    if (sound_on && !(sound_quiet_night && screen.night())) {
+      audio_play(pomo.phase() == PomoPhase::Focus ? SoundId::BreakDone : SoundId::FocusDone);
+    }
     if (screen.started()) {
       screen.wake(now);
       screen.go_to(PAGE_POMODORO, now);
@@ -230,6 +241,7 @@ void setup() {
 
   settings_begin();
   display_init();
+  audio_begin();  // 解码芯片和触摸共用 I2C，要在屏幕初始化之后
   ui_init();
   apply_settings();
   update_screen();  // 还没对时，先用白天亮度

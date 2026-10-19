@@ -4,6 +4,7 @@
 #include <WebServer.h>
 #include <WiFi.h>
 
+#include "audio.h"
 #include "github.h"
 #include "night.h"
 #include "ota.h"
@@ -72,6 +73,9 @@ label.check input{width:auto}
 <div><label>每几个长休息</label><input name="pomo_every" value="%POMO_EVERY%" inputmode="numeric"></div>
 </div>
 <p class="hint">在设备上点圆环开始或暂停，按住圆环 1.5 秒重置；下面的按钮也能控制（没有触摸屏的板子用这个）。</p>
+<label class="check"><input type="checkbox" name="sound_on" %SOUND_ON%> 专注和休息结束时播放提示音%SOUND_NOTE%</label>
+<label>提示音音量</label><input type="range" name="sound_volume" min="0" max="100" value="%SOUND_VOL%">
+<label class="check"><input type="checkbox" name="sound_quiet" %SOUND_QUIET%> 夜间时段不响（只点亮屏幕）</label>
 <h2>GitHub 贡献热力图</h2>
 <label>GitHub Token（%GH_STATE%）</label>
 <input type="password" name="gh_token" placeholder="%GH_PLACEHOLDER%" autocomplete="off">
@@ -92,6 +96,7 @@ label.check input{width:auto}
 <form method="post" action="/pomodoro/toggle"><button>开始 / 暂停</button></form>
 <form method="post" action="/pomodoro/skip"><button class="sub">跳过当前阶段</button></form>
 <form method="post" action="/pomodoro/reset" onsubmit="return confirm('重置番茄钟？')"><button class="sub">重置</button></form>
+<form method="post" action="/sound/test"><button class="sub">试听提示音</button></form>
 </div>
 <hr>
 <p>当前版本：<b>%FW_VERSION%</b></p>
@@ -208,6 +213,10 @@ static void handle_root() {
   page.replace("%POMO_LONG%", String(s.pomo_long));
   page.replace("%POMO_EVERY%", String(s.pomo_every));
   page.replace("%POMO_STATE%", html_escape(pomo_text()));
+  page.replace("%SOUND_ON%", s.sound_on ? "checked" : "");
+  page.replace("%SOUND_NOTE%", audio_available() ? "" : "（这块板子没有喇叭）");
+  page.replace("%SOUND_VOL%", String(s.sound_volume));
+  page.replace("%SOUND_QUIET%", s.sound_quiet_night ? "checked" : "");
   page.replace("%FW_VERSION%", html_escape(ota_current_version()));
   OtaStatus os = ota_status();
   page.replace("%OTA_BUSY%", ota_busy(os) ? "1" : "0");
@@ -246,6 +255,10 @@ static void handle_save() {
   // 复选框不勾选时浏览器不会提交这个字段
   s.night_on = server.hasArg("night_on");
   s.auto_update = server.hasArg("auto_update");
+  s.sound_on = server.hasArg("sound_on");
+  s.sound_quiet_night = server.hasArg("sound_quiet");
+  long vol = server.arg("sound_volume").toInt();
+  if (server.hasArg("sound_volume") && vol >= 0 && vol <= 100) s.sound_volume = vol;
   int start = night_parse_hhmm(server.arg("night_start").c_str());
   int end = night_parse_hhmm(server.arg("night_end").c_str());
   if (start >= 0) s.night_start = start;
@@ -355,6 +368,11 @@ void web_config_begin() {
   server.on("/pomodoro/toggle", HTTP_POST, [] { handle_pomo(PomoCmd::Toggle); });
   server.on("/pomodoro/skip", HTTP_POST, [] { handle_pomo(PomoCmd::Skip); });
   server.on("/pomodoro/reset", HTTP_POST, [] { handle_pomo(PomoCmd::Reset); });
+  server.on("/sound/test", HTTP_POST, [] {
+    audio_play(SoundId::FocusDone);
+    server.sendHeader("Location", "/");
+    server.send(303);
+  });
   server.on("/ota/check", HTTP_POST, [] {
     ota_check_now();
     redirect_to_ota();

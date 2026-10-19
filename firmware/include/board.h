@@ -21,6 +21,14 @@
   #define PIN_TOUCH_SDA     8
   #define PIN_TOUCH_SCL     18
   #define PIN_TOUCH_INT     3
+  // 喇叭：ES8311 解码芯片（I2C 和触摸共用）+ 功放，引脚来自乐鑫 esp-bsp
+  #define HAS_AUDIO
+  #define PIN_I2S_MCLK      2
+  #define PIN_I2S_BCLK      17
+  #define PIN_I2S_LRCK      45
+  #define PIN_I2S_DOUT      15
+  #define PIN_AUDIO_PA      46   // 功放使能，高电平打开
+  #define ES8311_ADDR       0x18
 
 #elif defined(BOARD_DESK_V1)
   // 自己画的板子：2.0 寸 IPS ST7789（240x320）

@@ -25,6 +25,9 @@ void settings_begin() {
   current.pomo_short = prefs.getUChar("pomo_short", 5);
   current.pomo_long = prefs.getUChar("pomo_long", 15);
   current.pomo_every = prefs.getUChar("pomo_every", 4);
+  current.sound_on = prefs.getBool("sound_on", true);
+  current.sound_volume = prefs.getUChar("sound_vol", 60);
+  current.sound_quiet_night = prefs.getBool("sound_quiet", true);
 }
 
 Settings settings_get() {
@@ -54,4 +57,7 @@ void settings_save(const Settings &s) {
   prefs.putUChar("pomo_short", s.pomo_short);
   prefs.putUChar("pomo_long", s.pomo_long);
   prefs.putUChar("pomo_every", s.pomo_every);
+  prefs.putBool("sound_on", s.sound_on);
+  prefs.putUChar("sound_vol", s.sound_volume);
+  prefs.putBool("sound_quiet", s.sound_quiet_night);
 }
