@@ -32,7 +32,7 @@ void net_report(NetService s, int code, WiFiClientSecure &client, const char *de
 // 不走 TLS 的请求用这个
 void net_report(NetService s, int code, const char *detail = nullptr);
 
-// 设置页面用的诊断信息（HTML 片段）：每项服务最近一次的结果、内部 RAM 剩余
+// 设置页面用的诊断信息（HTML 片段）：每项服务最近一次的结果、内部 RAM 和 PSRAM 剩余
 String net_status_html();
 
 // 开机后还没成功过时，重试间隔从 10 秒开始翻倍，最多到 max_ms，免得刚开机等太久

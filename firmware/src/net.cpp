@@ -100,6 +100,15 @@ String net_status_html() {
   html += String("<li>内部 RAM：剩余 ") + heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024 +
           " KB，开机以来最少 " + heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024 +
           " KB，最大连续块 " + heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024 + " KB</li>";
+  // PSRAM 只放界面对象、图片和大块数据，HTTPS 用不到，所以单独列一行
+  size_t psram_total = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+  if (psram_total == 0) {
+    html += "<li>PSRAM：<b>没有检测到</b></li>";
+  } else {
+    html += String("<li>PSRAM：共 ") + psram_total / 1024 + " KB，剩余 " +
+            heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024 + " KB，开机以来最少 " +
+            heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM) / 1024 + " KB</li>";
+  }
   return html;
 }
 
