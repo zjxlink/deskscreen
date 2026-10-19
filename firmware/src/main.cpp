@@ -492,6 +492,7 @@ void setup() {
 }
 
 void loop() {
+  display_check_panel();
   lv_timer_handler();
   web_config_loop();
   check_button();

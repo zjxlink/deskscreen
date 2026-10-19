@@ -5,6 +5,7 @@
 #include <WiFi.h>
 
 #include "audio.h"
+#include "display.h"
 #include "github.h"
 #include "net.h"
 #include "night.h"
@@ -149,7 +150,7 @@ label.check input{width:auto}
 </form>
 <hr>
 <h2>网络诊断</h2>
-<ul class="hint">%NET_STATUS%</ul>
+<ul class="hint">%NET_STATUS%<li>%PANEL_STATUS%</li></ul>
 <hr>
 <form method="post" action="/reset-wifi" onsubmit="return confirm('清除 WiFi 并重启进入配网模式？')">
 <button class="danger">重新配置 WiFi</button>
@@ -292,6 +293,13 @@ static void handle_root() {
   page.replace("%OTA_BUSY%", ota_busy(os) ? "1" : "0");
   page.replace("%OTA_TEXT%", html_escape(ota_text(os)));
   page.replace("%NET_STATUS%", net_status_html());
+  String panel = String("屏幕：已运行 ") + millis() / 3600000 + " 小时，";
+  if (display_panel_watching()) {
+    panel += String("自动恢复白屏、花屏 ") + display_panel_recoveries() + " 次";
+  } else {
+    panel += "读不出屏幕状态，每 10 分钟重新初始化一次";
+  }
+  page.replace("%PANEL_STATUS%", panel);
   server.send(200, "text/html; charset=utf-8", page);
 }
 

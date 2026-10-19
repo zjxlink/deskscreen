@@ -7,6 +7,7 @@
 #include <lvgl.h>
 
 #include "board.h"
+#include "panel_watch.h"
 
 class LGFX : public lgfx::LGFX_Device {
 #if defined(LCD_PANEL_ILI9342)
@@ -94,6 +95,19 @@ static LGFX tft;
 static constexpr uint32_t kBufLines = SCREEN_H / 6;
 static lv_disp_draw_buf_t draw_buf;
 static lv_disp_drv_t disp_drv;
+static PanelWatch watch;
+
+static constexpr uint32_t kRedrawMs = 60000;  // 每分钟整屏重画一次，显存偶尔被写坏也能自己好
+
+// 读屏幕控制芯片的电源状态、扫描方向、像素格式（0Ah、0Bh、0Ch），拼成一个读数。
+// BOX-3 的屏是三线 SPI，数据线复用来读
+static uint32_t read_panel_state() {
+  auto *panel = tft.getPanel();
+  uint32_t pm = panel->readCommand(0x0A, 0, 1) & 0xFF;
+  uint32_t madctl = panel->readCommand(0x0B, 0, 1) & 0xFF;
+  uint32_t colmod = panel->readCommand(0x0C, 0, 1) & 0xFF;
+  return colmod << 16 | madctl << 8 | pm;
+}
 
 static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p) {
   uint32_t w = area->x2 - area->x1 + 1;
@@ -112,6 +126,11 @@ void display_init() {
   tft.init();
   tft.setRotation(1);
   tft.fillScreen(0);
+  uint32_t st1 = read_panel_state();
+  uint32_t st2 = read_panel_state();
+  watch.begin(st1, st2, millis());
+  log_i("panel state 0x%06X/0x%06X, %s", (unsigned)st1, (unsigned)st2,
+        watch.readable() ? "watching for resets" : "unreadable, re-init every 10 min");
 
   lv_init();
 
@@ -143,4 +162,32 @@ bool display_touch(int &x, int &y) {
   (void)y;
   return false;
 #endif
+}
+
+void display_check_panel() {
+  static uint32_t last_redraw = 0;
+  uint32_t now = millis();
+  if (now - last_redraw >= kRedrawMs) {
+    last_redraw = now;
+    lv_obj_invalidate(lv_scr_act());
+  }
+  if (!watch.due(now)) return;
+  uint32_t st = watch.readable() ? read_panel_state() : 0;
+  if (!watch.check(st, now)) return;
+  if (watch.readable()) log_w("panel state 0x%06X, expected 0x%06X, re-initializing", (unsigned)st, (unsigned)watch.baseline());
+
+  // 不碰复位脚，只重新发一遍初始化命令；亮度和方向由 LovyanGFX 恢复
+  tft.init_without_reset();
+  watch.recovered(watch.readable() ? read_panel_state() : 0, millis());
+  // 芯片复位后显存是乱的，整屏重画
+  last_redraw = millis();
+  lv_obj_invalidate(lv_scr_act());
+}
+
+uint32_t display_panel_recoveries() {
+  return watch.recoveries();
+}
+
+bool display_panel_watching() {
+  return watch.readable();
 }
