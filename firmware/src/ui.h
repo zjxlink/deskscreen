@@ -1,15 +1,9 @@
 #pragma once
 
 #include "github.h"
+#include "pages.h"
 #include "stock.h"
 #include "weather.h"
-
-enum Page {
-  PAGE_CLOCK,
-  PAGE_GITHUB,
-  PAGE_STOCKS,
-  PAGE_COUNT,
-};
 
 void ui_init();
 

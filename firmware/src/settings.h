@@ -10,6 +10,10 @@ struct Settings {
   String github_token;
   String stocks;         // 自选股代码，逗号分隔
   uint8_t page_seconds;  // 自动切换页面的间隔，0 表示不自动切换
+  bool night_on;           // 夜间自动调暗
+  uint16_t night_start;    // 当天第几分钟，默认 23:00
+  uint16_t night_end;      // 默认 07:00
+  uint8_t night_brightness;  // 0 表示关闭背光
 };
 
 // 时区固定为北京时间，POSIX 格式

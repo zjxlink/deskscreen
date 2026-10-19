@@ -4,6 +4,7 @@
 #include <WiFi.h>
 
 #include "github.h"
+#include "night.h"
 #include "settings.h"
 #include "stock.h"
 #include "weather.h"
@@ -34,6 +35,7 @@ a{color:#58a6ff}
 .hint{color:#8b949e;font-size:13px;line-height:1.6}
 label.check{display:flex;gap:8px;align-items:center;color:#e6edf3}
 label.check input{width:auto}
+.row > div{flex:1}
 </style></head><body><main>
 <h1>桌面信息屏设置</h1>
 %SAVED%
@@ -47,6 +49,15 @@ label.check input{width:auto}
 <label>屏幕亮度</label><input type="range" name="brightness" min="10" max="255" value="%BRIGHT%">
 <label>自动切换页面间隔（秒，0 表示不自动切换）</label>
 <input name="page_sec" value="%PAGE_SEC%" inputmode="numeric">
+<h2>夜间模式</h2>
+<label class="check"><input type="checkbox" name="night_on" %NIGHT_ON%> 夜间自动调暗</label>
+<div class="row">
+<div><label>开始</label><input type="time" name="night_start" value="%NIGHT_START%"></div>
+<div><label>结束</label><input type="time" name="night_end" value="%NIGHT_END%"></div>
+</div>
+<label>夜间亮度（拉到最左边会关闭屏幕）</label>
+<input type="range" name="night_bright" min="0" max="255" value="%NIGHT_BRIGHT%">
+<p class="hint">夜间只显示时钟页，不自动轮播。点一下屏幕或按 BOOT 键，会临时恢复正常亮度 30 秒。</p>
 <h2>GitHub 贡献热力图</h2>
 <label>GitHub Token（%GH_STATE%）</label>
 <input type="password" name="gh_token" placeholder="%GH_PLACEHOLDER%" autocomplete="off">
@@ -107,6 +118,13 @@ static void handle_root() {
   page.replace("%LON%", String(s.lon, 4));
   page.replace("%BRIGHT%", String(s.brightness));
   page.replace("%PAGE_SEC%", String(s.page_seconds));
+  char hhmm[8];
+  page.replace("%NIGHT_ON%", s.night_on ? "checked" : "");
+  night_format_hhmm(s.night_start, hhmm, sizeof(hhmm));
+  page.replace("%NIGHT_START%", hhmm);
+  night_format_hhmm(s.night_end, hhmm, sizeof(hhmm));
+  page.replace("%NIGHT_END%", hhmm);
+  page.replace("%NIGHT_BRIGHT%", String(s.night_brightness));
   page.replace("%STOCKS%", html_escape(s.stocks));
   bool has_token = s.github_token.length() > 0;
   page.replace("%GH_STATE%", has_token ? "已设置" : "未设置");
@@ -141,6 +159,15 @@ static void handle_save() {
   } else if (token.length() > 0) {
     s.github_token = token;
   }
+
+  // 复选框不勾选时浏览器不会提交这个字段
+  s.night_on = server.hasArg("night_on");
+  int start = night_parse_hhmm(server.arg("night_start").c_str());
+  int end = night_parse_hhmm(server.arg("night_end").c_str());
+  if (start >= 0) s.night_start = start;
+  if (end >= 0) s.night_end = end;
+  long nb = server.arg("night_bright").toInt();
+  if (server.hasArg("night_bright") && nb >= 0 && nb <= 255) s.night_brightness = nb;
 
   if (server.hasArg("stocks")) {
     s.stocks = server.arg("stocks");
