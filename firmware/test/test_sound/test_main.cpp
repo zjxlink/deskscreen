@@ -87,6 +87,24 @@ static void test_descending_vs_ascending() {
   TEST_ASSERT_TRUE(up[0].freq_hz < up[n - 1].freq_hz);
 }
 
+static void test_new_sounds_render_without_clipping() {
+  for (SoundId id : {SoundId::Message, SoundId::Reminder}) {
+    auto buf = render(id, 100);
+    TEST_ASSERT_TRUE(buf.size() > 0);
+    int p = peak(buf, 0, buf.size());
+    TEST_ASSERT_TRUE(p < 32767);
+    TEST_ASSERT_TRUE(p > 15000);
+  }
+  // 提醒音中间的休止符是静音
+  int n;
+  const Note *notes = sound_melody(SoundId::Reminder, n);
+  TEST_ASSERT_EQUAL(0, notes[1].freq_hz);
+  auto buf = render(SoundId::Reminder, 100);
+  size_t rest_from = (size_t)notes[0].ms * kRate / 1000;
+  size_t rest_to = rest_from + (size_t)notes[1].ms * kRate / 1000;
+  TEST_ASSERT_EQUAL(0, peak(buf, rest_from, rest_to));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_length);
@@ -95,5 +113,6 @@ int main() {
   RUN_TEST(test_pitch);
   RUN_TEST(test_truncates_to_buffer);
   RUN_TEST(test_descending_vs_ascending);
+  RUN_TEST(test_new_sounds_render_without_clipping);
   return UNITY_END();
 }

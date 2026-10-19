@@ -18,6 +18,10 @@ static bool changed = false;
 static void (*progress_hook)() = nullptr;
 static const Pomodoro *pomodoro = nullptr;
 static void (*pomo_cmd)(PomoCmd) = nullptr;
+static const PomoStats *pomo_stats = nullptr;
+static int (*today)() = nullptr;
+static void (*message_hook)(const String &, bool) = nullptr;
+static constexpr int kMessageMaxChars = 60;
 
 static const char PAGE[] PROGMEM = R"html(<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
@@ -30,6 +34,7 @@ h1{font-size:20px}
 label{display:block;margin:16px 0 6px;color:#8b949e;font-size:14px}
 input{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #30363d;background:#161b22;color:#e6edf3;font-size:16px}
 input[type=range]{padding:0}
+textarea{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #30363d;background:#161b22;color:#e6edf3;font-size:16px;font-family:inherit;resize:vertical}
 .row{display:flex;gap:8px}
 button{padding:10px 16px;border:0;border-radius:8px;background:#238636;color:#fff;font-size:16px}
 button.sub{background:#30363d}
@@ -47,6 +52,14 @@ label.check input{width:auto}
 </style></head><body><main>
 <h1>桌面信息屏设置</h1>
 %SAVED%
+<h2>留言板</h2>
+<form method="post" action="/message">
+<textarea name="text" rows="2" maxlength="60" placeholder="写一句话，会立即显示在屏幕上" required></textarea>
+<label class="check"><input type="checkbox" name="sound" checked> 叮咚响一声%SOUND_NOTE%</label>
+<p><button>发送到屏幕</button></p>
+</form>
+<p class="hint">最多 60 个字，点屏幕或按 BOOT 键关闭。表情符号显示不出来。</p>
+<hr>
 <form method="post" action="/save">
 <label>城市（显示在屏幕上）</label>
 <div class="row"><input name="city" id="city" value="%CITY%" maxlength="16">
@@ -73,10 +86,26 @@ label.check input{width:auto}
 <div><label>长休息</label><input name="pomo_long" value="%POMO_LONG%" inputmode="numeric"></div>
 <div><label>每几个长休息</label><input name="pomo_every" value="%POMO_EVERY%" inputmode="numeric"></div>
 </div>
+<label>每日目标（个，达标的天数连起来算「连续达标」）</label>
+<input name="pomo_goal" value="%POMO_GOAL%" inputmode="numeric">
 <p class="hint">在设备上点圆环开始或暂停，按住圆环 1.5 秒重置；下面的按钮也能控制（没有触摸屏的板子用这个）。</p>
 <label class="check"><input type="checkbox" name="sound_on" %SOUND_ON%> 专注和休息结束时播放提示音%SOUND_NOTE%</label>
 <label>提示音音量</label><input type="range" name="sound_volume" min="0" max="100" value="%SOUND_VOL%">
 <label class="check"><input type="checkbox" name="sound_quiet" %SOUND_QUIET%> 夜间时段不响（只点亮屏幕）</label>
+<h2>健康提醒</h2>
+<div class="row">
+<div><label class="check"><input type="checkbox" name="sit_on" %SIT_ON%> 久坐提醒</label></div>
+<div><label>每隔（分钟）</label><input name="sit_min" value="%SIT_MIN%" inputmode="numeric"></div>
+</div>
+<div class="row">
+<div><label class="check"><input type="checkbox" name="water_on" %WATER_ON%> 喝水提醒</label></div>
+<div><label>每隔（分钟）</label><input name="water_min" value="%WATER_MIN%" inputmode="numeric"></div>
+</div>
+<div class="row">
+<div><label>提醒时段开始</label><input type="time" name="remind_start" value="%REMIND_START%"></div>
+<div><label>结束</label><input type="time" name="remind_end" value="%REMIND_END%"></div>
+</div>
+<p class="hint">只在提醒时段内提醒，屏幕会弹出全屏提示并响一声（音量和夜间静音跟番茄钟一样）。番茄钟专注时先不打扰，等休息时再提醒；开始休息时久坐提醒重新计时。%REMIND_STATE%</p>
 <h2>GitHub 贡献热力图</h2>
 <label>GitHub Token（%GH_STATE%）</label>
 <input type="password" name="gh_token" placeholder="%GH_PLACEHOLDER%" autocomplete="off">
@@ -179,12 +208,20 @@ static String pomo_text() {
   snprintf(left, sizeof(left), "%02u:%02u", (unsigned)(secs / 60), (unsigned)(secs % 60));
   String phase;
   switch (p.phase()) {
-    case PomoPhase::Idle: return String("未开始，今日完成 ") + p.done_today() + " 个";
+    case PomoPhase::Idle: return "未开始";
     case PomoPhase::Focus: phase = "专注"; break;
     case PomoPhase::ShortBreak: phase = "短休息"; break;
     case PomoPhase::LongBreak: phase = "长休息"; break;
   }
-  return phase + (p.running() ? "中，剩余 " : "（已暂停），剩余 ") + left + "，今日完成 " + p.done_today() + " 个";
+  return phase + (p.running() ? "中，剩余 " : "（已暂停），剩余 ") + left;
+}
+
+static String stats_text() {
+  if (!pomo_stats || !today) return "";
+  int day = today();
+  if (day < 0) return "";
+  return String("今日完成 ") + pomo_stats->count(day) + " 个，近 7 天 " + pomo_stats->week_total(day) +
+         " 个，连续达标 " + pomo_stats->streak(day) + " 天";
 }
 
 static bool ota_busy(const OtaStatus &s) {
@@ -216,7 +253,18 @@ static void handle_root() {
   page.replace("%POMO_SHORT%", String(s.pomo_short));
   page.replace("%POMO_LONG%", String(s.pomo_long));
   page.replace("%POMO_EVERY%", String(s.pomo_every));
-  page.replace("%POMO_STATE%", html_escape(pomo_text()));
+  String stats = stats_text();
+  page.replace("%POMO_STATE%", html_escape(stats.length() ? pomo_text() + "。" + stats : pomo_text()));
+  page.replace("%POMO_GOAL%", String(s.pomo_goal));
+  page.replace("%SIT_ON%", s.sit_on ? "checked" : "");
+  page.replace("%SIT_MIN%", String(s.sit_min));
+  page.replace("%WATER_ON%", s.water_on ? "checked" : "");
+  page.replace("%WATER_MIN%", String(s.water_min));
+  night_format_hhmm(s.remind_start, hhmm, sizeof(hhmm));
+  page.replace("%REMIND_START%", hhmm);
+  night_format_hhmm(s.remind_end, hhmm, sizeof(hhmm));
+  page.replace("%REMIND_END%", hhmm);
+  page.replace("%REMIND_STATE%", s.sit_on || s.water_on ? "" : "两个提醒默认都关着。");
   page.replace("%SOUND_ON%", s.sound_on ? "checked" : "");
   page.replace("%SOUND_NOTE%", audio_available() ? "" : "（这块板子没有喇叭）");
   page.replace("%SOUND_VOL%", String(s.sound_volume));
@@ -281,6 +329,15 @@ static void handle_save() {
   minutes_arg("pomo_short", s.pomo_short, 1, 180);
   minutes_arg("pomo_long", s.pomo_long, 1, 180);
   minutes_arg("pomo_every", s.pomo_every, 1, 8);
+  minutes_arg("pomo_goal", s.pomo_goal, 1, 20);
+  minutes_arg("sit_min", s.sit_min, 10, 240);
+  minutes_arg("water_min", s.water_min, 10, 240);
+  s.sit_on = server.hasArg("sit_on");
+  s.water_on = server.hasArg("water_on");
+  int rs = night_parse_hhmm(server.arg("remind_start").c_str());
+  int re = night_parse_hhmm(server.arg("remind_end").c_str());
+  if (rs >= 0) s.remind_start = rs;
+  if (re >= 0) s.remind_end = re;
 
   if (server.hasArg("stocks")) {
     s.stocks = server.arg("stocks");
@@ -294,6 +351,23 @@ static void handle_save() {
   stock_request_refresh();
 
   server.sendHeader("Location", "/?saved=1");
+  server.send(303);
+}
+
+// 留言：去掉首尾空白，超过 60 个字截断（按 UTF-8 字符数，不会切坏汉字）
+static void handle_message() {
+  String text = server.arg("text");
+  text.trim();
+  int chars = 0;
+  for (size_t i = 0; i < text.length(); i++) {
+    if (((uint8_t)text[i] & 0xC0) == 0x80) continue;  // UTF-8 后续字节
+    if (++chars > kMessageMaxChars) {
+      text.remove(i);
+      break;
+    }
+  }
+  if (text.length() > 0 && message_hook) message_hook(text, server.hasArg("sound"));
+  server.sendHeader("Location", "/");
   server.send(303);
 }
 
@@ -370,6 +444,7 @@ void web_config_begin() {
   server.on("/save", HTTP_POST, handle_save);
   server.on("/reset-wifi", HTTP_POST, handle_reset_wifi);
   server.on("/ota/status", HTTP_GET, handle_ota_status);
+  server.on("/message", HTTP_POST, handle_message);
   server.on("/pomodoro/toggle", HTTP_POST, [] { handle_pomo(PomoCmd::Toggle); });
   server.on("/pomodoro/skip", HTTP_POST, [] { handle_pomo(PomoCmd::Skip); });
   server.on("/pomodoro/reset", HTTP_POST, [] { handle_pomo(PomoCmd::Reset); });
@@ -400,6 +475,15 @@ void web_config_loop() {
 void web_config_set_pomodoro(const Pomodoro *p, void (*cmd)(PomoCmd)) {
   pomodoro = p;
   pomo_cmd = cmd;
+}
+
+void web_config_set_pomo_stats(const PomoStats *s, int (*day)()) {
+  pomo_stats = s;
+  today = day;
+}
+
+void web_config_set_message_hook(void (*hook)(const String &text, bool sound)) {
+  message_hook = hook;
 }
 
 void web_config_set_progress_hook(void (*hook)()) {

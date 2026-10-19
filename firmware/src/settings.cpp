@@ -28,6 +28,13 @@ void settings_begin() {
   current.sound_on = prefs.getBool("sound_on", true);
   current.sound_volume = prefs.getUChar("sound_vol", 60);
   current.sound_quiet_night = prefs.getBool("sound_quiet", true);
+  current.pomo_goal = prefs.getUChar("pomo_goal", 4);
+  current.sit_on = prefs.getBool("sit_on", false);
+  current.sit_min = prefs.getUChar("sit_min", 45);
+  current.water_on = prefs.getBool("water_on", false);
+  current.water_min = prefs.getUChar("water_min", 60);
+  current.remind_start = prefs.getUShort("remind_start", 9 * 60);
+  current.remind_end = prefs.getUShort("remind_end", 21 * 60);
 }
 
 Settings settings_get() {
@@ -60,4 +67,23 @@ void settings_save(const Settings &s) {
   prefs.putBool("sound_on", s.sound_on);
   prefs.putUChar("sound_vol", s.sound_volume);
   prefs.putBool("sound_quiet", s.sound_quiet_night);
+  prefs.putUChar("pomo_goal", s.pomo_goal);
+  prefs.putBool("sit_on", s.sit_on);
+  prefs.putUChar("sit_min", s.sit_min);
+  prefs.putBool("water_on", s.water_on);
+  prefs.putUChar("water_min", s.water_min);
+  prefs.putUShort("remind_start", s.remind_start);
+  prefs.putUShort("remind_end", s.remind_end);
+}
+
+void settings_load_pomo_stats(PomoStatsData &d) {
+  PomoStatsData loaded;
+  if (prefs.getBytesLength("pomo_stats") == sizeof(loaded) &&
+      prefs.getBytes("pomo_stats", &loaded, sizeof(loaded)) == sizeof(loaded)) {
+    d = loaded;
+  }
+}
+
+void settings_save_pomo_stats(const PomoStatsData &d) {
+  prefs.putBytes("pomo_stats", &d, sizeof(d));
 }

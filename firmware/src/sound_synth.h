@@ -8,6 +8,8 @@
 enum class SoundId : uint8_t {
   FocusDone,  // 专注结束，该休息了：下行三个音
   BreakDone,  // 休息结束，回来专注：上行三个音
+  Message,    // 收到留言：叮咚两声
+  Reminder,   // 久坐、喝水提醒：轻快的三连音
 };
 
 struct Note {
