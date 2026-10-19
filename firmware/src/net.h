@@ -28,6 +28,8 @@ static constexpr int kNetBadData = -100;
 // code 为 HTTP 状态码（200 表示成功）、HTTPClient 的负数错误码或 kNetBadData；
 // detail 是补充说明（如 JSON 解析错误），没有就传 nullptr。失败时同时打印日志
 void net_report(NetService s, int code, WiFiClientSecure &client, const char *detail = nullptr);
+// 不走 TLS 的请求用这个
+void net_report(NetService s, int code, const char *detail = nullptr);
 
 // 设置页面用的诊断信息（HTML 片段）：每项服务最近一次的结果、内部 RAM 剩余
 String net_status_html();
