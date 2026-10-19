@@ -27,6 +27,7 @@ static GithubStatus fetch(const String &token, GithubData &out, int &error) {
   HttpsLock https;
   WiFiClientSecure client;
   client.setCACert(ROOT_CA_BUNDLE);
+  client.setHandshakeTimeout(kTlsHandshakeTimeoutS);
   HTTPClient http;
   http.setTimeout(15000);
   http.useHTTP10(true);  // 避免分块传输，方便直接流式解析 JSON

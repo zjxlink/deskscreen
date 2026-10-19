@@ -29,6 +29,7 @@ static int fetch(WeatherData &out) {
   // 天气数据不敏感，先跳过证书校验；以后可换成内置根证书
   WiFiClientSecure client;
   client.setInsecure();
+  client.setHandshakeTimeout(kTlsHandshakeTimeoutS);
   HTTPClient http;
   http.setTimeout(10000);
   if (!http.begin(client, url)) return HTTPC_ERROR_CONNECTION_REFUSED;

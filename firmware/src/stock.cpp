@@ -28,6 +28,7 @@ static StockStatus fetch(const StockCode *codes, int n, StockData &out, int &err
   // 行情是公开数据，不带任何凭据，先跳过证书校验
   WiFiClientSecure client;
   client.setInsecure();
+  client.setHandshakeTimeout(kTlsHandshakeTimeoutS);
   HTTPClient http;
   http.setTimeout(10000);
   http.useHTTP10(true);

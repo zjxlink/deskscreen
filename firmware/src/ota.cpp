@@ -78,6 +78,7 @@ OtaStatus ota_status() {
 
 static void begin_https(WiFiClientSecure &client, HTTPClient &http, const char *url) {
   client.setCACert(ROOT_CA_BUNDLE);
+  client.setHandshakeTimeout(kTlsHandshakeTimeoutS);
   // Release 的下载地址会跳转到 githubusercontent.com
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.setUserAgent("DeskScreen/" FW_VERSION);
