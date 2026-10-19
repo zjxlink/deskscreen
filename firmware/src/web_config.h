@@ -1,5 +1,8 @@
 #pragma once
 
+#include <Arduino.h>
+
+#include "pomo_stats.h"
 #include "pomodoro.h"
 
 // 局域网设置页面：城市、经纬度、亮度、重新配网
@@ -14,3 +17,9 @@ void web_config_set_progress_hook(void (*hook)());
 
 // 番茄钟：设置页面显示状态，并通过 cmd 回调发出开始/暂停、跳过、重置
 void web_config_set_pomodoro(const Pomodoro *p, void (*cmd)(PomoCmd));
+
+// 番茄钟统计：设置页面显示今日完成、近 7 天和连续达标天数。day 返回今天是第几天，未对时返回 -1
+void web_config_set_pomo_stats(const PomoStats *s, int (*day)());
+
+// 留言板：设置页面提交留言后调用，sound 表示要不要响一声
+void web_config_set_message_hook(void (*hook)(const String &text, bool sound));

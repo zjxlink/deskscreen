@@ -2,6 +2,8 @@
 
 #include <Arduino.h>
 
+#include "pomo_stats.h"
+
 struct Settings {
   String city;         // 只用于屏幕显示
   float lat;
@@ -22,6 +24,13 @@ struct Settings {
   bool sound_on;             // 番茄钟提示音
   uint8_t sound_volume;      // 0~100
   bool sound_quiet_night;    // 夜间时段不响
+  uint8_t pomo_goal;         // 每日目标番茄数，用于统计连续达标天数
+  bool sit_on;               // 久坐提醒
+  uint8_t sit_min;           // 久坐提醒间隔（分钟）
+  bool water_on;             // 喝水提醒
+  uint8_t water_min;         // 喝水提醒间隔（分钟）
+  uint16_t remind_start;     // 提醒时段，当天第几分钟，默认 9:00
+  uint16_t remind_end;       // 默认 21:00
 };
 
 // 时区固定为北京时间，POSIX 格式
@@ -33,3 +42,7 @@ void settings_begin();
 Settings settings_get();
 
 void settings_save(const Settings &s);
+
+// 番茄钟统计单独存一块，只在主循环里读写
+void settings_load_pomo_stats(PomoStatsData &d);
+void settings_save_pomo_stats(const PomoStatsData &d);

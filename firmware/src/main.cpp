@@ -10,7 +10,9 @@
 #include "display.h"
 #include "github.h"
 #include "ota.h"
+#include "pomo_stats.h"
 #include "pomodoro.h"
+#include "reminder.h"
 #include "screen_ctrl.h"
 #include "settings.h"
 #include "stock.h"
@@ -24,6 +26,7 @@ static constexpr uint32_t kResetHoldMs = 3000;    // 长按 BOOT 键清除 WiFi
 static constexpr uint32_t kShortPressMs = 1000;   // 短按 BOOT 键切换页面
 static constexpr uint32_t kPomoResetMs = 1500;    // 长按番茄钟圆环重置
 static constexpr uint32_t kPomoMsgMs = 60000;     // 阶段结束的提示显示多久
+static constexpr uint32_t kReminderShowMs = 5 * 60000;  // 久坐、喝水提醒没人理会时多久自动关掉
 
 static WiFiManager wm;
 static String ap_name;
@@ -39,6 +42,18 @@ static bool pomo_dirty = true;           // 番茄钟页需要立即刷新
 static bool sound_on = true;
 static bool sound_quiet_night = true;
 
+static PomoStats pomo_stats;
+static int pomo_goal = 4;
+static bool stats_dirty = true;  // 统计页需要重画
+
+static Reminder sit_reminder;
+static Reminder water_reminder;
+
+// 全屏提醒（留言、久坐、喝水）：盖在页面上，点屏幕或按 BOOT 键关掉
+static bool alert_on = false;
+static bool alert_timed = false;  // 久坐、喝水提醒到时自动关掉；留言一直显示到有人关掉
+static uint32_t alert_until = 0;
+
 static void apply_settings() {
   Settings s = settings_get();
   ui_set_city(s.city.c_str());
@@ -53,6 +68,7 @@ static void apply_settings() {
   c.page_enabled[PAGE_CLOCK] = true;
   c.page_enabled[PAGE_GITHUB] = s.github_token.length() > 0;
   c.page_enabled[PAGE_STOCKS] = s.stocks.length() > 0;
+  c.page_enabled[PAGE_FOCUS] = pomo_stats.data().last_day >= 0;  // 用过番茄钟才轮播统计页
   screen.configure(c);  // 番茄钟页不参与轮播，进行中时固定显示
 
   PomoConfig pc;
@@ -62,10 +78,68 @@ static void apply_settings() {
   pc.long_every = s.pomo_every;
   pomo.configure(pc);
   pomo_dirty = true;
+  pomo_goal = s.pomo_goal;
+  stats_dirty = true;
+
+  ReminderConfig rc;
+  rc.start = s.remind_start;
+  rc.end = s.remind_end;
+  rc.on = s.sit_on;
+  rc.interval_min = s.sit_min;
+  sit_reminder.configure(rc);
+  rc.on = s.water_on;
+  rc.interval_min = s.water_min;
+  water_reminder.configure(rc);
 
   sound_on = s.sound_on;
   sound_quiet_night = s.sound_quiet_night;
   audio_set_volume(s.sound_volume);
+}
+
+// 当天第几分钟，还没对时返回 -1
+static int local_minutes() {
+  struct tm t;
+  if (!getLocalTime(&t, 0) || t.tm_year < 2024 - 1900) return -1;
+  return t.tm_hour * 60 + t.tm_min;
+}
+
+// 夜间时段默认不响
+static void play(SoundId id) {
+  if (sound_on && !(sound_quiet_night && screen.night())) audio_play(id);
+}
+
+// 今天是 1970-01-01 起第几天（北京时间），还没对时返回 -1
+static int local_day() {
+  time_t now = time(nullptr);
+  struct tm t;
+  if (!getLocalTime(&t, 0) || t.tm_year < 2024 - 1900) return -1;
+  return (int)((now + 8 * 3600) / 86400);
+}
+
+static void show_alert(AlertIcon icon, const char *title, const char *body, const char *foot,
+                       uint32_t show_ms) {
+  uint32_t now = millis();
+  alert_on = true;
+  alert_timed = show_ms > 0;
+  alert_until = now + show_ms;
+  if (screen.started()) screen.wake(now);
+  if (!ota_screen) ui_show_alert(icon, title, body, foot);
+}
+
+static void close_alert() {
+  alert_on = false;
+  if (!ota_screen) ui_show_page(screen.page(), false);
+}
+
+// 设置页面发来的留言
+static void on_message(const String &text, bool sound) {
+  struct tm t;
+  char foot[48] = "点屏幕或按 BOOT 键关闭";
+  if (getLocalTime(&t, 0) && t.tm_year >= 2024 - 1900) {
+    snprintf(foot, sizeof(foot), "%02d:%02d 收到 · 点屏幕或按 BOOT 键关闭", t.tm_hour, t.tm_min);
+  }
+  show_alert(AlertIcon::Message, "新留言", text.c_str(), foot, 0);
+  if (sound) play(SoundId::Message);
 }
 
 // 触摸、设置页面的番茄钟操作都走这里
@@ -86,12 +160,17 @@ static void update_pomodoro() {
   struct tm t;
   int day = getLocalTime(&t, 0) && t.tm_year >= 2024 - 1900 ? t.tm_yday : -1;
   if (pomo.tick(now, day)) {
-    pomo_msg = pomo.phase() == PomoPhase::Focus ? "休息结束，点圆环开始" : "专注完成，休息一下吧";
+    bool focus_done = pomo.phase() != PomoPhase::Focus;
+    pomo_msg = focus_done ? "专注完成，休息一下吧" : "休息结束，点圆环开始";
     pomo_msg_until = now + kPomoMsgMs;
     pomo_dirty = true;
-    // 夜间时段默认不响，只点亮屏幕
-    if (sound_on && !(sound_quiet_night && screen.night())) {
-      audio_play(pomo.phase() == PomoPhase::Focus ? SoundId::BreakDone : SoundId::FocusDone);
+    play(focus_done ? SoundId::FocusDone : SoundId::BreakDone);
+    if (focus_done) {
+      pomo_stats.record(local_day(), pomo_goal);
+      settings_save_pomo_stats(pomo_stats.data());
+      stats_dirty = true;
+      sit_reminder.restart(now);  // 休息时会起身，久坐提醒重新计时
+      apply_settings();           // 第一次有记录时统计页加入轮播
     }
     if (screen.started()) {
       screen.wake(now);
@@ -114,15 +193,50 @@ static void update_pomodoro() {
   if (secs != last_secs || pomo_dirty) {
     last_secs = secs;
     pomo_dirty = false;
-    ui_set_pomodoro(pomo, now, pomo_msg);
+    int day = local_day();
+    ui_set_pomodoro(pomo, now, pomo_msg, day >= 0 ? pomo_stats.count(day) : pomo.done_today());
   }
 }
 
-// 当天第几分钟，还没对时返回 -1
-static int local_minutes() {
-  struct tm t;
-  if (!getLocalTime(&t, 0) || t.tm_year < 2024 - 1900) return -1;
-  return t.tm_hour * 60 + t.tm_min;
+// 统计页：有新记录或者过了零点时重画
+static void update_focus_stats() {
+  static int last_day = -2;
+  int day = local_day();
+  if (day == last_day && !stats_dirty) return;
+  last_day = day;
+  stats_dirty = false;
+  ui_set_focus_stats(pomo_stats, day, pomo_goal);
+}
+
+// 久坐、喝水提醒。专注中先不打扰，等休息时再提醒
+static void update_reminders() {
+  uint32_t now = millis();
+  int minutes = local_minutes();
+  bool hold = pomo.phase() == PomoPhase::Focus && pomo.running();
+  bool sit = sit_reminder.tick(now, minutes, hold);
+  bool water = water_reminder.tick(now, minutes, hold);
+  // 留言还没看就不盖掉它，这次提醒跳过，下一轮再说
+  if ((sit || water) && !(alert_on && !alert_timed)) {
+    char body[96];
+    const char *title;
+    AlertIcon icon;
+    if (sit && water) {
+      title = "起来走走，顺便喝杯水";
+      icon = AlertIcon::Sit;
+      snprintf(body, sizeof(body), "已经坐了 %d 分钟了\n站起来活动一下，再去倒杯水吧", sit_reminder.config().interval_min);
+    } else if (sit) {
+      title = "该起来活动一下了";
+      icon = AlertIcon::Sit;
+      snprintf(body, sizeof(body), "已经坐了 %d 分钟了\n站起来走走，伸个懒腰，看看远处", sit_reminder.config().interval_min);
+    } else {
+      title = "该喝水了";
+      icon = AlertIcon::Water;
+      snprintf(body, sizeof(body), "每 %d 分钟喝一杯水\n小口慢慢喝，别等口渴了再喝", water_reminder.config().interval_min);
+    }
+    show_alert(icon, title, body, "点屏幕或按 BOOT 键关闭", kReminderShowMs);
+    play(SoundId::Reminder);
+  }
+  if (alert_on && alert_timed && (int32_t)(now - alert_until) >= 0) close_alert();
 }
 
 // 把 ScreenCtrl 的状态同步到屏幕：亮度和当前页面
@@ -135,7 +249,8 @@ static void update_screen() {
   }
   Page p;
   bool animate;
-  if (!ota_screen && screen.take_page_change(p, animate)) ui_show_page(p, animate);
+  // 升级进度和全屏提醒期间页面照常计算，只是先不显示
+  if (screen.take_page_change(p, animate) && !ota_screen && !alert_on) ui_show_page(p, animate);
 }
 
 // 在线升级或网页上传固件时显示进度；成功后重启，失败时提示几秒再回到原来的页面
@@ -161,7 +276,11 @@ static void update_ota_screen() {
     ui_show_status("升级失败", s.error);
     ui_refresh_now();
     delay(3000);
-    ui_show_page(screen.page(), false);
+    if (alert_on) {
+      close_alert();  // 提醒的内容已经被升级画面盖掉了，直接回到页面
+    } else {
+      ui_show_page(screen.page(), false);
+    }
   }
 }
 
@@ -188,6 +307,15 @@ static void connect_wifi() {
   }
 }
 
+// 点屏幕或短按 BOOT 键：有全屏提醒时先关掉提醒（屏幕调暗时第一下只点亮），否则切换页面
+static void on_tap(uint32_t now) {
+  if (alert_on && !ota_screen && !screen.dimmed()) {
+    close_alert();
+    return;
+  }
+  screen.on_input(now);
+}
+
 // 短按切换页面，长按 3 秒清除 WiFi
 static void check_button() {
   static uint32_t pressed_at = 0;
@@ -201,7 +329,7 @@ static void check_button() {
       ESP.restart();
     }
   } else {
-    if (pressed_at != 0 && millis() - pressed_at < kShortPressMs) screen.on_input(millis());
+    if (pressed_at != 0 && millis() - pressed_at < kShortPressMs) on_tap(millis());
     pressed_at = 0;
   }
 }
@@ -224,9 +352,9 @@ static void check_touch() {
     down_at = now;
     long_done = false;
     // 屏幕调暗时第一下只点亮，交给 ScreenCtrl 处理
-    on_ring = screen.started() && !screen.dimmed() && !ota_screen && screen.page() == PAGE_POMODORO &&
-              ui_pomodoro_hit(x, y);
-    if (!on_ring) screen.on_input(now);
+    on_ring = screen.started() && !screen.dimmed() && !ota_screen && !alert_on &&
+              screen.page() == PAGE_POMODORO && ui_pomodoro_hit(x, y);
+    if (!on_ring) on_tap(now);
   } else if (touched && on_ring && !long_done && now - down_at >= kPomoResetMs) {
     long_done = true;
     pomo_command(PomoCmd::Reset);
@@ -241,6 +369,9 @@ void setup() {
   pinMode(PIN_BUTTON, INPUT_PULLUP);
 
   settings_begin();
+  PomoStatsData sd;
+  settings_load_pomo_stats(sd);
+  pomo_stats.load(sd);
   display_init();
   audio_begin();  // 解码芯片和触摸共用 I2C，要在屏幕初始化之后
   ui_init();
@@ -256,6 +387,8 @@ void setup() {
   MDNS.addService("http", "tcp", 80);
   web_config_begin();
   web_config_set_pomodoro(&pomo, pomo_command);
+  web_config_set_pomo_stats(&pomo_stats, local_day);
+  web_config_set_message_hook(on_message);
   // 网页上传固件期间主循环被阻塞，由上传处理顺带刷新进度画面
   web_config_set_progress_hook([] {
     update_ota_screen();
@@ -286,6 +419,8 @@ void loop() {
   }
   if (web_config_take_changed()) apply_settings();
   update_pomodoro();
+  update_focus_stats();
+  update_reminders();
   update_screen();
   update_ota_screen();
 

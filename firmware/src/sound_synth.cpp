@@ -5,6 +5,8 @@
 // E6、C6、G5 三个音，像门铃一样柔和
 static const Note kFocusDone[] = {{1319, 180}, {1047, 180}, {784, 420}};
 static const Note kBreakDone[] = {{784, 180}, {1047, 180}, {1319, 420}};
+static const Note kMessage[] = {{1319, 220}, {1047, 480}};                   // E6、C6，门铃"叮咚"
+static const Note kReminder[] = {{1047, 120}, {0, 60}, {1047, 120}, {1568, 360}};  // C6、C6、G6
 
 static constexpr float kPi = 3.14159265f;
 static constexpr float kAttackMs = 5.0f;
@@ -14,6 +16,12 @@ static constexpr float kHeadroom = 0.75f;  // 基波 + 谐波最大 1.3 倍，�
 
 const Note *sound_melody(SoundId id, int &count) {
   switch (id) {
+    case SoundId::Message:
+      count = sizeof(kMessage) / sizeof(kMessage[0]);
+      return kMessage;
+    case SoundId::Reminder:
+      count = sizeof(kReminder) / sizeof(kReminder[0]);
+      return kReminder;
     case SoundId::BreakDone:
       count = sizeof(kBreakDone) / sizeof(kBreakDone[0]);
       return kBreakDone;
