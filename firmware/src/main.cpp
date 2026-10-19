@@ -43,8 +43,6 @@ static bool sound_on = true;
 static bool sound_quiet_night = true;
 
 static PomoStats pomo_stats;
-static int pomo_goal = 4;
-static bool stats_dirty = true;  // 统计页需要重画
 
 static Reminder sit_reminder;
 static Reminder water_reminder;
@@ -68,7 +66,6 @@ static void apply_settings() {
   c.page_enabled[PAGE_CLOCK] = true;
   c.page_enabled[PAGE_GITHUB] = s.github_token.length() > 0;
   c.page_enabled[PAGE_STOCKS] = s.stocks.length() > 0;
-  c.page_enabled[PAGE_FOCUS] = pomo_stats.data().last_day >= 0;  // 用过番茄钟才轮播统计页
   screen.configure(c);  // 番茄钟页不参与轮播，进行中时固定显示
 
   PomoConfig pc;
@@ -78,8 +75,6 @@ static void apply_settings() {
   pc.long_every = s.pomo_every;
   pomo.configure(pc);
   pomo_dirty = true;
-  pomo_goal = s.pomo_goal;
-  stats_dirty = true;
 
   ReminderConfig rc;
   rc.start = s.remind_start;
@@ -166,11 +161,9 @@ static void update_pomodoro() {
     pomo_dirty = true;
     play(focus_done ? SoundId::FocusDone : SoundId::BreakDone);
     if (focus_done) {
-      pomo_stats.record(local_day(), pomo_goal);
+      pomo_stats.record(local_day());
       settings_save_pomo_stats(pomo_stats.data());
-      stats_dirty = true;
       sit_reminder.restart(now);  // 休息时会起身，久坐提醒重新计时
-      apply_settings();           // 第一次有记录时统计页加入轮播
     }
     if (screen.started()) {
       screen.wake(now);
@@ -196,16 +189,6 @@ static void update_pomodoro() {
     int day = local_day();
     ui_set_pomodoro(pomo, now, pomo_msg, day >= 0 ? pomo_stats.count(day) : pomo.done_today());
   }
-}
-
-// 统计页：有新记录或者过了零点时重画
-static void update_focus_stats() {
-  static int last_day = -2;
-  int day = local_day();
-  if (day == last_day && !stats_dirty) return;
-  last_day = day;
-  stats_dirty = false;
-  ui_set_focus_stats(pomo_stats, day, pomo_goal);
 }
 
 // 久坐、喝水提醒。专注中先不打扰，等休息时再提醒
@@ -419,7 +402,6 @@ void loop() {
   }
   if (web_config_take_changed()) apply_settings();
   update_pomodoro();
-  update_focus_stats();
   update_reminders();
   update_screen();
   update_ota_screen();

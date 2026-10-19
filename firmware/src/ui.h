@@ -2,7 +2,6 @@
 
 #include "github.h"
 #include "pages.h"
-#include "pomo_stats.h"
 #include "pomodoro.h"
 #include "stock.h"
 #include "weather.h"
@@ -31,9 +30,6 @@ void ui_set_stocks(const StockData &s);
 
 // 番茄钟页：msg 不为空时在顶栏显示提示（如"专注完成，休息一下吧"）；done_today 为今日完成数（来自统计，重启不丢）
 void ui_set_pomodoro(const Pomodoro &p, uint32_t now_ms, const char *msg, int done_today);
-
-// 番茄钟统计页：最近 7 天柱状图、今日完成、连续达标天数。day 为今天（1970-01-01 起第几天），未对时传 -1
-void ui_set_focus_stats(const PomoStats &s, int day, int goal);
 
 // 全屏提醒（留言、久坐、喝水），盖在当前页面上，关掉后用 ui_show_page 回到原来的页面
 enum class AlertIcon { Message, Sit, Water };

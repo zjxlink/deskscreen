@@ -79,17 +79,6 @@ static lv_obj_t *lbl_pomo_today;
 static lv_obj_t *lbl_pomo_msg;
 static lv_obj_t *pomo_dots[kPomoMaxDots];
 
-// 番茄钟统计：7 根柱子，柱区高 80px
-static constexpr int kBarMaxH = 80;
-static constexpr int kBarBottom = 196;  // 柱子底边的 y
-static lv_obj_t *lbl_focus_today;
-static lv_obj_t *lbl_focus_week;
-static lv_obj_t *lbl_focus_streak;
-static lv_obj_t *focus_bars[kPomoStatDays];
-static lv_obj_t *focus_vals[kPomoStatDays];
-static lv_obj_t *focus_days[kPomoStatDays];
-static lv_obj_t *focus_goal_line;
-
 // 全屏提醒
 static lv_obj_t *scr_alert;
 static lv_obj_t *alert_badge;
@@ -332,49 +321,6 @@ static void build_stocks() {
   lv_label_set_text(lbl_stock_msg, "获取中…");
 }
 
-// 番茄钟统计：顶部三个数字，下面是最近 7 天的柱状图（今天在最右边）
-static void build_focus() {
-  lv_obj_t *scr = make_screen();
-  scr_pages[PAGE_FOCUS] = scr;
-
-  lv_obj_t *title = make_label(scr, &font_cn_16, COLOR_SUBTLE);
-  lv_label_set_text(title, "专注统计");
-  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 12, 10);
-  dot_wifi[PAGE_FOCUS] = make_wifi_dot(scr);
-
-  lbl_focus_today = make_stat(scr, 0, "今日完成");
-  lbl_focus_week = make_stat(scr, 1, "近 7 天");
-  lbl_focus_streak = make_stat(scr, 2, "连续达标");
-
-  // 目标线：横穿柱区的淡线，目标数显示在「今日完成」里
-  focus_goal_line = lv_obj_create(scr);
-  lv_obj_remove_style_all(focus_goal_line);
-  lv_obj_set_size(focus_goal_line, SCREEN_W - 24, 1);
-  lv_obj_set_style_border_side(focus_goal_line, LV_BORDER_SIDE_TOP, 0);
-  lv_obj_set_style_border_width(focus_goal_line, 1, 0);
-  lv_obj_set_style_border_color(focus_goal_line, COLOR_SUBTLE, 0);
-  lv_obj_set_style_border_opa(focus_goal_line, LV_OPA_50, 0);
-
-  int col_w = (SCREEN_W - 24) / kPomoStatDays;
-  for (int i = 0; i < kPomoStatDays; i++) {
-    int cx = 12 + col_w * i + col_w / 2;
-    lv_obj_t *b = lv_obj_create(scr);
-    lv_obj_set_style_radius(b, 3, 0);
-    lv_obj_set_style_border_width(b, 0, 0);
-    lv_obj_set_style_pad_all(b, 0, 0);
-    lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(b, 22, 2);
-    lv_obj_set_pos(b, cx - 11, kBarBottom - 2);
-    focus_bars[i] = b;
-
-    focus_vals[i] = make_label(scr, &lv_font_montserrat_14, COLOR_TEXT);
-    focus_days[i] = make_label(scr, &font_cn_16, COLOR_SUBTLE);
-    lv_obj_set_width(focus_days[i], col_w);
-    lv_obj_set_style_text_align(focus_days[i], LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_pos(focus_days[i], cx - col_w / 2, kBarBottom + 8);
-  }
-}
-
 static void build_alert() {
   scr_alert = make_screen();
 
@@ -453,12 +399,10 @@ void ui_init() {
   scr_pages[PAGE_CLOCK] = scr_main;
   build_github();
   build_stocks();
-  build_focus();
   build_pomodoro();
   build_alert();
   Pomodoro idle;
   ui_set_pomodoro(idle, 0, nullptr, 0);
-  ui_set_focus_stats(PomoStats(), -1, 4);
 }
 
 void ui_show_status(const char *title, const char *detail) {
@@ -649,52 +593,6 @@ void ui_set_pomodoro(const Pomodoro &p, uint32_t now_ms, const char *msg, int do
     }
     lv_obj_clear_flag(pomo_dots[i], LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_style_bg_color(pomo_dots[i], k < p.cycle_done() ? COLOR_ERR : COLOR_LINE, 0);
-  }
-}
-
-void ui_set_focus_stats(const PomoStats &s, int day, int goal) {
-  static const char *const weekdays[] = {"日", "一", "二", "三", "四", "五", "六"};
-  if (goal < 1) goal = 1;
-  int today = day >= 0 ? s.count(day) : 0;
-  lv_label_set_text_fmt(lbl_focus_today, "%d / %d", today, goal);
-  lv_obj_set_style_text_color(lbl_focus_today, today >= goal ? COLOR_OK : COLOR_TEXT, 0);
-  lv_label_set_text_fmt(lbl_focus_week, "%d", day >= 0 ? s.week_total(day) : 0);
-  lv_label_set_text_fmt(lbl_focus_streak, "%d 天", day >= 0 ? s.streak(day) : 0);
-
-  // 纵轴按 7 天里的最大值和目标取大者，目标线始终在图里
-  int top = goal;
-  for (int i = 0; i < kPomoStatDays; i++) {
-    int c = day >= 0 ? s.count(day - i) : 0;
-    if (c > top) top = c;
-  }
-  int goal_y = kBarBottom - goal * kBarMaxH / top;
-  lv_obj_set_pos(focus_goal_line, 12, goal_y);
-
-  for (int i = 0; i < kPomoStatDays; i++) {
-    int d = day - (kPomoStatDays - 1 - i);  // 最右边是今天
-    int c = day >= 0 ? s.count(d) : 0;
-    int h = c > 0 ? c * kBarMaxH / top : 2;  // 没有记录的日子画一条细线
-    if (h < 4 && c > 0) h = 4;
-    lv_obj_set_height(focus_bars[i], h);
-    lv_obj_set_y(focus_bars[i], kBarBottom - h);
-    lv_obj_set_style_bg_color(focus_bars[i], c >= goal ? COLOR_OK : c > 0 ? COLOR_ERR : COLOR_LINE, 0);
-
-    if (c > 0) {
-      lv_label_set_text_fmt(focus_vals[i], "%d", c);
-      lv_obj_align_to(focus_vals[i], focus_bars[i], LV_ALIGN_OUT_TOP_MID, 0, -2);
-    } else {
-      lv_label_set_text(focus_vals[i], "");
-    }
-
-    if (day < 0) {
-      lv_label_set_text(focus_days[i], "");
-    } else if (i == kPomoStatDays - 1) {
-      lv_label_set_text(focus_days[i], "今天");
-    } else {
-      // 1970-01-01 是周四
-      lv_label_set_text(focus_days[i], weekdays[(d % 7 + 4) % 7]);
-    }
-    lv_obj_set_style_text_color(focus_days[i], i == kPomoStatDays - 1 ? COLOR_TEXT : COLOR_SUBTLE, 0);
   }
 }
 
