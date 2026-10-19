@@ -5,6 +5,7 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 
+#include "net.h"
 #include "root_ca.h"
 #include "settings.h"
 
@@ -20,13 +21,19 @@ static const char kQuery[] =
     "{\"query\":\"query{viewer{login contributionsCollection{contributionCalendar{"
     "totalContributions weeks{contributionDays{contributionCount contributionLevel weekday}}}}}}\"}";
 
-static GithubStatus fetch(const String &token, GithubData &out) {
+// 失败时 error 为 HTTP 状态码或 HTTPClient 的负数错误码，返回内容不对时为 -100
+static GithubStatus fetch(const String &token, GithubData &out, int &error) {
+  error = -100;
+  HttpsLock https;
   WiFiClientSecure client;
   client.setCACert(ROOT_CA_BUNDLE);
   HTTPClient http;
   http.setTimeout(15000);
   http.useHTTP10(true);  // 避免分块传输，方便直接流式解析 JSON
-  if (!http.begin(client, "https://api.github.com/graphql")) return GithubStatus::Error;
+  if (!http.begin(client, "https://api.github.com/graphql")) {
+    error = HTTPC_ERROR_CONNECTION_REFUSED;
+    return GithubStatus::Error;
+  }
   http.addHeader("Authorization", "bearer " + token);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("User-Agent", "DeskScreen");
@@ -37,7 +44,8 @@ static GithubStatus fetch(const String &token, GithubData &out) {
     return GithubStatus::BadToken;
   }
   if (status != HTTP_CODE_OK) {
-    log_w("github http %d", status);
+    net_log_failure("github", status, client);
+    error = status;
     http.end();
     return GithubStatus::Error;
   }
@@ -76,13 +84,17 @@ static void github_task(void *) {
         d.status = GithubStatus::Loading;
         publish(d);
       }
-      GithubStatus s = fetch(token, d);
+      int error;
+      GithubStatus s = fetch(token, d, error);
       if (s == GithubStatus::Ok) {
         d.status = s;
         wait_ms = kRefreshMs;
       } else {
         // 拉取失败时保留上次的数据，只有从没成功过才显示错误
-        if (d.status != GithubStatus::Ok || s == GithubStatus::BadToken) d.status = s;
+        if (d.status != GithubStatus::Ok || s == GithubStatus::BadToken) {
+          d.status = s;
+          d.error = error;
+        }
         wait_ms = s == GithubStatus::BadToken ? portMAX_DELAY : kRetryMs;
       }
       publish(d);

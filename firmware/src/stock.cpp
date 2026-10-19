@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 
+#include "net.h"
 #include "settings.h"
 
 static constexpr uint32_t kRetryMs = 60 * 1000;
@@ -13,7 +14,9 @@ static SemaphoreHandle_t lock;
 static StockData latest;
 static bool fresh = false;
 
-static StockStatus fetch(const StockCode *codes, int n, StockData &out) {
+// 失败时 error 为 HTTP 状态码或 HTTPClient 的负数错误码，返回内容不对时为 -100
+static StockStatus fetch(const StockCode *codes, int n, StockData &out, int &error) {
+  error = -100;
   char secids[512];
   if (!stock_build_secids(codes, n, secids, sizeof(secids))) return StockStatus::Error;
   String url =
@@ -21,16 +24,21 @@ static StockStatus fetch(const StockCode *codes, int n, StockData &out) {
       "&fields=f2,f3,f4,f12,f13,f14&ut=bd1d9ddb04089700cf9c27f6f7426281&secids=";
   url += secids;
 
+  HttpsLock https;
   // 行情是公开数据，不带任何凭据，先跳过证书校验
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
   http.setTimeout(10000);
   http.useHTTP10(true);
-  if (!http.begin(client, url)) return StockStatus::Error;
+  if (!http.begin(client, url)) {
+    error = HTTPC_ERROR_CONNECTION_REFUSED;
+    return StockStatus::Error;
+  }
   int status = http.GET();
   if (status != HTTP_CODE_OK) {
-    log_w("stock http %d", status);
+    net_log_failure("stock", status, client);
+    error = status;
     http.end();
     return StockStatus::Error;
   }
@@ -69,7 +77,8 @@ static void stock_task(void *) {
         d.status = StockStatus::Loading;
         publish(d);
       }
-      StockStatus s = fetch(codes, n, tmp);
+      int error;
+      StockStatus s = fetch(codes, n, tmp, error);
       struct tm now;
       bool has_time = getLocalTime(&now, 0);
       if (s == StockStatus::Ok) {
@@ -79,7 +88,10 @@ static void stock_task(void *) {
         wait_ms = has_time ? stock_refresh_ms(now) : 30 * 1000;
       } else {
         // 失败时保留上次的行情，只有从没成功过才显示错误
-        if (d.status != StockStatus::Ok) d.status = s;
+        if (d.status != StockStatus::Ok) {
+          d.status = s;
+          d.error = error;
+        }
         wait_ms = kRetryMs;
       }
       publish(d);

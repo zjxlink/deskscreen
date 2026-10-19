@@ -8,6 +8,7 @@ struct WeatherData {
   int code;        // WMO 天气代码
   float temp_max;  // 今日最高
   float temp_min;  // 今日最低
+  int error;       // 0 表示成功；否则是失败原因，见 weather.cpp 的 fetch()
 };
 
 // 启动后台任务，每 15 分钟从 Open-Meteo 拉取一次天气（免费，无需 API Key）

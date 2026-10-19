@@ -9,6 +9,7 @@
 
 #include "board.h"
 #include "ota_util.h"
+#include "net.h"
 #include "root_ca.h"
 #include "settings.h"
 
@@ -97,11 +98,13 @@ static void check_failed(const char *error) {
 
 static bool check() {
   set_state(OtaState::Checking, "");
+  HttpsLock https;
   WiFiClientSecure client;
   HTTPClient http;
   begin_https(client, http, OTA_MANIFEST_URL);
   int code = http.GET();
   if (code != HTTP_CODE_OK) {
+    net_log_failure("ota check", code, client);
     http.end();
     char err[64];
     snprintf(err, sizeof(err), "检查更新失败（HTTP %d）", code);
@@ -138,11 +141,13 @@ static void download() {
   xSemaphoreGive(lock);
   if (!try_claim()) return;  // 网页上传抢先开始了
 
+  HttpsLock https;  // 下载期间其他任务的请求会排队等着
   WiFiClientSecure client;
   HTTPClient http;
   begin_https(client, http, m.url);
   int code = http.GET();
   if (code != HTTP_CODE_OK) {
+    net_log_failure("ota download", code, client);
     http.end();
     char err[64];
     snprintf(err, sizeof(err), "下载失败（HTTP %d）", code);

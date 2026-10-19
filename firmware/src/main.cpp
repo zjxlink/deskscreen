@@ -2,6 +2,7 @@
 #include <ESPmDNS.h>
 #include <WiFi.h>
 #include <WiFiManager.h>
+#include <esp_heap_caps.h>
 #include <lvgl.h>
 
 #include "audio.h"
@@ -264,6 +265,8 @@ void setup() {
   github_begin();
   stock_begin();
   ota_begin();
+  log_i("heap: internal %u (largest block %u), psram %u", heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL), heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
   String detail = "用同一 WiFi 下的手机或电脑打开\n#58A6FF http://" + WiFi.localIP().toString() +
                   "#\n或 #58A6FF http://" + kHostname + ".local#\n即可设置城市、亮度和 GitHub";
