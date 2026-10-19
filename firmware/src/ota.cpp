@@ -230,7 +230,11 @@ static void ota_task(void *) {
 
     bool install = (cmd & kCmdInstall) != 0;
     if (!install && auto_ok && settings_get().auto_update && in_auto_window()) install = true;
-    if (install && ota_status().state == OtaState::Available) download();
+    if (install && ota_status().state == OtaState::Available) {
+      download();
+      // 下载失败（多半是连不上 GitHub）时 1 小时后重新检查，状态回到「有新版本」，自动升级时段内还能再试
+      if (ota_status().state == OtaState::Failed) next_check = millis() + kRetryMs;
+    }
   }
 }
 
