@@ -6,6 +6,7 @@
 #include <time.h>
 
 #include "board.h"
+#include "screen_load.h"
 
 // 配色参考 GitHub 深色主题
 #define COLOR_BG      lv_color_hex(0x0D1117)
@@ -452,7 +453,7 @@ void ui_show_status(const char *title, const char *detail) {
   lv_label_set_text(status_title, title);
   lv_label_set_text(status_detail, detail);
   lv_obj_align(status_title, LV_ALIGN_TOP_MID, 0, 40);
-  if (lv_scr_act() != scr_status) lv_scr_load(scr_status);
+  screen_load(scr_status, false);
 }
 
 void ui_show_progress(const char *title, const char *detail, int percent) {
@@ -472,13 +473,7 @@ void ui_show_provision(const char *ap_name) {
 }
 
 void ui_show_page(Page page, bool animate) {
-  lv_obj_t *scr = scr_pages[page];
-  if (lv_scr_act() == scr) return;
-  if (animate) {
-    lv_scr_load_anim(scr, LV_SCR_LOAD_ANIM_MOVE_LEFT, 250, 0, false);
-  } else {
-    lv_scr_load(scr);
-  }
+  screen_load(scr_pages[page], animate);
 }
 
 void ui_tick_clock() {
@@ -693,7 +688,7 @@ void ui_show_alert(AlertIcon icon, const char *title, const char *body, const ch
   lv_label_set_text(alert_body, body);
   lv_label_set_text(alert_foot, foot);
   lv_obj_align(alert_foot, LV_ALIGN_BOTTOM_MID, 0, -8);
-  if (lv_scr_act() != scr_alert) lv_scr_load(scr_alert);
+  screen_load(scr_alert, false);
 }
 
 bool ui_pomodoro_hit(int x, int y) {

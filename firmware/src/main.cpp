@@ -27,6 +27,7 @@ static constexpr uint32_t kWelcomeMs = 8000;      // 连上 WiFi 后显示设置
 static constexpr uint32_t kResetHoldMs = 3000;    // 长按 BOOT 键清除 WiFi
 static constexpr uint32_t kShortPressMs = 1000;   // 短按 BOOT 键切换页面
 static constexpr uint32_t kPomoResetMs = 1500;    // 长按番茄钟圆环重置
+static constexpr uint32_t kTouchReleaseMs = 50;   // 触摸芯片偶尔漏报一次，连续这么久没读到才算松手
 static constexpr uint32_t kPomoMsgMs = 60000;     // 阶段结束的提示显示多久
 static constexpr uint32_t kReminderShowMs = 5 * 60000;  // 久坐、喝水提醒没人理会时多久自动关掉
 static constexpr uint32_t kAlarmRingMs = 5 * 60000;     // 闹钟没人关时响多久
@@ -421,12 +422,16 @@ static void check_touch() {
   static bool long_done = false;
   static uint32_t down_at = 0;
   static uint32_t last_poll = 0;
+  static uint32_t last_seen = 0;
   uint32_t now = millis();
   if (now - last_poll < 30) return;  // 每次读触摸都要走 I2C，没必要太频繁
   last_poll = now;
 
   int x = 0, y = 0;
-  bool touched = display_touch(x, y);
+  bool raw = display_touch(x, y);
+  if (raw) last_seen = now;
+  // 按住时漏报一次不当成松手再按下，否则一下会被算成两下，番茄钟也会开始又暂停
+  bool touched = raw || (was_touched && now - last_seen < kTouchReleaseMs);
   if (touched && !was_touched) {
     down_at = now;
     long_done = false;
