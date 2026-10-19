@@ -70,6 +70,8 @@ jobs:
             ~/.platformio
             firmware/.pio/libdeps
           key: pio-${{ matrix.env }}-${{ hashFiles('firmware/platformio.ini') }}
+          # platformio.ini 改了也先用旧缓存，只补下载缺的包；PlatformIO 的下载源偶尔会超时
+          restore-keys: pio-${{ matrix.env }}-
       - name: Install PlatformIO
         run: pip install platformio==6.1.16
       - name: Build
