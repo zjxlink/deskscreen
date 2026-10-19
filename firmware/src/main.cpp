@@ -7,6 +7,7 @@
 #include "board.h"
 #include "display.h"
 #include "github.h"
+#include "ota.h"
 #include "screen_ctrl.h"
 #include "settings.h"
 #include "stock.h"
@@ -24,6 +25,7 @@ static String ap_name;
 static uint32_t welcome_until = 0;
 
 static ScreenCtrl screen;
+static bool ota_screen = false;  // 正在显示升级进度，页面切换先暂停
 
 static void apply_settings() {
   Settings s = settings_get();
@@ -59,7 +61,34 @@ static void update_screen() {
   }
   Page p;
   bool animate;
-  if (screen.take_page_change(p, animate)) ui_show_page(p, animate);
+  if (!ota_screen && screen.take_page_change(p, animate)) ui_show_page(p, animate);
+}
+
+// 在线升级或网页上传固件时显示进度；成功后重启，失败时提示几秒再回到原来的页面
+static void update_ota_screen() {
+  static int last_progress = -1;
+  OtaStatus s = ota_status();
+  if (s.state == OtaState::Downloading) {
+    if (!ota_screen || s.progress != last_progress) {
+      ota_screen = true;
+      last_progress = s.progress;
+      char detail[48];
+      snprintf(detail, sizeof(detail), "请不要断电（%d%%）", s.progress);
+      ui_show_progress("正在升级固件", detail, s.progress);
+    }
+  } else if (s.state == OtaState::Done) {
+    ui_show_progress("升级完成", "正在重启…", 100);
+    ui_refresh_now();
+    delay(1500);
+    ESP.restart();
+  } else if (ota_screen) {
+    ota_screen = false;
+    last_progress = -1;
+    ui_show_status("升级失败", s.error);
+    ui_refresh_now();
+    delay(3000);
+    ui_show_page(screen.page(), false);
+  }
 }
 
 static void connect_wifi() {
@@ -132,9 +161,15 @@ void setup() {
   MDNS.begin(kHostname);
   MDNS.addService("http", "tcp", 80);
   web_config_begin();
+  // 网页上传固件期间主循环被阻塞，由上传处理顺带刷新进度画面
+  web_config_set_progress_hook([] {
+    update_ota_screen();
+    ui_refresh_now();
+  });
   weather_begin();
   github_begin();
   stock_begin();
+  ota_begin();
 
   String detail = "用同一 WiFi 下的手机或电脑打开\n#58A6FF http://" + WiFi.localIP().toString() +
                   "#\n或 #58A6FF http://" + kHostname + ".local#\n即可设置城市、亮度和 GitHub";
@@ -154,6 +189,7 @@ void loop() {
   }
   if (web_config_take_changed()) apply_settings();
   update_screen();
+  update_ota_screen();
 
   WeatherData w;
   if (weather_take_update(w)) ui_set_weather(w);

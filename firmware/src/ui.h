@@ -10,6 +10,9 @@ void ui_init();
 // 全屏提示页，detail 可以包含换行
 void ui_show_status(const char *title, const char *detail);
 
+// 带进度条的全屏提示页（升级固件用），percent 为 0~100
+void ui_show_progress(const char *title, const char *detail, int percent);
+
 // 首次配网提示页
 void ui_show_provision(const char *ap_name);
 

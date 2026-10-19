@@ -35,6 +35,7 @@ LV_FONT_DECLARE(font_cn_24);
 static lv_obj_t *scr_status;
 static lv_obj_t *status_title;
 static lv_obj_t *status_detail;
+static lv_obj_t *status_bar;
 
 static lv_obj_t *scr_pages[PAGE_COUNT];
 
@@ -118,6 +119,15 @@ static void build_status() {
   lv_obj_set_style_text_line_space(status_detail, 6, 0);
   lv_label_set_recolor(status_detail, true);  // 支持 "#RRGGBB 文字#" 高亮
   lv_obj_align(status_detail, LV_ALIGN_TOP_MID, 0, 80);
+
+  status_bar = lv_bar_create(scr_status);
+  lv_obj_set_size(status_bar, SCREEN_W - 64, 10);
+  lv_obj_align(status_bar, LV_ALIGN_BOTTOM_MID, 0, -48);
+  lv_obj_set_style_bg_color(status_bar, COLOR_CARD, LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(status_bar, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(status_bar, COLOR_ACCENT, LV_PART_INDICATOR);
+  lv_bar_set_range(status_bar, 0, 100);
+  lv_obj_add_flag(status_bar, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void build_main() {
@@ -302,10 +312,17 @@ void ui_init() {
 }
 
 void ui_show_status(const char *title, const char *detail) {
+  lv_obj_add_flag(status_bar, LV_OBJ_FLAG_HIDDEN);
   lv_label_set_text(status_title, title);
   lv_label_set_text(status_detail, detail);
   lv_obj_align(status_title, LV_ALIGN_TOP_MID, 0, 40);
   if (lv_scr_act() != scr_status) lv_scr_load(scr_status);
+}
+
+void ui_show_progress(const char *title, const char *detail, int percent) {
+  ui_show_status(title, detail);
+  lv_bar_set_value(status_bar, percent < 0 ? 0 : percent > 100 ? 100 : percent, LV_ANIM_OFF);
+  lv_obj_clear_flag(status_bar, LV_OBJ_FLAG_HIDDEN);
 }
 
 void ui_show_provision(const char *ap_name) {

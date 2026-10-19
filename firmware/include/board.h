@@ -6,6 +6,7 @@
 
 #if defined(BOARD_BOX3)
   // 乐鑫 ESP32-S3-BOX-3，引脚与 LovyanGFX 自动识别配置一致
+  #define BOARD_NAME        "box3"  // 和 platformio.ini 的环境名一致，OTA 用它找对应的固件
   #define LCD_PANEL_ILI9342
   #define LCD_SPI_FREQ      40000000
   #define PIN_LCD_SCLK      7
@@ -24,6 +25,7 @@
 #elif defined(BOARD_DESK_V1)
   // 自己画的板子：2.0 寸 IPS ST7789（240x320）
   // 引脚尽量和 BOX-3 一样，画 PCB 时如有改动，只需改这里
+  #define BOARD_NAME        "desk_v1"
   #define LCD_PANEL_ST7789
   #define LCD_SPI_FREQ      80000000
   #define PIN_LCD_SCLK      7

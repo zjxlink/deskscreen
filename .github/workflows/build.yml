@@ -34,11 +34,18 @@ jobs:
         working-directory: firmware
         run: pio run -e ${{ matrix.env }}
 
+      - name: Check firmware images
+        working-directory: firmware/.pio/build/${{ matrix.env }}
+        run: python3 ../../../tools/check_image.py firmware.bin firmware-merged.bin
+
+      # firmware-merged.bin 用网页工具烧到 0x0；firmware.bin 用于设置页面上传升级
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
           name: firmware-${{ matrix.env }}
-          path: firmware/.pio/build/${{ matrix.env }}/firmware-merged.bin
+          path: |
+            firmware/.pio/build/${{ matrix.env }}/firmware-merged.bin
+            firmware/.pio/build/${{ matrix.env }}/firmware.bin
           if-no-files-found: error
 
   test:

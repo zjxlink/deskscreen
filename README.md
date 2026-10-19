@@ -8,7 +8,7 @@
 
 ![自选股](docs/preview-stocks.png)
 
-## 当前功能（v0.4）
+## 当前功能（v0.5）
 
 - 手机配网：首次开机设备会开一个 WiFi 热点，手机连上后选择家里的 WiFi 即可，不用装 App
 - 时间日期：NTP 自动对时（北京时间）
@@ -18,6 +18,7 @@
 - GitHub 贡献热力图：最近 24 周的贡献格子（配色和 GitHub 一致），以及今日贡献、连续天数、过去一年总数，每 30 分钟刷新
 - 自选股行情：最多 6 只，支持 A 股、港股、美股和 ETF，红涨绿跌。交易时段每 30 秒刷新，其余时间 10 分钟一次。数据来自东方财富的公开接口（非官方接口，适合个人使用）
 - 夜间自动调暗：默认 23:00～7:00 把屏幕调到很暗（亮度可调，可以直接关掉背光），亮度渐变不突兀；夜间固定显示时钟页，点一下屏幕或按 BOOT 键临时恢复正常亮度 30 秒。时间段可在设置页面修改或关闭
+- 在线升级（OTA）：设备每天检查一次 GitHub Release，有新版本时在凌晨 3～5 点自动安装（可关闭）；也可以在设置页面手动检查、立即升级，或者直接上传固件文件。升级时屏幕显示进度，写入后校验 MD5，失败不会影响旧固件
 - 多页面：点一下屏幕（BOX-3）或短按 BOOT 键切换页面；也可以在设置页面设定自动轮播间隔（默认 15 秒，只轮播已经设置好的页面）
 
 ### 设置 GitHub 热力图
@@ -37,6 +38,24 @@
 | `sh000001` | 加前缀指定市场，例如上证指数（和深市的 000001 平安银行区分） |
 | `00700` 或 `hk700` | 港股 |
 | `AAPL`、`BRK.B` | 美股，会自动在纳斯达克、纽交所、美交所里查找 |
+
+### 发布新版本（OTA）
+
+```bash
+git tag v0.5.0
+git push origin v0.5.0
+```
+
+推送 `vX.Y.Z` 标签后，GitHub Actions 会编译两个板子的固件、跑单元测试、生成 `manifest.json` 并创建 Release。设备从 `releases/latest/download/manifest.json` 检查更新，只有正式版本号（vX.Y.Z）之间才会自动升级；本地编译的开发版不会被自动覆盖，但可以在设置页面手动装上最新正式版。
+
+Release 里每个板子有两个文件：
+
+| 文件 | 用途 |
+|---|---|
+| `firmware-box3-merged.bin` | 第一次烧录，用网页工具写到 `0x0` |
+| `firmware-box3.bin` | 已经装过的设备，在设置页面上传升级（OTA 也下载这个） |
+
+国内访问 GitHub 慢的话，可以把 Release 文件同步到自己的服务器，然后修改 `src/ota.cpp` 里的 `OTA_MANIFEST_URL`。
 
 ## 硬件
 
@@ -84,7 +103,9 @@ firmware/
   src/web_config.cpp   局域网设置页面
   src/github.cpp       后台拉取 GitHub 贡献日历（GraphQL API）
   src/github_parse.cpp 解析贡献日历、计算连续天数（不依赖硬件，有单元测试）
-  src/github_ca.h      api.github.com 的根证书
+  src/root_ca.h        访问 GitHub 用的根证书
+  src/ota.cpp          在线升级和网页上传升级
+  src/ota_util.cpp     版本号比较、manifest 解析、固件格式检查（有单元测试）
   src/stock.cpp        后台拉取自选股行情
   src/stock_parse.cpp  解析股票代码和行情（不依赖硬件，有单元测试）
   src/night.cpp        夜间模式的时间计算（有单元测试）
@@ -93,6 +114,9 @@ firmware/
   src/fonts/           中文字体（自动生成，不要手改）
   tools/gen_fonts.py   中文字体生成脚本
   tools/merge_bin.py   编译后生成单文件固件
+  tools/version.py     编译前从 git 标签生成版本号
+  tools/check_image.py 检查编译出的固件格式（CI 用）
+  tools/make_manifest.py 发布时生成 OTA 的 manifest.json
   test/                单元测试（pio test -e native，在电脑上运行）
 ```
 
@@ -120,6 +144,6 @@ python3 tools/gen_fonts.py node_modules/@expo-google-fonts/noto-sans-sc/400Regul
 - [ ] 场外基金估值
 - [x] 多页面切换（触摸或按键）
 - [ ] 番茄钟、待办事项
-- [ ] OTA 在线升级
+- [x] OTA 在线升级
 - [x] 夜间自动调暗（按时间；量产板可加光敏电阻按环境光调）
 - [ ] 量产板 PCB 和外壳
