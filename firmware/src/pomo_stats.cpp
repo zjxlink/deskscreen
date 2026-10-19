@@ -11,15 +11,10 @@ void PomoStats::advance(int day) {
   d_.last_day = day;
 }
 
-void PomoStats::record(int day, int goal) {
+void PomoStats::record(int day) {
   if (day < 0) return;
   if (day != d_.last_day) advance(day);
   if (d_.counts[0] < 255) d_.counts[0]++;
-  if (goal < 1) goal = 1;
-  if (d_.counts[0] >= goal && d_.streak_day != day) {
-    d_.streak = d_.streak_day == day - 1 ? d_.streak + 1 : 1;
-    d_.streak_day = day;
-  }
 }
 
 int PomoStats::count(int day) const {
@@ -32,9 +27,4 @@ int PomoStats::week_total(int day) const {
   int total = 0;
   for (int i = 0; i < kPomoStatDays; i++) total += count(day - i);
   return total;
-}
-
-int PomoStats::streak(int day) const {
-  if (d_.streak_day < 0 || day - d_.streak_day > 1 || day < d_.streak_day) return 0;
-  return d_.streak;
 }

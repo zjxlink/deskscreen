@@ -86,8 +86,7 @@ label.check input{width:auto}
 <div><label>长休息</label><input name="pomo_long" value="%POMO_LONG%" inputmode="numeric"></div>
 <div><label>每几个长休息</label><input name="pomo_every" value="%POMO_EVERY%" inputmode="numeric"></div>
 </div>
-<label>每日目标（个，达标的天数连起来算「连续达标」）</label>
-<input name="pomo_goal" value="%POMO_GOAL%" inputmode="numeric">
+
 <p class="hint">在设备上点圆环开始或暂停，按住圆环 1.5 秒重置；下面的按钮也能控制（没有触摸屏的板子用这个）。</p>
 <label class="check"><input type="checkbox" name="sound_on" %SOUND_ON%> 专注和休息结束时播放提示音%SOUND_NOTE%</label>
 <label>提示音音量</label><input type="range" name="sound_volume" min="0" max="100" value="%SOUND_VOL%">
@@ -220,8 +219,7 @@ static String stats_text() {
   if (!pomo_stats || !today) return "";
   int day = today();
   if (day < 0) return "";
-  return String("今日完成 ") + pomo_stats->count(day) + " 个，近 7 天 " + pomo_stats->week_total(day) +
-         " 个，连续达标 " + pomo_stats->streak(day) + " 天";
+  return String("今日完成 ") + pomo_stats->count(day) + " 个，近 7 天 " + pomo_stats->week_total(day) + " 个";
 }
 
 static bool ota_busy(const OtaStatus &s) {
@@ -255,7 +253,6 @@ static void handle_root() {
   page.replace("%POMO_EVERY%", String(s.pomo_every));
   String stats = stats_text();
   page.replace("%POMO_STATE%", html_escape(stats.length() ? pomo_text() + "。" + stats : pomo_text()));
-  page.replace("%POMO_GOAL%", String(s.pomo_goal));
   page.replace("%SIT_ON%", s.sit_on ? "checked" : "");
   page.replace("%SIT_MIN%", String(s.sit_min));
   page.replace("%WATER_ON%", s.water_on ? "checked" : "");
@@ -329,7 +326,6 @@ static void handle_save() {
   minutes_arg("pomo_short", s.pomo_short, 1, 180);
   minutes_arg("pomo_long", s.pomo_long, 1, 180);
   minutes_arg("pomo_every", s.pomo_every, 1, 8);
-  minutes_arg("pomo_goal", s.pomo_goal, 1, 20);
   minutes_arg("sit_min", s.sit_min, 10, 240);
   minutes_arg("water_min", s.water_min, 10, 240);
   s.sit_on = server.hasArg("sit_on");

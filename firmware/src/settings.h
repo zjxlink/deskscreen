@@ -24,7 +24,6 @@ struct Settings {
   bool sound_on;             // 番茄钟提示音
   uint8_t sound_volume;      // 0~100
   bool sound_quiet_night;    // 夜间时段不响
-  uint8_t pomo_goal;         // 每日目标番茄数，用于统计连续达标天数
   bool sit_on;               // 久坐提醒
   uint8_t sit_min;           // 久坐提醒间隔（分钟）
   bool water_on;             // 喝水提醒
