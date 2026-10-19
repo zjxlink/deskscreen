@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <lvgl.h>
+#include <string.h>
 #include <time.h>
 
 #include "board.h"
@@ -78,6 +79,17 @@ static lv_obj_t *lbl_pomo_state;
 static lv_obj_t *lbl_pomo_today;
 static lv_obj_t *lbl_pomo_msg;
 static lv_obj_t *pomo_dots[kPomoMaxDots];
+
+// 像素小猫：16x16 的像素画放大 7 倍画在 canvas 上，画布缓冲区放在 PSRAM（lv_mem_alloc）
+static constexpr int kPetScale = 7;
+static constexpr int kPetPx = kPetSize * kPetScale;
+static constexpr int kPetTop = 34;
+static const uint32_t kPetPalette[] = {0x0D1117, 0x5C3317, 0xF0A04B, 0xFFF4E6, 0xFF8FA3, 0x58A6FF};
+static lv_obj_t *pet_canvas;
+static lv_color_t *pet_buf;
+static lv_obj_t *lbl_pet_line;
+static lv_obj_t *lbl_pet_status;
+static lv_obj_t *lbl_pet_zzz;
 
 // 全屏提醒
 static lv_obj_t *scr_alert;
@@ -321,6 +333,35 @@ static void build_stocks() {
   lv_label_set_text(lbl_stock_msg, "获取中…");
 }
 
+static void build_pet() {
+  lv_obj_t *scr = make_screen();
+  scr_pages[PAGE_PET] = scr;
+
+  lv_obj_t *title = make_label(scr, &font_cn_16, COLOR_SUBTLE);
+  lv_label_set_text(title, "小橘");
+  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 12, 10);
+  dot_wifi[PAGE_PET] = make_wifi_dot(scr);
+
+  pet_buf = (lv_color_t *)lv_mem_alloc(LV_CANVAS_BUF_SIZE_TRUE_COLOR(kPetPx, kPetPx));
+  pet_canvas = lv_canvas_create(scr);
+  if (pet_buf) lv_canvas_set_buffer(pet_canvas, pet_buf, kPetPx, kPetPx, LV_IMG_CF_TRUE_COLOR);
+  lv_obj_align(pet_canvas, LV_ALIGN_TOP_MID, 0, kPetTop);
+
+  lbl_pet_zzz = make_label(scr, &lv_font_montserrat_20, COLOR_SUBTLE);
+  lv_obj_align(lbl_pet_zzz, LV_ALIGN_TOP_MID, kPetPx / 2 + 10, kPetTop);
+  lv_obj_add_flag(lbl_pet_zzz, LV_OBJ_FLAG_HIDDEN);
+
+  lbl_pet_line = make_label(scr, &font_cn_16, COLOR_TEXT);
+  lv_obj_set_width(lbl_pet_line, SCREEN_W - 32);
+  lv_obj_set_style_text_align(lbl_pet_line, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(lbl_pet_line, LV_ALIGN_TOP_MID, 0, kPetTop + kPetPx + 14);
+
+  lbl_pet_status = make_label(scr, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_set_width(lbl_pet_status, SCREEN_W - 32);
+  lv_obj_set_style_text_align(lbl_pet_status, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(lbl_pet_status, LV_ALIGN_BOTTOM_MID, 0, -12);
+}
+
 static void build_alert() {
   scr_alert = make_screen();
 
@@ -399,6 +440,7 @@ void ui_init() {
   scr_pages[PAGE_CLOCK] = scr_main;
   build_github();
   build_stocks();
+  build_pet();
   build_pomodoro();
   build_alert();
   Pomodoro idle;
@@ -596,6 +638,36 @@ void ui_set_pomodoro(const Pomodoro &p, uint32_t now_ms, const char *msg, int do
   }
 }
 
+void ui_set_pet(PetMood mood, bool blink, const char *line, const char *status) {
+  static int last_mood = -1;
+  static int last_blink = -1;
+  if (pet_buf && ((int)mood != last_mood || (int)blink != last_blink)) {
+    last_mood = (int)mood;
+    last_blink = blink;
+    lv_color_t colors[sizeof(kPetPalette) / sizeof(kPetPalette[0])];
+    for (size_t i = 0; i < sizeof(kPetPalette) / sizeof(kPetPalette[0]); i++) colors[i] = lv_color_hex(kPetPalette[i]);
+    for (int y = 0; y < kPetPx; y++) {
+      for (int x = 0; x < kPetPx; x++) {
+        pet_buf[y * kPetPx + x] = colors[pet_pixel(mood, blink, x / kPetScale, y / kPetScale)];
+      }
+    }
+    lv_obj_invalidate(pet_canvas);
+  }
+  if (strcmp(lv_label_get_text(lbl_pet_line), line) != 0) lv_label_set_text(lbl_pet_line, line);
+  if (strcmp(lv_label_get_text(lbl_pet_status), status) != 0) lv_label_set_text(lbl_pet_status, status);
+}
+
+void ui_pet_anim(int bob, int zzz) {
+  lv_obj_set_y(pet_canvas, kPetTop + bob);
+  if (zzz < 0) {
+    lv_obj_add_flag(lbl_pet_zzz, LV_OBJ_FLAG_HIDDEN);
+    return;
+  }
+  lv_obj_clear_flag(lbl_pet_zzz, LV_OBJ_FLAG_HIDDEN);
+  lv_label_set_text(lbl_pet_zzz, zzz ? "Z z" : "z");
+  lv_obj_align(lbl_pet_zzz, LV_ALIGN_TOP_MID, kPetPx / 2 + 10, kPetTop + (zzz ? 0 : 12));
+}
+
 void ui_show_alert(AlertIcon icon, const char *title, const char *body, const char *foot) {
   switch (icon) {
     case AlertIcon::Message:
@@ -605,6 +677,10 @@ void ui_show_alert(AlertIcon icon, const char *title, const char *body, const ch
     case AlertIcon::Sit:
       lv_label_set_text(alert_icon, LV_SYMBOL_REFRESH);
       lv_obj_set_style_bg_color(alert_badge, lv_color_hex(0xD29922), 0);
+      break;
+    case AlertIcon::Alarm:
+      lv_label_set_text(alert_icon, LV_SYMBOL_BELL);
+      lv_obj_set_style_bg_color(alert_badge, COLOR_ERR, 0);
       break;
     case AlertIcon::Water:
       lv_label_set_text(alert_icon, LV_SYMBOL_TINT);

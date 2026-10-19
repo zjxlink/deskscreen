@@ -34,6 +34,10 @@ void settings_begin() {
   current.water_min = prefs.getUChar("water_min", 60);
   current.remind_start = prefs.getUShort("remind_start", 9 * 60);
   current.remind_end = prefs.getUShort("remind_end", 21 * 60);
+  current.chime_on = prefs.getBool("chime_on", false);
+  current.alarm_on = prefs.getBool("alarm_on", false);
+  current.alarm_time = prefs.getUShort("alarm_time", 7 * 60 + 30);
+  current.alarm_days = prefs.getUChar("alarm_days", 0x3E);
 }
 
 Settings settings_get() {
@@ -72,6 +76,10 @@ void settings_save(const Settings &s) {
   prefs.putUChar("water_min", s.water_min);
   prefs.putUShort("remind_start", s.remind_start);
   prefs.putUShort("remind_end", s.remind_end);
+  prefs.putBool("chime_on", s.chime_on);
+  prefs.putBool("alarm_on", s.alarm_on);
+  prefs.putUShort("alarm_time", s.alarm_time);
+  prefs.putUChar("alarm_days", s.alarm_days);
 }
 
 void settings_load_pomo_stats(PomoStatsData &d) {

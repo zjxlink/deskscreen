@@ -30,6 +30,10 @@ struct Settings {
   uint8_t water_min;         // 喝水提醒间隔（分钟）
   uint16_t remind_start;     // 提醒时段，当天第几分钟，默认 9:00
   uint16_t remind_end;       // 默认 21:00
+  bool chime_on;             // 整点报时（夜间时段跟提示音一样默认不响）
+  bool alarm_on;             // 闹钟
+  uint16_t alarm_time;       // 当天第几分钟，默认 7:30
+  uint8_t alarm_days;        // 第 i 位表示星期 i 响，周日为第 0 位，默认周一到周五
 };
 
 // 时区固定为北京时间，POSIX 格式

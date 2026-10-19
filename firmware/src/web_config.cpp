@@ -104,6 +104,14 @@ label.check input{width:auto}
 <div><label>提醒时段开始</label><input type="time" name="remind_start" value="%REMIND_START%"></div>
 <div><label>结束</label><input type="time" name="remind_end" value="%REMIND_END%"></div>
 </div>
+<h2>闹钟和整点报时</h2>
+<label class="check"><input type="checkbox" name="chime_on" %CHIME_ON%> 整点报时（每到整点叮一声，夜间时段跟提示音一样不响）</label>
+<div class="row">
+<div><label class="check"><input type="checkbox" name="alarm_on" %ALARM_ON%> 闹钟</label></div>
+<div><label>时间</label><input type="time" name="alarm_time" value="%ALARM_TIME%"></div>
+</div>
+<div class="row" style="flex-wrap:wrap;margin-top:8px">%ALARM_DAYS%</div>
+<p class="hint">闹钟响时屏幕全屏提示、每隔几秒响一次，夜里也会响；点屏幕或按 BOOT 键关掉，5 分钟后自动停止。%NO_SPEAKER%</p>
 <p class="hint">只在提醒时段内提醒，屏幕会弹出全屏提示并响一声（音量和夜间静音跟番茄钟一样）。番茄钟专注时先不打扰，等休息时再提醒；开始休息时久坐提醒重新计时。%REMIND_STATE%</p>
 <h2>GitHub 贡献热力图</h2>
 <label>GitHub Token（%GH_STATE%）</label>
@@ -261,6 +269,19 @@ static void handle_root() {
   page.replace("%REMIND_START%", hhmm);
   night_format_hhmm(s.remind_end, hhmm, sizeof(hhmm));
   page.replace("%REMIND_END%", hhmm);
+  page.replace("%CHIME_ON%", s.chime_on ? "checked" : "");
+  page.replace("%ALARM_ON%", s.alarm_on ? "checked" : "");
+  night_format_hhmm(s.alarm_time, hhmm, sizeof(hhmm));
+  page.replace("%ALARM_TIME%", hhmm);
+  static const char *const day_names[] = {"日", "一", "二", "三", "四", "五", "六"};
+  String days;
+  for (int i = 1; i <= 7; i++) {  // 从周一排到周日
+    int d = i % 7;
+    days += String("<label class=\"check\" style=\"margin:0 12px 0 0\"><input type=\"checkbox\" name=\"ad") + d +
+            "\" " + ((s.alarm_days & (1 << d)) ? "checked" : "") + "> 周" + day_names[d] + "</label>";
+  }
+  page.replace("%ALARM_DAYS%", days);
+  page.replace("%NO_SPEAKER%", audio_available() ? "" : "这块板子没有喇叭，只会在屏幕上提示。");
   page.replace("%REMIND_STATE%", s.sit_on || s.water_on ? "" : "两个提醒默认都关着。");
   page.replace("%SOUND_ON%", s.sound_on ? "checked" : "");
   page.replace("%SOUND_NOTE%", audio_available() ? "" : "（这块板子没有喇叭）");
@@ -330,6 +351,17 @@ static void handle_save() {
   minutes_arg("water_min", s.water_min, 10, 240);
   s.sit_on = server.hasArg("sit_on");
   s.water_on = server.hasArg("water_on");
+  s.chime_on = server.hasArg("chime_on");
+  s.alarm_on = server.hasArg("alarm_on");
+  int at = night_parse_hhmm(server.arg("alarm_time").c_str());
+  if (at >= 0) s.alarm_time = at;
+  if (server.hasArg("alarm_time")) {  // 确认是设置表单提交的，再更新星期
+    uint8_t mask = 0;
+    for (int d = 0; d < 7; d++) {
+      if (server.hasArg(String("ad") + d)) mask |= 1 << d;
+    }
+    s.alarm_days = mask;
+  }
   int rs = night_parse_hhmm(server.arg("remind_start").c_str());
   int re = night_parse_hhmm(server.arg("remind_end").c_str());
   if (rs >= 0) s.remind_start = rs;

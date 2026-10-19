@@ -7,9 +7,11 @@
 
 #include "audio.h"
 #include "board.h"
+#include "clock_events.h"
 #include "display.h"
 #include "github.h"
 #include "ota.h"
+#include "pet.h"
 #include "pomo_stats.h"
 #include "pomodoro.h"
 #include "reminder.h"
@@ -27,6 +29,8 @@ static constexpr uint32_t kShortPressMs = 1000;   // 短按 BOOT 键切换页面
 static constexpr uint32_t kPomoResetMs = 1500;    // 长按番茄钟圆环重置
 static constexpr uint32_t kPomoMsgMs = 60000;     // 阶段结束的提示显示多久
 static constexpr uint32_t kReminderShowMs = 5 * 60000;  // 久坐、喝水提醒没人理会时多久自动关掉
+static constexpr uint32_t kAlarmRingMs = 5 * 60000;     // 闹钟没人关时响多久
+static constexpr uint32_t kAlarmRepeatMs = 2500;        // 闹钟铃声的间隔
 
 static WiFiManager wm;
 static String ap_name;
@@ -47,6 +51,15 @@ static PomoStats pomo_stats;
 static Reminder sit_reminder;
 static Reminder water_reminder;
 
+static Alarm alarm_clock;
+static HourlyChime chime;
+static bool alarm_ringing = false;
+static uint32_t alarm_next_ring = 0;
+
+// 最近一次的 GitHub 和自选股数据，小猫要看
+static GithubData github_data;
+static StockData stock_data;
+
 // 全屏提醒（留言、久坐、喝水）：盖在页面上，点屏幕或按 BOOT 键关掉
 static bool alert_on = false;
 static bool alert_timed = false;  // 久坐、喝水提醒到时自动关掉；留言一直显示到有人关掉
@@ -66,6 +79,7 @@ static void apply_settings() {
   c.page_enabled[PAGE_CLOCK] = true;
   c.page_enabled[PAGE_GITHUB] = s.github_token.length() > 0;
   c.page_enabled[PAGE_STOCKS] = s.stocks.length() > 0;
+  c.page_enabled[PAGE_PET] = true;
   screen.configure(c);  // 番茄钟页不参与轮播，进行中时固定显示
 
   PomoConfig pc;
@@ -88,6 +102,13 @@ static void apply_settings() {
 
   sound_on = s.sound_on;
   sound_quiet_night = s.sound_quiet_night;
+
+  AlarmConfig ac;
+  ac.on = s.alarm_on;
+  ac.time = s.alarm_time;
+  ac.days = s.alarm_days;
+  alarm_clock.configure(ac);
+  chime.set_on(s.chime_on);
   audio_set_volume(s.sound_volume);
 }
 
@@ -199,7 +220,7 @@ static void update_reminders() {
   bool sit = sit_reminder.tick(now, minutes, hold);
   bool water = water_reminder.tick(now, minutes, hold);
   // 留言还没看就不盖掉它，这次提醒跳过，下一轮再说
-  if ((sit || water) && !(alert_on && !alert_timed)) {
+  if ((sit || water) && !(alert_on && !alert_timed) && !alarm_ringing) {
     char body[96];
     const char *title;
     AlertIcon icon;
@@ -220,6 +241,81 @@ static void update_reminders() {
     play(SoundId::Reminder);
   }
   if (alert_on && alert_timed && (int32_t)(now - alert_until) >= 0) close_alert();
+}
+
+// 整点报时和闹钟。闹钟夜里也响，不受提示音开关影响；响铃期间每隔几秒响一次，关掉提醒就停
+static void update_clock_events() {
+  uint32_t now = millis();
+  struct tm t;
+  bool synced = getLocalTime(&t, 0) && t.tm_year >= 2024 - 1900;
+  int day = synced ? local_day() : -1;
+  int minutes = synced ? t.tm_hour * 60 + t.tm_min : -1;
+  if (alarm_clock.tick(day, minutes, synced ? t.tm_wday : -1)) {
+    char body[48];
+    snprintf(body, sizeof(body), "%02d:%02d 到了", t.tm_hour, t.tm_min);
+    show_alert(AlertIcon::Alarm, "闹钟", body, "点屏幕或按 BOOT 键关闭", kAlarmRingMs);
+    alarm_ringing = true;
+    alarm_next_ring = now;
+  } else if (chime.tick(day, minutes) && !alarm_ringing) {
+    play(SoundId::Chime);
+  }
+  if (alarm_ringing && !alert_on) alarm_ringing = false;  // 被关掉或者到时自动关了
+  if (alarm_ringing && (int32_t)(now - alarm_next_ring) >= 0) {
+    audio_play(SoundId::Alarm);
+    alarm_next_ring = now + kAlarmRepeatMs;
+  }
+}
+
+// 像素小猫：只在小猫页显示时更新，每 100ms 一帧
+static void update_pet() {
+  static uint32_t last = 0;
+  uint32_t now = millis();
+  if (screen.page() != PAGE_PET || alert_on || ota_screen || now - last < 100) return;
+  last = now;
+
+  PetInputs in;
+  in.night = screen.night();
+  in.minutes = local_minutes();
+  in.github_ok = github_data.status == GithubStatus::Ok;
+  in.github_today = github_data.today;
+  int n = 0;
+  float sum = 0;
+  if (stock_data.status == StockStatus::Ok) {
+    for (int i = 0; i < stock_data.count; i++) {
+      if (!stock_data.quotes[i].valid) continue;
+      sum += stock_data.quotes[i].change_pct;
+      n++;
+    }
+  }
+  in.stocks_ok = n > 0;
+  in.stock_avg_pct = n ? sum / n : 0;
+  int day = local_day();
+  in.pomo_today = day >= 0 ? pomo_stats.count(day) : pomo.done_today();
+
+  PetMood mood = pet_mood(in);
+  char line[96];
+  pet_line(mood, in, line, sizeof(line));
+
+  // 底部一行：今天的提交、番茄和自选股
+  char status[96] = "";
+  size_t len = 0;
+  if (in.github_ok) len += snprintf(status + len, sizeof(status) - len, "提交 %d · ", in.github_today);
+  len += snprintf(status + len, sizeof(status) - len, "番茄 %d", in.pomo_today);
+  if (in.stocks_ok && len < sizeof(status)) snprintf(status + len, sizeof(status) - len, " · 自选股 %+.1f%%", in.stock_avg_pct);
+
+  bool sleeping = mood == PetMood::Sleep;
+  bool blink = !sleeping && now % 4000 < 150;  // 每 4 秒眨一次眼
+  ui_set_pet(mood, blink, line, status);
+
+  int bob;
+  if (sleeping) {
+    bob = (now / 1500) % 2 * 2;  // 睡觉时慢慢呼吸
+  } else if (mood == PetMood::Happy) {
+    bob = (now / 300) % 2 * -6;  // 开心得蹦起来
+  } else {
+    bob = (now / 800) % 2 * 3;
+  }
+  ui_pet_anim(bob, sleeping ? (int)(now / 800 % 2) : -1);
 }
 
 // 把 ScreenCtrl 的状态同步到屏幕：亮度和当前页面
@@ -403,17 +499,16 @@ void loop() {
   if (web_config_take_changed()) apply_settings();
   update_pomodoro();
   update_reminders();
+  update_clock_events();
+  update_pet();
   update_screen();
   update_ota_screen();
 
   WeatherData w;
   if (weather_take_update(w)) ui_set_weather(w);
 
-  static GithubData g;
-  if (github_take_update(g)) ui_set_github(g);
-
-  static StockData st;
-  if (stock_take_update(st)) ui_set_stocks(st);
+  if (github_take_update(github_data)) ui_set_github(github_data);
+  if (stock_take_update(stock_data)) ui_set_stocks(stock_data);
 
   static bool last_wifi = false;
   bool wifi = WiFi.isConnected();
