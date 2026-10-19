@@ -19,7 +19,8 @@ class HttpsLock {
 // 会占着 HttpsLock 两分钟，其他服务全部排队等着，屏幕上一直「获取中」
 static constexpr unsigned long kTlsHandshakeTimeoutS = 15;
 
-enum class NetService : uint8_t { Weather, Github, Stock, Ota, Count };
+// Stock 是东方财富，StockBackup 是它失败时用的腾讯行情
+enum class NetService : uint8_t { Weather, Github, Stock, StockBackup, Ota, Count };
 
 // 返回内容不是预期的格式（JSON 解析失败等）
 static constexpr int kNetBadData = -100;
