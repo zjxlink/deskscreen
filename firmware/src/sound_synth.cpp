@@ -6,6 +6,8 @@
 static const Note kFocusDone[] = {{1319, 180}, {1047, 180}, {784, 420}};
 static const Note kBreakDone[] = {{784, 180}, {1047, 180}, {1319, 420}};
 static const Note kMessage[] = {{1319, 220}, {1047, 480}};                   // E6、C6，门铃"叮咚"
+static const Note kChime[] = {{1568, 160}, {1175, 520}};                    // G6、D6
+static const Note kAlarm[] = {{1760, 140}, {0, 70}, {1760, 140}, {0, 70}, {1760, 140}};  // A6 x3
 static const Note kReminder[] = {{1047, 120}, {0, 60}, {1047, 120}, {1568, 360}};  // C6、C6、G6
 
 static constexpr float kPi = 3.14159265f;
@@ -19,6 +21,12 @@ const Note *sound_melody(SoundId id, int &count) {
     case SoundId::Message:
       count = sizeof(kMessage) / sizeof(kMessage[0]);
       return kMessage;
+    case SoundId::Chime:
+      count = sizeof(kChime) / sizeof(kChime[0]);
+      return kChime;
+    case SoundId::Alarm:
+      count = sizeof(kAlarm) / sizeof(kAlarm[0]);
+      return kAlarm;
     case SoundId::Reminder:
       count = sizeof(kReminder) / sizeof(kReminder[0]);
       return kReminder;
