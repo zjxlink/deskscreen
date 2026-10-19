@@ -23,8 +23,10 @@ struct NetResult {
 static NetResult results[(int)NetService::Count];
 static portMUX_TYPE results_mux = portMUX_INITIALIZER_UNLOCKED;
 
-static const char *const kNames[] = {"天气", "GitHub", "自选股", "在线升级"};
-static const char *const kLogNames[] = {"weather", "github", "stock", "ota"};
+static const char *const kNames[] = {"天气", "GitHub", "自选股（东方财富）", "自选股（备用：腾讯）", "在线升级"};
+static const char *const kLogNames[] = {"weather", "github", "stock", "stock-backup", "ota"};
+static_assert(sizeof(kNames) / sizeof(kNames[0]) == (int)NetService::Count, "kNames out of sync");
+static_assert(sizeof(kLogNames) / sizeof(kLogNames[0]) == (int)NetService::Count, "kLogNames out of sync");
 
 void net_report(NetService s, int code, WiFiClientSecure &client, const char *detail) {
   // 连接成功时 lastError 返回的是 socket 编号（正数），只有负数才是 TLS 错误
