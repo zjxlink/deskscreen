@@ -16,6 +16,10 @@
   #define PIN_LCD_RST_SHARED 48  // 只上拉，保持屏幕不在复位状态
   #define PIN_LCD_BL        47
   #define PIN_BUTTON        0    // 侧面的 BOOT 键
+  #define HAS_TOUCH                // GT911 电容触摸
+  #define PIN_TOUCH_SDA     8
+  #define PIN_TOUCH_SCL     18
+  #define PIN_TOUCH_INT     3
 
 #elif defined(BOARD_DESK_V1)
   // 自己画的板子：2.0 寸 IPS ST7789（240x320）

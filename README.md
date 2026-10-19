@@ -4,13 +4,38 @@
 
 ![界面预览](docs/preview.png)
 
-## 当前功能（v0.1）
+![GitHub 热力图](docs/preview-github.png)
+
+![自选股](docs/preview-stocks.png)
+
+## 当前功能（v0.3）
 
 - 手机配网：首次开机设备会开一个 WiFi 热点，手机连上后选择家里的 WiFi 即可，不用装 App
 - 时间日期：NTP 自动对时（北京时间）
 - 天气：当前气温、天气、今日最高和最低气温、湿度。数据来自 [Open-Meteo](https://open-meteo.com)，免费，不需要 API Key，每 15 分钟刷新一次
 - 网页设置：同一 WiFi 下用浏览器打开 `http://deskscreen.local`（或屏幕上显示的 IP），可以设置城市（支持按城市名查坐标）和屏幕亮度
 - 重新配网：长按 BOOT 键 3 秒，或者在设置页面里点「重新配置 WiFi」
+- GitHub 贡献热力图：最近 24 周的贡献格子（配色和 GitHub 一致），以及今日贡献、连续天数、过去一年总数，每 30 分钟刷新
+- 自选股行情：最多 6 只，支持 A 股、港股、美股和 ETF，红涨绿跌。交易时段每 30 秒刷新，其余时间 10 分钟一次。数据来自东方财富的公开接口（非官方接口，适合个人使用）
+- 多页面：点一下屏幕（BOX-3）或短按 BOOT 键切换页面；也可以在设置页面设定自动轮播间隔（默认 15 秒，只轮播已经设置好的页面）
+
+### 设置 GitHub 热力图
+
+1. 打开 https://github.com/settings/tokens/new?description=DeskScreen 创建一个 classic Token，**不用勾选任何权限**（这样的 Token 只能读公开信息，泄露了也改不了你的任何东西），有效期按需选择
+2. 在设备设置页面的「GitHub Token」里粘贴并保存
+
+设备用内置的根证书校验 api.github.com 的 HTTPS 证书，Token 不会被中间人截获。Token 只保存在设备上，设置页面不会显示它。如果想统计私有仓库的贡献，需要在 GitHub 个人主页的贡献图设置里打开「Private contributions」。
+
+### 设置自选股
+
+在设置页面的「自选股」里填代码，用逗号或空格分隔：
+
+| 写法 | 含义 |
+|---|---|
+| `600519`、`000001`、`510300` | A 股和 ETF，6 位代码，自动判断沪市/深市/北交所 |
+| `sh000001` | 加前缀指定市场，例如上证指数（和深市的 000001 平安银行区分） |
+| `00700` 或 `hk700` | 港股 |
+| `AAPL`、`BRK.B` | 美股，会自动在纳斯达克、纽交所、美交所里查找 |
 
 ## 硬件
 
@@ -48,7 +73,7 @@ BOX-3 用 USB-C 连电脑就能烧录。如果烧录失败，按住 BOOT 键再�
 
 ```
 firmware/
-  platformio.ini       编译配置（box3 / desk_v1 两个环境）
+  platformio.ini       编译配置（box3 / desk_v1 固件，native 单元测试）
   include/board.h      各板子的引脚定义
   include/lv_conf.h    LVGL 配置
   src/main.cpp         启动流程、主循环
@@ -56,16 +81,23 @@ firmware/
   src/ui.cpp           界面
   src/weather.cpp      后台拉取天气
   src/web_config.cpp   局域网设置页面
+  src/github.cpp       后台拉取 GitHub 贡献日历（GraphQL API）
+  src/github_parse.cpp 解析贡献日历、计算连续天数（不依赖硬件，有单元测试）
+  src/github_ca.h      api.github.com 的根证书
+  src/stock.cpp        后台拉取自选股行情
+  src/stock_parse.cpp  解析股票代码和行情（不依赖硬件，有单元测试）
   src/settings.cpp     设置保存（NVS）
   src/fonts/           中文字体（自动生成，不要手改）
   tools/gen_fonts.py   中文字体生成脚本
+  tools/merge_bin.py   编译后生成单文件固件
+  test/                单元测试（pio test -e native，在电脑上运行）
 ```
 
 ## 中文字体
 
 LVGL 自带的中文字体以繁体和日文为主，缺很多简体字，所以用 [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC)（SIL OFL 协议，可以商用）自己生成：
 
-- `font_cn_16`：GB2312 一级汉字（3755 个常用字）加上界面用到的字，用于普通文字和城市名
+- `font_cn_16`：GB2312 全部汉字（6763 个）加上界面用到的字，用于普通文字、城市名和股票名
 - `font_cn_24`：只含界面用到的字，用于标题和天气描述
 
 **改了界面上的中文后要重新生成字体**，否则新的字会显示成方框：
@@ -79,9 +111,11 @@ python3 tools/gen_fonts.py node_modules/@expo-google-fonts/noto-sans-sc/400Regul
 ## 路线图
 
 - [x] v0.1 时间、天气、配网、网页设置
-- [ ] GitHub 提交热力图、Star 数
-- [ ] 自选股和基金行情
-- [ ] 多页面切换（触摸或按键）
+- [x] GitHub 贡献热力图
+- [ ] GitHub Star 数、仓库动态
+- [x] 自选股行情
+- [ ] 场外基金估值
+- [x] 多页面切换（触摸或按键）
 - [ ] 番茄钟、待办事项
 - [ ] OTA 在线升级
 - [ ] 夜间自动调暗

@@ -3,7 +3,9 @@
 #include <WebServer.h>
 #include <WiFi.h>
 
+#include "github.h"
 #include "settings.h"
+#include "stock.h"
 #include "weather.h"
 
 static WebServer server(80);
@@ -27,6 +29,11 @@ button.danger{background:#da3633}
 .tip{color:#3fb950;margin:8px 0}
 #results button{display:block;width:100%;margin-top:6px;text-align:left}
 hr{border:0;border-top:1px solid #30363d;margin:28px 0}
+h2{font-size:17px;margin-top:28px}
+a{color:#58a6ff}
+.hint{color:#8b949e;font-size:13px;line-height:1.6}
+label.check{display:flex;gap:8px;align-items:center;color:#e6edf3}
+label.check input{width:auto}
 </style></head><body><main>
 <h1>桌面信息屏设置</h1>
 %SAVED%
@@ -38,6 +45,19 @@ hr{border:0;border-top:1px solid #30363d;margin:28px 0}
 <label>纬度</label><input name="lat" id="lat" value="%LAT%" inputmode="decimal">
 <label>经度</label><input name="lon" id="lon" value="%LON%" inputmode="decimal">
 <label>屏幕亮度</label><input type="range" name="brightness" min="10" max="255" value="%BRIGHT%">
+<label>自动切换页面间隔（秒，0 表示不自动切换）</label>
+<input name="page_sec" value="%PAGE_SEC%" inputmode="numeric">
+<h2>GitHub 贡献热力图</h2>
+<label>GitHub Token（%GH_STATE%）</label>
+<input type="password" name="gh_token" placeholder="%GH_PLACEHOLDER%" autocomplete="off">
+<p class="hint">打开 <a href="https://github.com/settings/tokens/new?description=DeskScreen" target="_blank">GitHub 创建 Token</a>（classic），
+<b>不用勾选任何权限</b>，有效期按需选择，生成后复制粘贴到这里。Token 只保存在设备上，不会显示出来。</p>
+<label class="check"><input type="checkbox" name="gh_clear"> 清除已保存的 Token</label>
+<h2>自选股</h2>
+<label>股票代码（最多 6 个，用逗号或空格分隔）</label>
+<input name="stocks" value="%STOCKS%" placeholder="600519, 000001, 00700, AAPL">
+<p class="hint">A 股直接写 6 位代码；指数和深市代码冲突时加前缀，如 <b>sh000001</b> 是上证指数；
+港股写 5 位代码（如 00700）；美股写代码（如 AAPL）。ETF 和股票写法一样。数据来自东方财富，交易时段每 30 秒刷新。</p>
 <p><button type="submit">保存</button></p>
 </form>
 <hr>
@@ -86,6 +106,11 @@ static void handle_root() {
   page.replace("%LAT%", String(s.lat, 4));
   page.replace("%LON%", String(s.lon, 4));
   page.replace("%BRIGHT%", String(s.brightness));
+  page.replace("%PAGE_SEC%", String(s.page_seconds));
+  page.replace("%STOCKS%", html_escape(s.stocks));
+  bool has_token = s.github_token.length() > 0;
+  page.replace("%GH_STATE%", has_token ? "已设置" : "未设置");
+  page.replace("%GH_PLACEHOLDER%", has_token ? "已设置，留空则不修改" : "ghp_...");
   server.send(200, "text/html; charset=utf-8", page);
 }
 
@@ -105,9 +130,28 @@ static void handle_save() {
   long b = server.arg("brightness").toInt();
   if (b >= 10 && b <= 255) s.brightness = b;
 
+  String sec = server.arg("page_sec");
+  sec.trim();
+  if (sec.length() > 0 && sec.toInt() >= 0 && sec.toInt() <= 255) s.page_seconds = sec.toInt();
+
+  String token = server.arg("gh_token");
+  token.trim();
+  if (server.hasArg("gh_clear")) {
+    s.github_token = "";
+  } else if (token.length() > 0) {
+    s.github_token = token;
+  }
+
+  if (server.hasArg("stocks")) {
+    s.stocks = server.arg("stocks");
+    s.stocks.trim();
+  }
+
   settings_save(s);
   changed = true;
   weather_request_refresh();
+  github_request_refresh();
+  stock_request_refresh();
 
   server.sendHeader("Location", "/?saved=1");
   server.send(303);

@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <LovyanGFX.hpp>
+#include <driver/i2c.h>
 #include <esp_heap_caps.h>
 #include <lvgl.h>
 
@@ -15,6 +16,9 @@ class LGFX : public lgfx::LGFX_Device {
 #endif
   lgfx::Bus_SPI _bus;
   lgfx::Light_PWM _light;
+#ifdef HAS_TOUCH
+  lgfx::Touch_GT911 _touch;
+#endif
 
  public:
   LGFX() {
@@ -61,6 +65,25 @@ class LGFX : public lgfx::LGFX_Device {
       _light.config(cfg);
       _panel.setLight(&_light);
     }
+#ifdef HAS_TOUCH
+    {
+      // 参数与 LovyanGFX 对 BOX-3 的自动识别配置一致，I2C 地址 0x14/0x5D 会自动探测
+      auto cfg = _touch.config();
+      cfg.pin_int = PIN_TOUCH_INT;
+      cfg.pin_sda = PIN_TOUCH_SDA;
+      cfg.pin_scl = PIN_TOUCH_SCL;
+      cfg.i2c_addr = 0x14;
+      cfg.i2c_port = I2C_NUM_0;
+      cfg.x_min = 0;
+      cfg.x_max = 319;
+      cfg.y_min = 0;
+      cfg.y_max = 279;  // 屏幕下方还有一个红色触摸点
+      cfg.offset_rotation = 2;
+      cfg.bus_shared = false;
+      _touch.config(cfg);
+      _panel.setTouch(&_touch);
+    }
+#endif
     setPanel(&_panel);
   }
 };
@@ -107,4 +130,13 @@ void display_init() {
 
 void display_set_brightness(uint8_t level) {
   tft.setBrightness(level);
+}
+
+bool display_touched() {
+#ifdef HAS_TOUCH
+  lgfx::touch_point_t tp;
+  return tft.getTouch(&tp, 1) > 0;
+#else
+  return false;
+#endif
 }

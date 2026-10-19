@@ -6,3 +6,6 @@
 void display_init();
 
 void display_set_brightness(uint8_t level);
+
+// 屏幕当前是否被按住（没有触摸屏的板子始终返回 false）
+bool display_touched();
