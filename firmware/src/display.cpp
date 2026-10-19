@@ -132,11 +132,16 @@ void display_set_brightness(uint8_t level) {
   tft.setBrightness(level);
 }
 
-bool display_touched() {
+bool display_touch(int &x, int &y) {
 #ifdef HAS_TOUCH
   lgfx::touch_point_t tp;
-  return tft.getTouch(&tp, 1) > 0;
+  if (tft.getTouch(&tp, 1) == 0) return false;
+  x = tp.x;
+  y = tp.y;
+  return true;
 #else
+  (void)x;
+  (void)y;
   return false;
 #endif
 }

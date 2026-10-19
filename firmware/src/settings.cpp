@@ -21,6 +21,10 @@ void settings_begin() {
   current.night_end = prefs.getUShort("night_end", 7 * 60);
   current.night_brightness = prefs.getUChar("night_bright", 10);
   current.auto_update = prefs.getBool("auto_upd", true);
+  current.pomo_focus = prefs.getUChar("pomo_focus", 25);
+  current.pomo_short = prefs.getUChar("pomo_short", 5);
+  current.pomo_long = prefs.getUChar("pomo_long", 15);
+  current.pomo_every = prefs.getUChar("pomo_every", 4);
 }
 
 Settings settings_get() {
@@ -46,4 +50,8 @@ void settings_save(const Settings &s) {
   prefs.putUShort("night_end", s.night_end);
   prefs.putUChar("night_bright", s.night_brightness);
   prefs.putBool("auto_upd", s.auto_update);
+  prefs.putUChar("pomo_focus", s.pomo_focus);
+  prefs.putUChar("pomo_short", s.pomo_short);
+  prefs.putUChar("pomo_long", s.pomo_long);
+  prefs.putUChar("pomo_every", s.pomo_every);
 }

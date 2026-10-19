@@ -4,5 +4,6 @@ enum Page {
   PAGE_CLOCK,
   PAGE_GITHUB,
   PAGE_STOCKS,
+  PAGE_POMODORO,
   PAGE_COUNT,
 };

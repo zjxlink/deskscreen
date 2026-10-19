@@ -14,6 +14,8 @@
 static WebServer server(80);
 static bool changed = false;
 static void (*progress_hook)() = nullptr;
+static const Pomodoro *pomodoro = nullptr;
+static void (*pomo_cmd)(PomoCmd) = nullptr;
 
 static const char PAGE[] PROGMEM = R"html(<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
@@ -62,6 +64,14 @@ label.check input{width:auto}
 <label>夜间亮度（拉到最左边会关闭屏幕）</label>
 <input type="range" name="night_bright" min="0" max="255" value="%NIGHT_BRIGHT%">
 <p class="hint">夜间只显示时钟页，不自动轮播。点一下屏幕或按 BOOT 键，会临时恢复正常亮度 30 秒。</p>
+<h2>番茄钟</h2>
+<div class="row">
+<div><label>专注（分钟）</label><input name="pomo_focus" value="%POMO_FOCUS%" inputmode="numeric"></div>
+<div><label>短休息</label><input name="pomo_short" value="%POMO_SHORT%" inputmode="numeric"></div>
+<div><label>长休息</label><input name="pomo_long" value="%POMO_LONG%" inputmode="numeric"></div>
+<div><label>每几个长休息</label><input name="pomo_every" value="%POMO_EVERY%" inputmode="numeric"></div>
+</div>
+<p class="hint">在设备上点圆环开始或暂停，按住圆环 1.5 秒重置；下面的按钮也能控制（没有触摸屏的板子用这个）。</p>
 <h2>GitHub 贡献热力图</h2>
 <label>GitHub Token（%GH_STATE%）</label>
 <input type="password" name="gh_token" placeholder="%GH_PLACEHOLDER%" autocomplete="off">
@@ -77,6 +87,13 @@ label.check input{width:auto}
 <label class="check"><input type="checkbox" name="auto_update" %AUTO_UPDATE%> 发现新版本后，在凌晨 3～5 点自动升级</label>
 <p><button type="submit">保存</button></p>
 </form>
+<p class="ota">番茄钟：%POMO_STATE%</p>
+<div class="row">
+<form method="post" action="/pomodoro/toggle"><button>开始 / 暂停</button></form>
+<form method="post" action="/pomodoro/skip"><button class="sub">跳过当前阶段</button></form>
+<form method="post" action="/pomodoro/reset" onsubmit="return confirm('重置番茄钟？')"><button class="sub">重置</button></form>
+</div>
+<hr>
 <p>当前版本：<b>%FW_VERSION%</b></p>
 <p class="ota" id="ota" data-busy="%OTA_BUSY%">%OTA_TEXT%</p>
 <div class="row">
@@ -145,6 +162,22 @@ static String ota_text(const OtaStatus &s) {
   return "";
 }
 
+static String pomo_text() {
+  if (!pomodoro) return "";
+  const Pomodoro &p = *pomodoro;
+  uint32_t secs = (p.remaining_ms(millis()) + 999) / 1000;
+  char left[16];
+  snprintf(left, sizeof(left), "%02u:%02u", (unsigned)(secs / 60), (unsigned)(secs % 60));
+  String phase;
+  switch (p.phase()) {
+    case PomoPhase::Idle: return String("未开始，今日完成 ") + p.done_today() + " 个";
+    case PomoPhase::Focus: phase = "专注"; break;
+    case PomoPhase::ShortBreak: phase = "短休息"; break;
+    case PomoPhase::LongBreak: phase = "长休息"; break;
+  }
+  return phase + (p.running() ? "中，剩余 " : "（已暂停），剩余 ") + left + "，今日完成 " + p.done_today() + " 个";
+}
+
 static bool ota_busy(const OtaStatus &s) {
   return s.state == OtaState::Checking || s.state == OtaState::Downloading;
 }
@@ -170,6 +203,11 @@ static void handle_root() {
   page.replace("%GH_STATE%", has_token ? "已设置" : "未设置");
   page.replace("%GH_PLACEHOLDER%", has_token ? "已设置，留空则不修改" : "ghp_...");
   page.replace("%AUTO_UPDATE%", s.auto_update ? "checked" : "");
+  page.replace("%POMO_FOCUS%", String(s.pomo_focus));
+  page.replace("%POMO_SHORT%", String(s.pomo_short));
+  page.replace("%POMO_LONG%", String(s.pomo_long));
+  page.replace("%POMO_EVERY%", String(s.pomo_every));
+  page.replace("%POMO_STATE%", html_escape(pomo_text()));
   page.replace("%FW_VERSION%", html_escape(ota_current_version()));
   OtaStatus os = ota_status();
   page.replace("%OTA_BUSY%", ota_busy(os) ? "1" : "0");
@@ -215,6 +253,17 @@ static void handle_save() {
   long nb = server.arg("night_bright").toInt();
   if (server.hasArg("night_bright") && nb >= 0 && nb <= 255) s.night_brightness = nb;
 
+  // 番茄钟时长：1~180 分钟，长休息间隔 1~8 个；留空或不合法就保持原值
+  auto minutes_arg = [](const char *name, uint8_t &field, int lo, int hi) {
+    String v = server.arg(name);
+    v.trim();
+    if (v.length() > 0 && v.toInt() >= lo && v.toInt() <= hi) field = v.toInt();
+  };
+  minutes_arg("pomo_focus", s.pomo_focus, 1, 180);
+  minutes_arg("pomo_short", s.pomo_short, 1, 180);
+  minutes_arg("pomo_long", s.pomo_long, 1, 180);
+  minutes_arg("pomo_every", s.pomo_every, 1, 8);
+
   if (server.hasArg("stocks")) {
     s.stocks = server.arg("stocks");
     s.stocks.trim();
@@ -227,6 +276,12 @@ static void handle_save() {
   stock_request_refresh();
 
   server.sendHeader("Location", "/?saved=1");
+  server.send(303);
+}
+
+static void handle_pomo(PomoCmd cmd) {
+  if (pomo_cmd) pomo_cmd(cmd);
+  server.sendHeader("Location", "/");
   server.send(303);
 }
 
@@ -297,6 +352,9 @@ void web_config_begin() {
   server.on("/save", HTTP_POST, handle_save);
   server.on("/reset-wifi", HTTP_POST, handle_reset_wifi);
   server.on("/ota/status", HTTP_GET, handle_ota_status);
+  server.on("/pomodoro/toggle", HTTP_POST, [] { handle_pomo(PomoCmd::Toggle); });
+  server.on("/pomodoro/skip", HTTP_POST, [] { handle_pomo(PomoCmd::Skip); });
+  server.on("/pomodoro/reset", HTTP_POST, [] { handle_pomo(PomoCmd::Reset); });
   server.on("/ota/check", HTTP_POST, [] {
     ota_check_now();
     redirect_to_ota();
@@ -314,6 +372,11 @@ void web_config_begin() {
 
 void web_config_loop() {
   server.handleClient();
+}
+
+void web_config_set_pomodoro(const Pomodoro *p, void (*cmd)(PomoCmd)) {
+  pomodoro = p;
+  pomo_cmd = cmd;
 }
 
 void web_config_set_progress_hook(void (*hook)()) {

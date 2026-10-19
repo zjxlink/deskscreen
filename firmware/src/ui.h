@@ -2,6 +2,7 @@
 
 #include "github.h"
 #include "pages.h"
+#include "pomodoro.h"
 #include "stock.h"
 #include "weather.h"
 
@@ -26,6 +27,12 @@ void ui_set_city(const char *city);
 void ui_set_weather(const WeatherData &w);
 void ui_set_github(const GithubData &g);
 void ui_set_stocks(const StockData &s);
+
+// 番茄钟页：msg 不为空时在顶栏显示提示（如"专注完成，休息一下吧"）
+void ui_set_pomodoro(const Pomodoro &p, uint32_t now_ms, const char *msg);
+
+// 触摸点是否落在番茄钟的圆环上（圆环居中，屏幕上下或左右翻转时判断结果也不变）
+bool ui_pomodoro_hit(int x, int y);
 void ui_set_wifi(bool connected);
 
 // 立即把当前界面画到屏幕上（主循环阻塞前使用）
