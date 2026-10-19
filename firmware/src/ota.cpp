@@ -117,7 +117,7 @@ static bool check() {
   http.end();
   OtaManifest m;
   if (e || !ota_parse_manifest(doc, BOARD_NAME, m)) {
-    net_report(NetService::Ota, kNetBadData, client);
+    net_report(NetService::Ota, kNetBadData, client, e ? e.c_str() : "manifest has no matching board");
     check_failed("版本信息格式不对");
     return false;
   }

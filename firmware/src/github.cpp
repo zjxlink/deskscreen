@@ -54,12 +54,13 @@ static GithubStatus fetch(const String &token, GithubData &out, int &error) {
       deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
   http.end();
   if (err) {
-    log_w("github json: %s", err.c_str());
-    net_report(NetService::Github, kNetBadData, client);
+    net_report(NetService::Github, kNetBadData, client, (String("JSON: ") + err.c_str()).c_str());
     return GithubStatus::Error;
   }
   GithubStatus s = github_parse(doc, out);
-  net_report(NetService::Github, s == GithubStatus::Ok ? HTTP_CODE_OK : kNetBadData, client);
+  // 解析失败时多半是 GraphQL 返回了 errors，把原因记下来
+  net_report(NetService::Github, s == GithubStatus::Ok ? HTTP_CODE_OK : kNetBadData, client,
+             s == GithubStatus::Ok ? nullptr : (doc["errors"][0]["message"] | "missing data.viewer"));
   return s;
 }
 

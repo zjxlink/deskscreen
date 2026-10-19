@@ -48,12 +48,12 @@ static StockStatus fetch(const StockCode *codes, int n, StockData &out, int &err
   DeserializationError err = deserializeJson(doc, http.getStream());
   http.end();
   if (err) {
-    log_w("stock json: %s", err.c_str());
-    net_report(NetService::Stock, kNetBadData, client);
+    net_report(NetService::Stock, kNetBadData, client, (String("JSON: ") + err.c_str()).c_str());
     return StockStatus::Error;
   }
   StockStatus s = stock_parse(doc, codes, n, out);
-  net_report(NetService::Stock, s == StockStatus::Ok ? HTTP_CODE_OK : kNetBadData, client);
+  net_report(NetService::Stock, s == StockStatus::Ok ? HTTP_CODE_OK : kNetBadData, client,
+             s == StockStatus::Ok ? nullptr : "unexpected data");
   return s;
 }
 

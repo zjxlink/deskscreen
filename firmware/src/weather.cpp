@@ -46,14 +46,13 @@ static int fetch(WeatherData &out) {
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, body);
   if (err) {
-    log_w("weather json: %s", err.c_str());
-    net_report(NetService::Weather, kNetBadData, client);
+    net_report(NetService::Weather, kNetBadData, client, (String("JSON: ") + err.c_str()).c_str());
     return kNetBadData;
   }
   JsonObject cur = doc["current"];
   JsonObject daily = doc["daily"];
   if (cur.isNull() || daily.isNull()) {
-    net_report(NetService::Weather, kNetBadData, client);
+    net_report(NetService::Weather, kNetBadData, client, "missing current/daily");
     return kNetBadData;
   }
 

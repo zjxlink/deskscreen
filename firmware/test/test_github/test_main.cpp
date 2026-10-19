@@ -101,8 +101,13 @@ static void test_filter_drops_unused_fields() {
 }
 
 static void test_error_response() {
+  JsonDocument filter;
+  github_build_filter(filter);
   JsonDocument doc;
-  deserializeJson(doc, "{\"data\":null,\"errors\":[{\"message\":\"Bad credentials\"}]}");
+  deserializeJson(doc, "{\"data\":null,\"errors\":[{\"message\":\"Bad credentials\",\"type\":\"X\"}]}",
+                  DeserializationOption::Filter(filter));
+  TEST_ASSERT_EQUAL_STRING("Bad credentials", doc["errors"][0]["message"].as<const char *>());
+  TEST_ASSERT_TRUE(doc["errors"][0]["type"].isNull());
   GithubData g{};
   TEST_ASSERT_EQUAL(GithubStatus::Error, github_parse(doc, g));
 }

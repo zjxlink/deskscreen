@@ -41,6 +41,7 @@ void github_build_filter(JsonDocument &filter) {
   day["contributionCount"] = true;
   day["contributionLevel"] = true;
   day["weekday"] = true;
+  filter["errors"][0]["message"] = true;  // 出错时 GraphQL 返回的原因，显示在网络诊断里
 }
 
 GithubStatus github_parse(JsonDocument &doc, GithubData &out) {
