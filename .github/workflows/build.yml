@@ -37,7 +37,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: firmware-${{ matrix.env }}
-          path: |
-            firmware/.pio/build/${{ matrix.env }}/firmware.bin
-            firmware/.pio/build/${{ matrix.env }}/bootloader.bin
-            firmware/.pio/build/${{ matrix.env }}/partitions.bin
+          path: firmware/.pio/build/${{ matrix.env }}/firmware-merged.bin
+          if-no-files-found: error
