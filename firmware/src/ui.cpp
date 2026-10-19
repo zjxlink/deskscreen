@@ -425,7 +425,7 @@ void ui_set_city(const char *city) {
 void ui_set_weather(const WeatherData &w) {
   if (w.error) {
     // 只有开机后一次都没成功过才会收到错误，天气描述那行保持「获取中…」
-    lv_label_set_text_fmt(lbl_humidity, "获取失败（%d），稍后重试", w.error);
+    lv_label_set_text_fmt(lbl_humidity, "获取失败（%d）", w.error);
     return;
   }
   lv_label_set_text_fmt(lbl_temp, "%d\xC2\xB0", (int)lroundf(w.temp));

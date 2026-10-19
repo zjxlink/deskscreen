@@ -16,9 +16,7 @@ static SemaphoreHandle_t lock;
 static WeatherData latest;
 static bool fresh = false;
 
-// 成功返回 0；失败返回 HTTP 状态码、HTTPClient 的负数错误码，或者 kErrBadData（返回内容不对）
-static constexpr int kErrBadData = -100;
-
+// 成功返回 0；失败返回 HTTP 状态码、HTTPClient 的负数错误码，或者 kNetBadData（返回内容不对）
 static int fetch(WeatherData &out) {
   Settings s = settings_get();
   String url = "https://api.open-meteo.com/v1/forecast?latitude=" + String(s.lat, 4) +
@@ -31,13 +29,14 @@ static int fetch(WeatherData &out) {
   // 天气数据不敏感，先跳过证书校验；以后可换成内置根证书
   WiFiClientSecure client;
   client.setInsecure();
+  client.setHandshakeTimeout(kTlsHandshakeTimeoutS);
   HTTPClient http;
   http.setTimeout(10000);
   if (!http.begin(client, url)) return HTTPC_ERROR_CONNECTION_REFUSED;
 
   int status = http.GET();
   if (status != HTTP_CODE_OK) {
-    net_log_failure("weather", status, client);
+    net_report(NetService::Weather, status, client);
     http.end();
     return status;
   }
@@ -48,11 +47,15 @@ static int fetch(WeatherData &out) {
   DeserializationError err = deserializeJson(doc, body);
   if (err) {
     log_w("weather json: %s", err.c_str());
-    return kErrBadData;
+    net_report(NetService::Weather, kNetBadData, client);
+    return kNetBadData;
   }
   JsonObject cur = doc["current"];
   JsonObject daily = doc["daily"];
-  if (cur.isNull() || daily.isNull()) return kErrBadData;
+  if (cur.isNull() || daily.isNull()) {
+    net_report(NetService::Weather, kNetBadData, client);
+    return kNetBadData;
+  }
 
   out.temp = cur["temperature_2m"] | 0.0f;
   out.humidity = cur["relative_humidity_2m"] | 0;
@@ -60,6 +63,7 @@ static int fetch(WeatherData &out) {
   out.temp_max = daily["temperature_2m_max"][0] | 0.0f;
   out.temp_min = daily["temperature_2m_min"][0] | 0.0f;
   out.error = 0;
+  net_report(NetService::Weather, HTTP_CODE_OK, client);
   return 0;
 }
 
@@ -72,6 +76,7 @@ static void publish(const WeatherData &d) {
 
 static void weather_task(void *) {
   bool ever_ok = false;
+  int failures = 0;
   for (;;) {
     uint32_t wait_ms = 5000;
     if (WiFi.isConnected()) {
@@ -79,12 +84,13 @@ static void weather_task(void *) {
       d.error = fetch(d);
       if (d.error == 0) {
         ever_ok = true;
+        failures = 0;
         publish(d);
         wait_ms = kRefreshMs;
       } else {
         // 失败时保留上次的天气，只有从没成功过才在屏幕上显示错误
         if (!ever_ok) publish(d);
-        wait_ms = kRetryMs;
+        wait_ms = net_retry_ms(++failures, kRetryMs);
       }
     }
     ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait_ms));

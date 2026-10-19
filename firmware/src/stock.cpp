@@ -14,9 +14,9 @@ static SemaphoreHandle_t lock;
 static StockData latest;
 static bool fresh = false;
 
-// 失败时 error 为 HTTP 状态码或 HTTPClient 的负数错误码，返回内容不对时为 -100
+// 失败时 error 为 HTTP 状态码、HTTPClient 的负数错误码或 kNetBadData
 static StockStatus fetch(const StockCode *codes, int n, StockData &out, int &error) {
-  error = -100;
+  error = kNetBadData;
   char secids[512];
   if (!stock_build_secids(codes, n, secids, sizeof(secids))) return StockStatus::Error;
   String url =
@@ -28,6 +28,7 @@ static StockStatus fetch(const StockCode *codes, int n, StockData &out, int &err
   // 行情是公开数据，不带任何凭据，先跳过证书校验
   WiFiClientSecure client;
   client.setInsecure();
+  client.setHandshakeTimeout(kTlsHandshakeTimeoutS);
   HTTPClient http;
   http.setTimeout(10000);
   http.useHTTP10(true);
@@ -37,7 +38,7 @@ static StockStatus fetch(const StockCode *codes, int n, StockData &out, int &err
   }
   int status = http.GET();
   if (status != HTTP_CODE_OK) {
-    net_log_failure("stock", status, client);
+    net_report(NetService::Stock, status, client);
     error = status;
     http.end();
     return StockStatus::Error;
@@ -48,9 +49,12 @@ static StockStatus fetch(const StockCode *codes, int n, StockData &out, int &err
   http.end();
   if (err) {
     log_w("stock json: %s", err.c_str());
+    net_report(NetService::Stock, kNetBadData, client);
     return StockStatus::Error;
   }
-  return stock_parse(doc, codes, n, out);
+  StockStatus s = stock_parse(doc, codes, n, out);
+  net_report(NetService::Stock, s == StockStatus::Ok ? HTTP_CODE_OK : kNetBadData, client);
+  return s;
 }
 
 static void publish(const StockData &d) {
@@ -63,6 +67,7 @@ static void publish(const StockData &d) {
 static void stock_task(void *) {
   static StockData d;
   static StockData tmp;
+  int failures = 0;
   for (;;) {
     uint32_t wait_ms = 5000;
     StockCode codes[kMaxStocks];
@@ -84,6 +89,7 @@ static void stock_task(void *) {
       if (s == StockStatus::Ok) {
         d = tmp;
         d.status = s;
+        failures = 0;
         if (has_time) snprintf(d.updated, sizeof(d.updated), "%02d:%02d", now.tm_hour, now.tm_min);
         wait_ms = has_time ? stock_refresh_ms(now) : 30 * 1000;
       } else {
@@ -92,7 +98,7 @@ static void stock_task(void *) {
           d.status = s;
           d.error = error;
         }
-        wait_ms = kRetryMs;
+        wait_ms = net_retry_ms(++failures, kRetryMs);
       }
       publish(d);
     }
