@@ -5,7 +5,7 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 
-#include "github_ca.h"
+#include "root_ca.h"
 #include "settings.h"
 
 static constexpr uint32_t kRefreshMs = 30 * 60 * 1000;
@@ -22,7 +22,7 @@ static const char kQuery[] =
 
 static GithubStatus fetch(const String &token, GithubData &out) {
   WiFiClientSecure client;
-  client.setCACert(GITHUB_ROOT_CA);
+  client.setCACert(ROOT_CA_BUNDLE);
   HTTPClient http;
   http.setTimeout(15000);
   http.useHTTP10(true);  // 避免分块传输，方便直接流式解析 JSON

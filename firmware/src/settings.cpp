@@ -20,6 +20,7 @@ void settings_begin() {
   current.night_start = prefs.getUShort("night_start", 23 * 60);
   current.night_end = prefs.getUShort("night_end", 7 * 60);
   current.night_brightness = prefs.getUChar("night_bright", 10);
+  current.auto_update = prefs.getBool("auto_upd", true);
 }
 
 Settings settings_get() {
@@ -44,4 +45,5 @@ void settings_save(const Settings &s) {
   prefs.putUShort("night_start", s.night_start);
   prefs.putUShort("night_end", s.night_end);
   prefs.putUChar("night_bright", s.night_brightness);
+  prefs.putBool("auto_upd", s.auto_update);
 }

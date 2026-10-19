@@ -1,16 +1,19 @@
 #include "web_config.h"
 
+#include <ArduinoJson.h>
 #include <WebServer.h>
 #include <WiFi.h>
 
 #include "github.h"
 #include "night.h"
+#include "ota.h"
 #include "settings.h"
 #include "stock.h"
 #include "weather.h"
 
 static WebServer server(80);
 static bool changed = false;
+static void (*progress_hook)() = nullptr;
 
 static const char PAGE[] PROGMEM = R"html(<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
@@ -29,6 +32,7 @@ button.sub{background:#30363d}
 button.danger{background:#da3633}
 .tip{color:#3fb950;margin:8px 0}
 #results button{display:block;width:100%;margin-top:6px;text-align:left}
+.ota{background:#161b22;border-radius:8px;padding:10px 12px}
 hr{border:0;border-top:1px solid #30363d;margin:28px 0}
 h2{font-size:17px;margin-top:28px}
 a{color:#58a6ff}
@@ -69,7 +73,20 @@ label.check input{width:auto}
 <input name="stocks" value="%STOCKS%" placeholder="600519, 000001, 00700, AAPL">
 <p class="hint">A 股直接写 6 位代码；指数和深市代码冲突时加前缀，如 <b>sh000001</b> 是上证指数；
 港股写 5 位代码（如 00700）；美股写代码（如 AAPL）。ETF 和股票写法一样。数据来自东方财富，交易时段每 30 秒刷新。</p>
+<h2>固件升级</h2>
+<label class="check"><input type="checkbox" name="auto_update" %AUTO_UPDATE%> 发现新版本后，在凌晨 3～5 点自动升级</label>
 <p><button type="submit">保存</button></p>
+</form>
+<p>当前版本：<b>%FW_VERSION%</b></p>
+<p class="ota" id="ota" data-busy="%OTA_BUSY%">%OTA_TEXT%</p>
+<div class="row">
+<form method="post" action="/ota/check"><button class="sub">检查更新</button></form>
+<form method="post" action="/ota/install" onsubmit="return confirm('现在下载并安装最新版本？升级大约需要 1 分钟，期间请不要断电。')"><button>立即升级</button></form>
+</div>
+<label>也可以上传固件文件（Release 里的 firmware-板子名.bin）</label>
+<form method="post" action="/ota/upload" enctype="multipart/form-data" onsubmit="const b=this.querySelector('button');b.disabled=true;b.textContent='上传中，请不要关闭页面…'">
+<input type="file" name="firmware" accept=".bin" required>
+<p><button>上传并升级</button></p>
 </form>
 <hr>
 <form method="post" action="/reset-wifi" onsubmit="return confirm('清除 WiFi 并重启进入配网模式？')">
@@ -92,6 +109,12 @@ async function search(){
     }
   }catch(e){box.textContent='查询失败，可以手动填写经纬度';}
 }
+async function poll(){
+  const el=document.getElementById('ota');
+  try{const j=await (await fetch('/ota/status')).json();el.textContent=j.text;if(j.busy)setTimeout(poll,2000);}
+  catch(e){setTimeout(poll,3000);}
+}
+if(document.getElementById('ota').dataset.busy==='1')poll();
 </script></body></html>)html";
 
 static String html_escape(const String &s) {
@@ -107,6 +130,23 @@ static String html_escape(const String &s) {
     }
   }
   return out;
+}
+
+static String ota_text(const OtaStatus &s) {
+  switch (s.state) {
+    case OtaState::Idle: return "还没有检查过更新";
+    case OtaState::Checking: return "正在检查更新…";
+    case OtaState::UpToDate: return String("已是最新版本（") + s.latest + "）";
+    case OtaState::Available: return String("发现新版本 ") + s.latest + "，可以点「立即升级」";
+    case OtaState::Downloading: return String("正在升级：") + s.progress + "%";
+    case OtaState::Done: return "升级完成，设备正在重启";
+    case OtaState::Failed: return String("失败：") + s.error;
+  }
+  return "";
+}
+
+static bool ota_busy(const OtaStatus &s) {
+  return s.state == OtaState::Checking || s.state == OtaState::Downloading;
 }
 
 static void handle_root() {
@@ -129,6 +169,11 @@ static void handle_root() {
   bool has_token = s.github_token.length() > 0;
   page.replace("%GH_STATE%", has_token ? "已设置" : "未设置");
   page.replace("%GH_PLACEHOLDER%", has_token ? "已设置，留空则不修改" : "ghp_...");
+  page.replace("%AUTO_UPDATE%", s.auto_update ? "checked" : "");
+  page.replace("%FW_VERSION%", html_escape(ota_current_version()));
+  OtaStatus os = ota_status();
+  page.replace("%OTA_BUSY%", ota_busy(os) ? "1" : "0");
+  page.replace("%OTA_TEXT%", html_escape(ota_text(os)));
   server.send(200, "text/html; charset=utf-8", page);
 }
 
@@ -162,6 +207,7 @@ static void handle_save() {
 
   // 复选框不勾选时浏览器不会提交这个字段
   s.night_on = server.hasArg("night_on");
+  s.auto_update = server.hasArg("auto_update");
   int start = night_parse_hhmm(server.arg("night_start").c_str());
   int end = night_parse_hhmm(server.arg("night_end").c_str());
   if (start >= 0) s.night_start = start;
@@ -184,6 +230,59 @@ static void handle_save() {
   server.send(303);
 }
 
+static void redirect_to_ota() {
+  server.sendHeader("Location", "/#ota");
+  server.send(303);
+}
+
+static void handle_ota_status() {
+  OtaStatus s = ota_status();
+  JsonDocument doc;
+  doc["text"] = ota_text(s);
+  doc["busy"] = ota_busy(s);
+  String out;
+  serializeJson(doc, out);
+  server.send(200, "application/json", out);
+}
+
+static bool upload_ok = false;
+static bool upload_started = false;
+
+// 浏览器分块发来的固件，每块约 1.4KB
+static void handle_upload_chunk() {
+  HTTPUpload &up = server.upload();
+  if (up.status == UPLOAD_FILE_START) {
+    upload_ok = true;
+    upload_started = false;
+  } else if (up.status == UPLOAD_FILE_WRITE && upload_ok) {
+    if (!upload_started) {
+      upload_started = true;
+      upload_ok = ota_upload_begin(up.buf, up.currentSize, server.header("Content-Length").toInt());
+    } else {
+      upload_ok = ota_upload_write(up.buf, up.currentSize);
+    }
+    static size_t last_hook = 0;
+    if (progress_hook && (up.totalSize - last_hook >= 32 * 1024 || up.totalSize < last_hook)) {
+      last_hook = up.totalSize;
+      progress_hook();
+    }
+  } else if (up.status == UPLOAD_FILE_END) {
+    if (upload_ok && upload_started) upload_ok = ota_upload_end();
+    if (!upload_started) upload_ok = false;
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    if (upload_started) ota_upload_abort();
+    upload_ok = false;
+  }
+}
+
+static void handle_upload_done() {
+  String msg = upload_ok ? String("升级成功，设备正在重启，大约 10 秒后刷新设置页面即可。")
+                         : String("升级失败：") + html_escape(ota_status().error);
+  server.send(200, "text/html; charset=utf-8",
+              "<meta charset=utf-8><meta name=viewport content='width=device-width'>"
+              "<p>" + msg + "</p><p><a href='/'>返回设置页面</a></p>");
+}
+
 static void handle_reset_wifi() {
   server.send(200, "text/html; charset=utf-8",
               "<meta charset=utf-8><p>已清除 WiFi，设备正在重启进入配网模式。</p>");
@@ -197,12 +296,28 @@ void web_config_begin() {
   server.on("/", HTTP_GET, handle_root);
   server.on("/save", HTTP_POST, handle_save);
   server.on("/reset-wifi", HTTP_POST, handle_reset_wifi);
+  server.on("/ota/status", HTTP_GET, handle_ota_status);
+  server.on("/ota/check", HTTP_POST, [] {
+    ota_check_now();
+    redirect_to_ota();
+  });
+  server.on("/ota/install", HTTP_POST, [] {
+    ota_install_now();
+    redirect_to_ota();
+  });
+  server.on("/ota/upload", HTTP_POST, handle_upload_done, handle_upload_chunk);
+  const char *headers[] = {"Content-Length"};
+  server.collectHeaders(headers, 1);
   server.onNotFound([] { server.send(404, "text/plain", "Not found"); });
   server.begin();
 }
 
 void web_config_loop() {
   server.handleClient();
+}
+
+void web_config_set_progress_hook(void (*hook)()) {
+  progress_hook = hook;
 }
 
 bool web_config_take_changed() {

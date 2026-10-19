@@ -1,0 +1,90 @@
+# 推送 vX.Y.Z 标签时发布 Release：编译两个板子的固件，生成 OTA 用的 manifest.json。
+# 设备从 releases/latest/download/manifest.json 检查更新，见 firmware/src/ota.cpp。
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PlatformIO
+        run: pip install platformio==6.1.16
+      - name: Unit tests
+        working-directory: firmware
+        run: pio test -e native
+
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        env: [box3, desk_v1]
+    env:
+      FW_VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            firmware/.pio/libdeps
+          key: pio-${{ matrix.env }}-${{ hashFiles('firmware/platformio.ini') }}
+      - name: Install PlatformIO
+        run: pip install platformio==6.1.16
+      - name: Build
+        working-directory: firmware
+        run: pio run -e ${{ matrix.env }}
+      - name: Check firmware images
+        working-directory: firmware/.pio/build/${{ matrix.env }}
+        run: python3 ../../../tools/check_image.py firmware.bin firmware-merged.bin
+      - name: Rename for release
+        run: |
+          mkdir -p dist
+          cp firmware/.pio/build/${{ matrix.env }}/firmware.bin dist/firmware-${{ matrix.env }}.bin
+          cp firmware/.pio/build/${{ matrix.env }}/firmware-merged.bin dist/firmware-${{ matrix.env }}-merged.bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.env }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: [test, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Make OTA manifest
+        run: |
+          python3 firmware/tools/make_manifest.py \
+            --version "${{ github.ref_name }}" \
+            --base-url "${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}" \
+            box3=dist/firmware-box3.bin desk_v1=dist/firmware-desk_v1.bin > dist/manifest.json
+          cat dist/manifest.json
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'NOTES'
+          **烧录方法**
+          - 第一次烧录：用 Chrome 打开 https://espressif.github.io/esptool-js/ ，地址填 `0x0`，选择 `firmware-板子名-merged.bin`
+          - 已经装过的设备：会自动在线升级；也可以在设置页面上传 `firmware-板子名.bin`（不带 merged 的那个）
+          NOTES
+          gh release create "${{ github.ref_name }}" dist/* \
+            --title "${{ github.ref_name }}" --notes-file notes.md --generate-notes
