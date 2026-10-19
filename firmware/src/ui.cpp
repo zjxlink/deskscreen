@@ -423,6 +423,11 @@ void ui_set_city(const char *city) {
 }
 
 void ui_set_weather(const WeatherData &w) {
+  if (w.error) {
+    // 只有开机后一次都没成功过才会收到错误，天气描述那行保持「获取中…」
+    lv_label_set_text_fmt(lbl_humidity, "获取失败（%d），稍后重试", w.error);
+    return;
+  }
   lv_label_set_text_fmt(lbl_temp, "%d\xC2\xB0", (int)lroundf(w.temp));
   lv_label_set_text(lbl_desc, weather_text(w.code));
   lv_obj_set_style_text_color(lbl_desc, lv_color_hex(weather_color(w.code)), 0);
@@ -437,11 +442,11 @@ void ui_set_github(const GithubData &g) {
     case GithubStatus::NoToken: msg = "请在设置页面填写 GitHub Token"; break;
     case GithubStatus::Loading: msg = "获取中…"; break;
     case GithubStatus::BadToken: msg = "Token 无效或已过期\n请在设置页面重新填写"; break;
-    case GithubStatus::Error: msg = "获取失败，稍后自动重试"; break;
+    case GithubStatus::Error: msg = "获取失败（%d），稍后自动重试"; break;
     case GithubStatus::Ok: break;
   }
   if (msg) {
-    lv_label_set_text(lbl_gh_msg, msg);
+    lv_label_set_text_fmt(lbl_gh_msg, msg, g.error);
     lv_obj_clear_flag(lbl_gh_msg, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(gh_grid, LV_OBJ_FLAG_HIDDEN);
     return;
@@ -474,11 +479,11 @@ void ui_set_stocks(const StockData &s) {
   switch (s.status) {
     case StockStatus::NotSet: msg = "请在设置页面填写自选股代码"; break;
     case StockStatus::Loading: msg = "获取中…"; break;
-    case StockStatus::Error: msg = "获取失败，稍后自动重试"; break;
+    case StockStatus::Error: msg = "获取失败（%d），稍后自动重试"; break;
     case StockStatus::Ok: break;
   }
   if (msg) {
-    lv_label_set_text(lbl_stock_msg, msg);
+    lv_label_set_text_fmt(lbl_stock_msg, msg, s.error);
     lv_obj_clear_flag(lbl_stock_msg, LV_OBJ_FLAG_HIDDEN);
     for (StockRow &r : stock_rows) lv_obj_add_flag(r.row, LV_OBJ_FLAG_HIDDEN);
     lv_label_set_text(lbl_stock_updated, "");

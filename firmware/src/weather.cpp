@@ -5,6 +5,7 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 
+#include "net.h"
 #include "settings.h"
 
 static constexpr uint32_t kRefreshMs = 15 * 60 * 1000;
@@ -15,7 +16,10 @@ static SemaphoreHandle_t lock;
 static WeatherData latest;
 static bool fresh = false;
 
-static bool fetch(WeatherData &out) {
+// 成功返回 0；失败返回 HTTP 状态码、HTTPClient 的负数错误码，或者 kErrBadData（返回内容不对）
+static constexpr int kErrBadData = -100;
+
+static int fetch(WeatherData &out) {
   Settings s = settings_get();
   String url = "https://api.open-meteo.com/v1/forecast?latitude=" + String(s.lat, 4) +
                "&longitude=" + String(s.lon, 4) +
@@ -23,18 +27,19 @@ static bool fetch(WeatherData &out) {
                "&daily=temperature_2m_max,temperature_2m_min"
                "&timezone=auto&forecast_days=1";
 
+  HttpsLock https;
   // 天气数据不敏感，先跳过证书校验；以后可换成内置根证书
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
   http.setTimeout(10000);
-  if (!http.begin(client, url)) return false;
+  if (!http.begin(client, url)) return HTTPC_ERROR_CONNECTION_REFUSED;
 
   int status = http.GET();
   if (status != HTTP_CODE_OK) {
-    log_w("weather http %d", status);
+    net_log_failure("weather", status, client);
     http.end();
-    return false;
+    return status;
   }
   String body = http.getString();
   http.end();
@@ -43,32 +48,42 @@ static bool fetch(WeatherData &out) {
   DeserializationError err = deserializeJson(doc, body);
   if (err) {
     log_w("weather json: %s", err.c_str());
-    return false;
+    return kErrBadData;
   }
   JsonObject cur = doc["current"];
   JsonObject daily = doc["daily"];
-  if (cur.isNull() || daily.isNull()) return false;
+  if (cur.isNull() || daily.isNull()) return kErrBadData;
 
   out.temp = cur["temperature_2m"] | 0.0f;
   out.humidity = cur["relative_humidity_2m"] | 0;
   out.code = cur["weather_code"] | 0;
   out.temp_max = daily["temperature_2m_max"][0] | 0.0f;
   out.temp_min = daily["temperature_2m_min"][0] | 0.0f;
-  return true;
+  out.error = 0;
+  return 0;
+}
+
+static void publish(const WeatherData &d) {
+  xSemaphoreTake(lock, portMAX_DELAY);
+  latest = d;
+  fresh = true;
+  xSemaphoreGive(lock);
 }
 
 static void weather_task(void *) {
+  bool ever_ok = false;
   for (;;) {
     uint32_t wait_ms = 5000;
     if (WiFi.isConnected()) {
-      WeatherData d;
-      if (fetch(d)) {
-        xSemaphoreTake(lock, portMAX_DELAY);
-        latest = d;
-        fresh = true;
-        xSemaphoreGive(lock);
+      WeatherData d = {};
+      d.error = fetch(d);
+      if (d.error == 0) {
+        ever_ok = true;
+        publish(d);
         wait_ms = kRefreshMs;
       } else {
+        // 失败时保留上次的天气，只有从没成功过才在屏幕上显示错误
+        if (!ever_ok) publish(d);
         wait_ms = kRetryMs;
       }
     }

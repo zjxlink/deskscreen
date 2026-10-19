@@ -17,6 +17,7 @@ enum class GithubStatus : uint8_t {
 
 struct GithubData {
   GithubStatus status;
+  int error;         // 状态为 Error 时的错误码（HTTP 状态码或负数），显示在屏幕上方便排查
   char login[40];
   uint16_t total;    // 过去一年的贡献数
   uint16_t today;

@@ -27,6 +27,7 @@ struct StockQuote {
 
 struct StockData {
   StockStatus status;
+  int error;        // 状态为 Error 时的错误码（HTTP 状态码或负数），显示在屏幕上方便排查
   uint8_t count;
   StockQuote quotes[kMaxStocks];
   char updated[6];  // 最后更新时间 HH:MM
