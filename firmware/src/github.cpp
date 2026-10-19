@@ -30,7 +30,6 @@ static GithubStatus fetch(const String &token, GithubData &out, int &error) {
   client.setHandshakeTimeout(kTlsHandshakeTimeoutS);
   HTTPClient http;
   http.setTimeout(15000);
-  http.useHTTP10(true);  // 避免分块传输，方便直接流式解析 JSON
   if (!http.begin(client, "https://api.github.com/graphql")) {
     error = HTTPC_ERROR_CONNECTION_REFUSED;
     return GithubStatus::Error;
@@ -47,14 +46,18 @@ static GithubStatus fetch(const String &token, GithubData &out, int &error) {
     return status == 401 ? GithubStatus::BadToken : GithubStatus::Error;
   }
 
+  // 先把整个响应读完再解析，不要边收边解析（不要用 HTTP/1.0 + getStream）：
+  // HTTP/1.0 下服务器发完就断开，WiFiClientSecure 一发现断开就丢掉还没读的数据，JSON 只收到一半。
+  // 响应二三十 KB，String 超过 4KB 会自动放到 PSRAM
+  String body = http.getString();
+  http.end();
   JsonDocument filter;
   github_build_filter(filter);
   JsonDocument doc;
-  DeserializationError err =
-      deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
-  http.end();
+  DeserializationError err = deserializeJson(doc, body, DeserializationOption::Filter(filter));
   if (err) {
-    net_report(NetService::Github, kNetBadData, client, (String("JSON: ") + err.c_str()).c_str());
+    String detail = String("JSON: ") + err.c_str() + ", " + body.length() + " bytes";
+    net_report(NetService::Github, kNetBadData, client, detail.c_str());
     return GithubStatus::Error;
   }
   GithubStatus s = github_parse(doc, out);

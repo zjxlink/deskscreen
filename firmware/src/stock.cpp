@@ -31,7 +31,6 @@ static StockStatus fetch(const StockCode *codes, int n, StockData &out, int &err
   client.setHandshakeTimeout(kTlsHandshakeTimeoutS);
   HTTPClient http;
   http.setTimeout(10000);
-  http.useHTTP10(true);
   if (!http.begin(client, url)) {
     error = HTTPC_ERROR_CONNECTION_REFUSED;
     return StockStatus::Error;
@@ -44,11 +43,14 @@ static StockStatus fetch(const StockCode *codes, int n, StockData &out, int &err
     return StockStatus::Error;
   }
 
-  JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, http.getStream());
+  // 先读完再解析，原因见 github.cpp
+  String body = http.getString();
   http.end();
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, body);
   if (err) {
-    net_report(NetService::Stock, kNetBadData, client, (String("JSON: ") + err.c_str()).c_str());
+    String detail = String("JSON: ") + err.c_str() + ", " + body.length() + " bytes";
+    net_report(NetService::Stock, kNetBadData, client, detail.c_str());
     return StockStatus::Error;
   }
   StockStatus s = stock_parse(doc, codes, n, out);
