@@ -19,6 +19,9 @@ struct Settings {
   uint8_t pomo_short;        // 短休息分钟数
   uint8_t pomo_long;         // 长休息分钟数
   uint8_t pomo_every;        // 每几个番茄后长休息
+  bool sound_on;             // 番茄钟提示音
+  uint8_t sound_volume;      // 0~100
+  bool sound_quiet_night;    // 夜间时段不响
 };
 
 // 时区固定为北京时间，POSIX 格式
