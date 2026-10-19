@@ -104,7 +104,7 @@ static bool check() {
   begin_https(client, http, OTA_MANIFEST_URL);
   int code = http.GET();
   if (code != HTTP_CODE_OK) {
-    net_log_failure("ota check", code, client);
+    net_report(NetService::Ota, code, client);
     http.end();
     char err[64];
     snprintf(err, sizeof(err), "检查更新失败（HTTP %d）", code);
@@ -116,9 +116,11 @@ static bool check() {
   http.end();
   OtaManifest m;
   if (e || !ota_parse_manifest(doc, BOARD_NAME, m)) {
+    net_report(NetService::Ota, kNetBadData, client);
     check_failed("版本信息格式不对");
     return false;
   }
+  net_report(NetService::Ota, HTTP_CODE_OK, client);
 
   bool newer = ota_is_newer(FW_VERSION, m.version);
   int x, y, z;
@@ -147,7 +149,7 @@ static void download() {
   begin_https(client, http, m.url);
   int code = http.GET();
   if (code != HTTP_CODE_OK) {
-    net_log_failure("ota download", code, client);
+    net_report(NetService::Ota, code, client);
     http.end();
     char err[64];
     snprintf(err, sizeof(err), "下载失败（HTTP %d）", code);

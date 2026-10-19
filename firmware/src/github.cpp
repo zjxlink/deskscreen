@@ -21,9 +21,9 @@ static const char kQuery[] =
     "{\"query\":\"query{viewer{login contributionsCollection{contributionCalendar{"
     "totalContributions weeks{contributionDays{contributionCount contributionLevel weekday}}}}}}\"}";
 
-// 失败时 error 为 HTTP 状态码或 HTTPClient 的负数错误码，返回内容不对时为 -100
+// 失败时 error 为 HTTP 状态码、HTTPClient 的负数错误码或 kNetBadData
 static GithubStatus fetch(const String &token, GithubData &out, int &error) {
-  error = -100;
+  error = kNetBadData;
   HttpsLock https;
   WiFiClientSecure client;
   client.setCACert(ROOT_CA_BUNDLE);
@@ -39,15 +39,11 @@ static GithubStatus fetch(const String &token, GithubData &out, int &error) {
   http.addHeader("User-Agent", "DeskScreen");
 
   int status = http.POST((uint8_t *)kQuery, strlen(kQuery));
-  if (status == 401) {
-    http.end();
-    return GithubStatus::BadToken;
-  }
   if (status != HTTP_CODE_OK) {
-    net_log_failure("github", status, client);
+    net_report(NetService::Github, status, client);
     error = status;
     http.end();
-    return GithubStatus::Error;
+    return status == 401 ? GithubStatus::BadToken : GithubStatus::Error;
   }
 
   JsonDocument filter;
@@ -58,9 +54,12 @@ static GithubStatus fetch(const String &token, GithubData &out, int &error) {
   http.end();
   if (err) {
     log_w("github json: %s", err.c_str());
+    net_report(NetService::Github, kNetBadData, client);
     return GithubStatus::Error;
   }
-  return github_parse(doc, out);
+  GithubStatus s = github_parse(doc, out);
+  net_report(NetService::Github, s == GithubStatus::Ok ? HTTP_CODE_OK : kNetBadData, client);
+  return s;
 }
 
 static void publish(const GithubData &d) {
@@ -72,6 +71,7 @@ static void publish(const GithubData &d) {
 
 static void github_task(void *) {
   static GithubData d;  // 放在静态区，任务栈留给 TLS
+  int failures = 0;
   for (;;) {
     uint32_t wait_ms = 5000;
     String token = settings_get().github_token;
@@ -88,6 +88,7 @@ static void github_task(void *) {
       GithubStatus s = fetch(token, d, error);
       if (s == GithubStatus::Ok) {
         d.status = s;
+        failures = 0;
         wait_ms = kRefreshMs;
       } else {
         // 拉取失败时保留上次的数据，只有从没成功过才显示错误
@@ -95,7 +96,7 @@ static void github_task(void *) {
           d.status = s;
           d.error = error;
         }
-        wait_ms = s == GithubStatus::BadToken ? portMAX_DELAY : kRetryMs;
+        wait_ms = s == GithubStatus::BadToken ? portMAX_DELAY : net_retry_ms(++failures, kRetryMs);
       }
       publish(d);
     }

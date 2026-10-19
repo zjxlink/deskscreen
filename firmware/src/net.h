@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Arduino.h>
 #include <WiFiClientSecure.h>
 
 // 同一时间只允许一个 HTTPS 连接。
@@ -14,5 +15,17 @@ class HttpsLock {
   HttpsLock &operator=(const HttpsLock &) = delete;
 };
 
-// 请求失败时打印日志：HTTP 状态码或 HTTPClient 的错误、TLS 层的错误、内部 RAM 剩余，方便看串口定位问题
-void net_log_failure(const char *what, int code, WiFiClientSecure &client);
+enum class NetService : uint8_t { Weather, Github, Stock, Ota, Count };
+
+// 返回内容不是预期的格式（JSON 解析失败等）
+static constexpr int kNetBadData = -100;
+
+// 记录一次请求的结果，设置页面的「网络诊断」会显示出来。
+// code 为 HTTP 状态码（200 表示成功）、HTTPClient 的负数错误码或 kNetBadData；失败时同时打印日志
+void net_report(NetService s, int code, WiFiClientSecure &client);
+
+// 设置页面用的诊断信息（HTML 片段）：每项服务最近一次的结果、内部 RAM 剩余
+String net_status_html();
+
+// 开机后还没成功过时，重试间隔从 10 秒开始翻倍，最多到 max_ms，免得刚开机等太久
+uint32_t net_retry_ms(int failures, uint32_t max_ms);

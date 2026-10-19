@@ -6,6 +6,7 @@
 
 #include "audio.h"
 #include "github.h"
+#include "net.h"
 #include "night.h"
 #include "ota.h"
 #include "settings.h"
@@ -110,6 +111,9 @@ label.check input{width:auto}
 <input type="file" name="firmware" accept=".bin" required>
 <p><button>上传并升级</button></p>
 </form>
+<hr>
+<h2>网络诊断</h2>
+<ul class="hint">%NET_STATUS%</ul>
 <hr>
 <form method="post" action="/reset-wifi" onsubmit="return confirm('清除 WiFi 并重启进入配网模式？')">
 <button class="danger">重新配置 WiFi</button>
@@ -221,6 +225,7 @@ static void handle_root() {
   OtaStatus os = ota_status();
   page.replace("%OTA_BUSY%", ota_busy(os) ? "1" : "0");
   page.replace("%OTA_TEXT%", html_escape(ota_text(os)));
+  page.replace("%NET_STATUS%", net_status_html());
   server.send(200, "text/html; charset=utf-8", page);
 }
 
