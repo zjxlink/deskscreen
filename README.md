@@ -41,12 +41,12 @@
 
 ### 发布新版本（OTA）
 
-```bash
-git tag v0.5.0
-git push origin v0.5.0
-```
+两种方式任选一种：
 
-推送 `vX.Y.Z` 标签后，GitHub Actions 会编译两个板子的固件、跑单元测试、生成 `manifest.json` 并创建 Release。设备从 `releases/latest/download/manifest.json` 检查更新，只有正式版本号（vX.Y.Z）之间才会自动升级；本地编译的开发版不会被自动覆盖，但可以在设置页面手动装上最新正式版。
+- **网页（手机也行）**：打开仓库的 Actions → Release → Run workflow，填写版本号（如 `v0.5.0`），点运行。会在 `main` 的最新提交上创建标签
+- **命令行**：`git tag v0.5.0 && git push origin v0.5.0`
+
+之后 GitHub Actions 会检查版本号、跑单元测试、编译两个板子的固件、生成 `manifest.json` 并创建 Release。设备从 `releases/latest/download/manifest.json` 检查更新，只有正式版本号（vX.Y.Z）之间才会自动升级；本地编译的开发版不会被自动覆盖，但可以在设置页面手动装上最新正式版。
 
 Release 里每个板子有两个文件：
 

@@ -1,16 +1,44 @@
-# 推送 vX.Y.Z 标签时发布 Release：编译两个板子的固件，生成 OTA 用的 manifest.json。
+# 发布 Release：编译两个板子的固件，生成 OTA 用的 manifest.json。
 # 设备从 releases/latest/download/manifest.json 检查更新，见 firmware/src/ota.cpp。
+# 两种触发方式：
+#   1. 推送 vX.Y.Z 标签
+#   2. 在 GitHub 的 Actions 页面手动运行，填写版本号，会在所选分支的最新提交上创建标签（手机上也能操作）
 name: Release
 
 on:
   push:
     tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号，如 v0.5.0"
+        required: true
 
 permissions:
   contents: write
 
+env:
+  VERSION: ${{ github.event.inputs.version || github.ref_name }}
+
 jobs:
+  check-version:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check version
+        run: |
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::版本号必须是 vX.Y.Z 的形式：$VERSION"
+            exit 1
+          fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && \
+             git ls-remote --exit-code --tags origin "refs/tags/$VERSION" > /dev/null; then
+            echo "::error::版本 $VERSION 已经存在"
+            exit 1
+          fi
+
   test:
+    needs: check-version
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -24,12 +52,13 @@ jobs:
         run: pio test -e native
 
   build:
+    needs: check-version
     runs-on: ubuntu-24.04
     strategy:
       matrix:
         env: [box3, desk_v1]
     env:
-      FW_VERSION: ${{ github.ref_name }}
+      FW_VERSION: ${{ github.event.inputs.version || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -73,8 +102,8 @@ jobs:
       - name: Make OTA manifest
         run: |
           python3 firmware/tools/make_manifest.py \
-            --version "${{ github.ref_name }}" \
-            --base-url "${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}" \
+            --version "$VERSION" \
+            --base-url "${{ github.server_url }}/${{ github.repository }}/releases/download/$VERSION" \
             box3=dist/firmware-box3.bin desk_v1=dist/firmware-desk_v1.bin > dist/manifest.json
           cat dist/manifest.json
       - name: Create release
@@ -86,5 +115,6 @@ jobs:
           - 第一次烧录：用 Chrome 打开 https://espressif.github.io/esptool-js/ ，地址填 `0x0`，选择 `firmware-板子名-merged.bin`
           - 已经装过的设备：会自动在线升级；也可以在设置页面上传 `firmware-板子名.bin`（不带 merged 的那个）
           NOTES
-          gh release create "${{ github.ref_name }}" dist/* \
-            --title "${{ github.ref_name }}" --notes-file notes.md --generate-notes
+          # 手动运行时标签还不存在，--target 让 GitHub 在这次编译的提交上创建它
+          gh release create "$VERSION" dist/* --target "${{ github.sha }}" \
+            --title "$VERSION" --notes-file notes.md --generate-notes
