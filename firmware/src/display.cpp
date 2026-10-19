@@ -90,7 +90,7 @@ class LGFX : public lgfx::LGFX_Device {
 
 static LGFX tft;
 
-// 每次刷新 1/6 屏，双缓冲放在内部 DMA 内存里
+// 每次刷新 1/6 屏，缓冲放在内部 DMA 内存里。flush_cb 是同步写屏的，双缓冲没有好处，只用一块省下 25KB 内部 RAM
 static constexpr uint32_t kBufLines = SCREEN_H / 6;
 static lv_disp_draw_buf_t draw_buf;
 static lv_disp_drv_t disp_drv;
@@ -116,9 +116,8 @@ void display_init() {
   lv_init();
 
   size_t buf_bytes = SCREEN_W * kBufLines * sizeof(lv_color_t);
-  auto *buf1 = (lv_color_t *)heap_caps_malloc(buf_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-  auto *buf2 = (lv_color_t *)heap_caps_malloc(buf_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-  lv_disp_draw_buf_init(&draw_buf, buf1, buf2, SCREEN_W * kBufLines);
+  auto *buf = (lv_color_t *)heap_caps_malloc(buf_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+  lv_disp_draw_buf_init(&draw_buf, buf, nullptr, SCREEN_W * kBufLines);
 
   lv_disp_drv_init(&disp_drv);
   disp_drv.hor_res = SCREEN_W;

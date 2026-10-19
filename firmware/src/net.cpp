@@ -16,8 +16,8 @@ HttpsLock::~HttpsLock() { xSemaphoreGive(https_mutex()); }
 struct NetResult {
   bool tried;
   int code;
-  char when[8];   // HH:MM，还没对时则是开机后的秒数
-  char tls[80];   // mbedTLS 的错误描述
+  char when[8];     // HH:MM，还没对时则是开机后的秒数
+  char detail[96];  // 失败原因：TLS 错误或调用方给的说明
 };
 
 static NetResult results[(int)NetService::Count];
@@ -26,7 +26,7 @@ static portMUX_TYPE results_mux = portMUX_INITIALIZER_UNLOCKED;
 static const char *const kNames[] = {"天气", "GitHub", "自选股", "在线升级"};
 static const char *const kLogNames[] = {"weather", "github", "stock", "ota"};
 
-void net_report(NetService s, int code, WiFiClientSecure &client) {
+void net_report(NetService s, int code, WiFiClientSecure &client, const char *detail) {
   NetResult r = {};
   r.tried = true;
   r.code = code;
@@ -37,12 +37,18 @@ void net_report(NetService s, int code, WiFiClientSecure &client) {
     snprintf(r.when, sizeof(r.when), "%lus", (unsigned long)(millis() / 1000));
   }
   if (code != HTTP_CODE_OK) {
-    client.lastError(r.tls, sizeof(r.tls));
+    if (detail) {
+      strlcpy(r.detail, detail, sizeof(r.detail));
+    } else {
+      // 连接成功时 lastError 返回的是 socket 编号（正数），只有负数才是 TLS 错误
+      char tls[80] = "";
+      if (client.lastError(tls, sizeof(tls)) < 0) snprintf(r.detail, sizeof(r.detail), "TLS: %s", tls);
+    }
     String reason = code == kNetBadData ? String("bad data")
                     : code < 0          ? HTTPClient::errorToString(code)
                                         : String("http status");
-    log_w("%s http %d (%s), tls: %s, internal heap %u, largest block %u", kLogNames[(int)s], code,
-          reason.c_str(), r.tls[0] ? r.tls : "-", heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+    log_w("%s http %d (%s), %s, internal heap %u, largest block %u", kLogNames[(int)s], code,
+          reason.c_str(), r.detail[0] ? r.detail : "-", heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
           heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
   }
   portENTER_CRITICAL(&results_mux);
@@ -84,7 +90,7 @@ String net_status_html() {
       } else if (r.code < 0) {
         html += " " + escape(HTTPClient::errorToString(r.code).c_str());
       }
-      if (r.tls[0]) html += "<br><small>TLS：" + escape(r.tls) + "</small>";
+      if (r.detail[0]) html += "<br><small>" + escape(r.detail) + "</small>";
     }
     html += "</li>";
   }

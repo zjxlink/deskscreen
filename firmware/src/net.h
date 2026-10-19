@@ -25,8 +25,9 @@ enum class NetService : uint8_t { Weather, Github, Stock, Ota, Count };
 static constexpr int kNetBadData = -100;
 
 // 记录一次请求的结果，设置页面的「网络诊断」会显示出来。
-// code 为 HTTP 状态码（200 表示成功）、HTTPClient 的负数错误码或 kNetBadData；失败时同时打印日志
-void net_report(NetService s, int code, WiFiClientSecure &client);
+// code 为 HTTP 状态码（200 表示成功）、HTTPClient 的负数错误码或 kNetBadData；
+// detail 是补充说明（如 JSON 解析错误），没有就传 nullptr。失败时同时打印日志
+void net_report(NetService s, int code, WiFiClientSecure &client, const char *detail = nullptr);
 
 // 设置页面用的诊断信息（HTML 片段）：每项服务最近一次的结果、内部 RAM 剩余
 String net_status_html();
