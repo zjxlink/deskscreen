@@ -7,7 +7,7 @@
 #include "board.h"
 #include "display.h"
 #include "github.h"
-#include "night.h"
+#include "screen_ctrl.h"
 #include "settings.h"
 #include "stock.h"
 #include "ui.h"
@@ -18,110 +18,48 @@ static constexpr const char *kHostname = "deskscreen";
 static constexpr uint32_t kWelcomeMs = 8000;      // 连上 WiFi 后显示设置地址的时间
 static constexpr uint32_t kResetHoldMs = 3000;    // 长按 BOOT 键清除 WiFi
 static constexpr uint32_t kShortPressMs = 1000;   // 短按 BOOT 键切换页面
-static constexpr uint32_t kWakeMs = 30000;        // 夜间点亮后保持正常亮度的时间
 
 static WiFiManager wm;
 static String ap_name;
 static uint32_t welcome_until = 0;
 
-static Page page = PAGE_CLOCK;
-static uint32_t page_shown_at = 0;
-static uint8_t page_seconds = 0;
-static bool github_enabled = false;
-static bool stocks_enabled = false;
-
-static uint8_t day_brightness = 180;
-static bool night_on = false;
-static uint16_t night_start = 0;
-static uint16_t night_end = 0;
-static uint8_t night_brightness = 0;
-static bool night_now = false;     // 当前时间在夜间时段内
-static bool dimmed = false;        // 夜间且没有被临时点亮
-static uint32_t woken_until = 0;
+static ScreenCtrl screen;
 
 static void apply_settings() {
   Settings s = settings_get();
-  day_brightness = s.brightness;
-  night_on = s.night_on;
-  night_start = s.night_start;
-  night_end = s.night_end;
-  night_brightness = s.night_brightness;
   ui_set_city(s.city.c_str());
-  page_seconds = s.page_seconds;
-  github_enabled = s.github_token.length() > 0;
-  stocks_enabled = s.stocks.length() > 0;
+
+  ScreenConfig c;
+  c.day_brightness = s.brightness;
+  c.night_on = s.night_on;
+  c.night_start = s.night_start;
+  c.night_end = s.night_end;
+  c.night_brightness = s.night_brightness;
+  c.page_seconds = s.page_seconds;
+  c.page_enabled[PAGE_CLOCK] = true;
+  c.page_enabled[PAGE_GITHUB] = s.github_token.length() > 0;
+  c.page_enabled[PAGE_STOCKS] = s.stocks.length() > 0;
+  screen.configure(c);
 }
 
-// 自动轮播只轮到已经设置好的页面
-static bool page_enabled(Page p) {
-  switch (p) {
-    case PAGE_GITHUB: return github_enabled;
-    case PAGE_STOCKS: return stocks_enabled;
-    default: return true;
-  }
-}
-
-static void show_page(Page p, bool animate) {
-  page = p;
-  page_shown_at = millis();
-  ui_show_page(p, animate);
-}
-
-// 手动切换时轮流显示所有页面（没设置的页面也能看到提示）
-static void next_page() {
-  show_page((Page)((page + 1) % PAGE_COUNT), true);
-}
-
-static bool woken() {
-  return woken_until && (int32_t)(millis() - woken_until) < 0;
-}
-
-// 根据时间段决定目标亮度，并在约 1 秒内渐变过去；开机时直接设定
-static void update_brightness() {
-  static uint32_t last_step = 0;
-  static int current = -1;
-  if (millis() - last_step < 30) return;
-  last_step = millis();
-
+// 当天第几分钟，还没对时返回 -1
+static int local_minutes() {
   struct tm t;
-  night_now = night_on && getLocalTime(&t, 0) && t.tm_year >= 2024 - 1900 &&
-              night_is_active(t.tm_hour * 60 + t.tm_min, night_start, night_end);
-  dimmed = night_now && !woken();
-
-  int target = dimmed ? night_brightness : day_brightness;
-  if (current == target) return;
-  if (current < 0) {
-    current = target;
-  } else {
-    int step = max(1, abs(target - current) / 8);
-    current += target > current ? step : -step;
-  }
-  display_set_brightness(current);
+  if (!getLocalTime(&t, 0) || t.tm_year < 2024 - 1900) return -1;
+  return t.tm_hour * 60 + t.tm_min;
 }
 
-// 夜间调暗时，第一下操作只点亮屏幕（返回 true 表示这下操作已被消耗）；
-// 点亮期间每次操作都顺延 30 秒
-static bool consume_wake() {
-  bool was_dimmed = dimmed;
-  if (night_now) woken_until = millis() + kWakeMs;
-  return was_dimmed;
-}
-
-static void auto_rotate() {
-  // 夜间固定显示时钟，临时点亮期间也不自动轮播
-  if (night_now) {
-    if (page != PAGE_CLOCK && !woken()) show_page(PAGE_CLOCK, true);
-    page_shown_at = millis();
-    return;
+// 把 ScreenCtrl 的状态同步到屏幕：亮度和当前页面
+static void update_screen() {
+  static int last_brightness = -1;
+  screen.tick(millis(), local_minutes());
+  if (screen.brightness() != last_brightness) {
+    last_brightness = screen.brightness();
+    display_set_brightness(last_brightness);
   }
-  if (page_seconds == 0 || millis() - page_shown_at < page_seconds * 1000UL) return;
-  for (int k = 1; k <= PAGE_COUNT; k++) {
-    Page p = (Page)((page + k) % PAGE_COUNT);
-    if (page_enabled(p)) {
-      show_page(p, p != page);
-      return;
-    }
-  }
+  Page p;
+  bool animate;
+  if (screen.take_page_change(p, animate)) ui_show_page(p, animate);
 }
 
 static void connect_wifi() {
@@ -160,9 +98,7 @@ static void check_button() {
       ESP.restart();
     }
   } else {
-    if (pressed_at != 0 && millis() - pressed_at < kShortPressMs && !welcome_until && !consume_wake()) {
-      next_page();
-    }
+    if (pressed_at != 0 && millis() - pressed_at < kShortPressMs) screen.on_input(millis());
     pressed_at = 0;
   }
 }
@@ -174,7 +110,7 @@ static void check_touch() {
   if (millis() - last_poll < 30) return;  // 每次读触摸都要走 I2C，没必要太频繁
   last_poll = millis();
   bool touched = display_touched();
-  if (touched && !was_touched && !welcome_until && !consume_wake()) next_page();
+  if (touched && !was_touched) screen.on_input(millis());
   was_touched = touched;
 }
 
@@ -186,7 +122,7 @@ void setup() {
   display_init();
   ui_init();
   apply_settings();
-  update_brightness();  // 还没对时，先用白天亮度
+  update_screen();  // 还没对时，先用白天亮度
 
   ui_show_status("桌面信息屏", "正在连接 WiFi…");
   ui_refresh_now();
@@ -214,12 +150,10 @@ void loop() {
 
   if (welcome_until && (int32_t)(millis() - welcome_until) >= 0) {
     welcome_until = 0;
-    show_page(PAGE_CLOCK, false);
+    screen.start(millis());
   }
-  if (!welcome_until) auto_rotate();
-
   if (web_config_take_changed()) apply_settings();
-  update_brightness();
+  update_screen();
 
   WeatherData w;
   if (weather_take_update(w)) ui_set_weather(w);

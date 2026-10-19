@@ -88,6 +88,7 @@ firmware/
   src/stock.cpp        后台拉取自选股行情
   src/stock_parse.cpp  解析股票代码和行情（不依赖硬件，有单元测试）
   src/night.cpp        夜间模式的时间计算（有单元测试）
+  src/screen_ctrl.cpp  亮度渐变、夜间点亮、页面轮播的状态机（不依赖硬件，有按时间线模拟的场景测试）
   src/settings.cpp     设置保存（NVS）
   src/fonts/           中文字体（自动生成，不要手改）
   tools/gen_fonts.py   中文字体生成脚本
