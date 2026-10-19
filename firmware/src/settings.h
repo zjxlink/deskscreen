@@ -15,6 +15,10 @@ struct Settings {
   uint16_t night_end;      // 默认 07:00
   uint8_t night_brightness;  // 0 表示关闭背光
   bool auto_update;          // 发现新版本后在凌晨 3~5 点自动安装
+  uint8_t pomo_focus;        // 番茄钟专注分钟数
+  uint8_t pomo_short;        // 短休息分钟数
+  uint8_t pomo_long;         // 长休息分钟数
+  uint8_t pomo_every;        // 每几个番茄后长休息
 };
 
 // 时区固定为北京时间，POSIX 格式

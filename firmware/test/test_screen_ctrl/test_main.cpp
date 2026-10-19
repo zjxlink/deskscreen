@@ -251,6 +251,52 @@ static void test_millis_wraparound() {
   TEST_ASSERT_EQUAL(10, s.ctrl.brightness());
 }
 
+static void test_pinned_page_stays_and_returns() {
+  Sim s(night_cfg());
+  s.take_page();
+  s.ctrl.go_to(PAGE_POMODORO, s.now);
+  s.ctrl.pin(PAGE_POMODORO);
+  TEST_ASSERT_EQUAL(PAGE_POMODORO, s.take_page());
+  s.run(60000);  // 固定期间不轮播
+  TEST_ASSERT_EQUAL(PAGE_POMODORO, s.ctrl.page());
+
+  // 手动切走，过一个轮播间隔（15 秒）自动回来
+  s.ctrl.on_input(s.now);
+  TEST_ASSERT_EQUAL(PAGE_CLOCK, s.take_page());
+  s.run(14000);
+  TEST_ASSERT_EQUAL(PAGE_CLOCK, s.ctrl.page());
+  s.run(2000);
+  TEST_ASSERT_EQUAL(PAGE_POMODORO, s.take_page());
+
+  // 取消固定后恢复正常轮播
+  s.ctrl.unpin();
+  s.run(16000);
+  TEST_ASSERT_EQUAL(PAGE_CLOCK, s.take_page());
+}
+
+static void test_pinned_page_wins_at_night() {
+  Sim s(night_cfg());
+  s.ctrl.go_to(PAGE_POMODORO, s.now);
+  s.ctrl.pin(PAGE_POMODORO);
+  s.minutes = hm(23, 30);
+  s.run(60000);
+  TEST_ASSERT_EQUAL(PAGE_POMODORO, s.ctrl.page());  // 夜里也不回时钟页
+  TEST_ASSERT_EQUAL(10, s.ctrl.brightness());       // 但照样调暗
+}
+
+static void test_wake_for_reminder() {
+  Sim s(night_cfg());
+  s.minutes = hm(1, 0);
+  s.settle();
+  TEST_ASSERT_EQUAL(10, s.ctrl.brightness());
+  s.ctrl.wake(s.now);  // 番茄钟到点提醒
+  s.settle();
+  TEST_ASSERT_EQUAL(180, s.ctrl.brightness());
+  s.run(31000);
+  s.settle();
+  TEST_ASSERT_EQUAL(10, s.ctrl.brightness());
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_boot_uses_day_brightness_without_fade);
@@ -266,5 +312,8 @@ int main() {
   RUN_TEST(test_input_ignored_before_start);
   RUN_TEST(test_settings_change_fades);
   RUN_TEST(test_millis_wraparound);
+  RUN_TEST(test_pinned_page_stays_and_returns);
+  RUN_TEST(test_pinned_page_wins_at_night);
+  RUN_TEST(test_wake_for_reminder);
   return UNITY_END();
 }

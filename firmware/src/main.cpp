@@ -8,6 +8,7 @@
 #include "display.h"
 #include "github.h"
 #include "ota.h"
+#include "pomodoro.h"
 #include "screen_ctrl.h"
 #include "settings.h"
 #include "stock.h"
@@ -19,6 +20,8 @@ static constexpr const char *kHostname = "deskscreen";
 static constexpr uint32_t kWelcomeMs = 8000;      // 连上 WiFi 后显示设置地址的时间
 static constexpr uint32_t kResetHoldMs = 3000;    // 长按 BOOT 键清除 WiFi
 static constexpr uint32_t kShortPressMs = 1000;   // 短按 BOOT 键切换页面
+static constexpr uint32_t kPomoResetMs = 1500;    // 长按番茄钟圆环重置
+static constexpr uint32_t kPomoMsgMs = 60000;     // 阶段结束的提示显示多久
 
 static WiFiManager wm;
 static String ap_name;
@@ -26,6 +29,11 @@ static uint32_t welcome_until = 0;
 
 static ScreenCtrl screen;
 static bool ota_screen = false;  // 正在显示升级进度，页面切换先暂停
+
+static Pomodoro pomo;
+static const char *pomo_msg = nullptr;  // 阶段结束时的提示文字
+static uint32_t pomo_msg_until = 0;
+static bool pomo_dirty = true;           // 番茄钟页需要立即刷新
 
 static void apply_settings() {
   Settings s = settings_get();
@@ -41,7 +49,61 @@ static void apply_settings() {
   c.page_enabled[PAGE_CLOCK] = true;
   c.page_enabled[PAGE_GITHUB] = s.github_token.length() > 0;
   c.page_enabled[PAGE_STOCKS] = s.stocks.length() > 0;
-  screen.configure(c);
+  screen.configure(c);  // 番茄钟页不参与轮播，进行中时固定显示
+
+  PomoConfig pc;
+  pc.focus_min = s.pomo_focus;
+  pc.short_min = s.pomo_short;
+  pc.long_min = s.pomo_long;
+  pc.long_every = s.pomo_every;
+  pomo.configure(pc);
+  pomo_dirty = true;
+}
+
+// 触摸、设置页面的番茄钟操作都走这里
+static void pomo_command(PomoCmd cmd) {
+  uint32_t now = millis();
+  switch (cmd) {
+    case PomoCmd::Toggle: pomo.toggle(now); break;
+    case PomoCmd::Skip: pomo.skip(now); break;
+    case PomoCmd::Reset: pomo.reset(); break;
+  }
+  pomo_msg = nullptr;
+  pomo_dirty = true;
+}
+
+// 推进番茄钟；阶段结束时点亮屏幕、跳到番茄钟页并提示。进行中或提示期间固定在番茄钟页
+static void update_pomodoro() {
+  uint32_t now = millis();
+  struct tm t;
+  int day = getLocalTime(&t, 0) && t.tm_year >= 2024 - 1900 ? t.tm_yday : -1;
+  if (pomo.tick(now, day)) {
+    pomo_msg = pomo.phase() == PomoPhase::Focus ? "休息结束，点圆环开始" : "专注完成，休息一下吧";
+    pomo_msg_until = now + kPomoMsgMs;
+    pomo_dirty = true;
+    if (screen.started()) {
+      screen.wake(now);
+      screen.go_to(PAGE_POMODORO, now);
+    }
+  }
+  if (pomo_msg && (int32_t)(now - pomo_msg_until) >= 0) {
+    pomo_msg = nullptr;
+    pomo_dirty = true;
+  }
+  if (pomo.running() || pomo_msg) {
+    screen.pin(PAGE_POMODORO);
+  } else {
+    screen.unpin();
+  }
+
+  // 秒数变了或状态变了才重画
+  static uint32_t last_secs = UINT32_MAX;
+  uint32_t secs = (pomo.remaining_ms(now) + 999) / 1000;
+  if (secs != last_secs || pomo_dirty) {
+    last_secs = secs;
+    pomo_dirty = false;
+    ui_set_pomodoro(pomo, now, pomo_msg);
+  }
 }
 
 // 当天第几分钟，还没对时返回 -1
@@ -132,14 +194,33 @@ static void check_button() {
   }
 }
 
-// 点一下屏幕切换页面（按下的瞬间触发）
+// 点一下屏幕切换页面（按下的瞬间触发）。
+// 番茄钟页的圆环例外：松手时开始/暂停，按住 1.5 秒重置
 static void check_touch() {
   static bool was_touched = false;
+  static bool on_ring = false;
+  static bool long_done = false;
+  static uint32_t down_at = 0;
   static uint32_t last_poll = 0;
-  if (millis() - last_poll < 30) return;  // 每次读触摸都要走 I2C，没必要太频繁
-  last_poll = millis();
-  bool touched = display_touched();
-  if (touched && !was_touched) screen.on_input(millis());
+  uint32_t now = millis();
+  if (now - last_poll < 30) return;  // 每次读触摸都要走 I2C，没必要太频繁
+  last_poll = now;
+
+  int x = 0, y = 0;
+  bool touched = display_touch(x, y);
+  if (touched && !was_touched) {
+    down_at = now;
+    long_done = false;
+    // 屏幕调暗时第一下只点亮，交给 ScreenCtrl 处理
+    on_ring = screen.started() && !screen.dimmed() && !ota_screen && screen.page() == PAGE_POMODORO &&
+              ui_pomodoro_hit(x, y);
+    if (!on_ring) screen.on_input(now);
+  } else if (touched && on_ring && !long_done && now - down_at >= kPomoResetMs) {
+    long_done = true;
+    pomo_command(PomoCmd::Reset);
+  } else if (!touched && was_touched && on_ring && !long_done) {
+    pomo_command(PomoCmd::Toggle);
+  }
   was_touched = touched;
 }
 
@@ -161,6 +242,7 @@ void setup() {
   MDNS.begin(kHostname);
   MDNS.addService("http", "tcp", 80);
   web_config_begin();
+  web_config_set_pomodoro(&pomo, pomo_command);
   // 网页上传固件期间主循环被阻塞，由上传处理顺带刷新进度画面
   web_config_set_progress_hook([] {
     update_ota_screen();
@@ -188,6 +270,7 @@ void loop() {
     screen.start(millis());
   }
   if (web_config_take_changed()) apply_settings();
+  update_pomodoro();
   update_screen();
   update_ota_screen();
 

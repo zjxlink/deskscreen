@@ -14,7 +14,7 @@ struct ScreenConfig {
   uint16_t night_end = 7 * 60;
   uint8_t night_brightness = 10;
   uint8_t page_seconds = 15;       // 自动轮播间隔，0 表示不轮播
-  bool page_enabled[PAGE_COUNT] = {true, false, false};  // 自动轮播只轮到已设置好的页面
+  bool page_enabled[PAGE_COUNT] = {true};  // 自动轮播只轮到已设置好的页面，默认只有时钟页
 };
 
 class ScreenCtrl {
@@ -33,6 +33,20 @@ class ScreenCtrl {
   // 用户点屏幕或短按按键。夜间调暗时第一下只点亮屏幕；返回 true 表示切换了页面
   bool on_input(uint32_t now_ms);
 
+  // 固定在某个页面（番茄钟进行中）：自动轮播不再切走；手动切走后，过一个轮播间隔再回来。夜间也一样
+  void pin(Page p) {
+    pinned_ = true;
+    pinned_page_ = p;
+  }
+  void unpin() { pinned_ = false; }
+
+  // 立即点亮屏幕（夜间时保持正常亮度 30 秒），用于番茄钟提醒
+  void wake(uint32_t now_ms) { woken_until_ = now_ms + kWakeMs; }
+
+  // 跳到指定页面（带动画）
+  void go_to(Page p, uint32_t now_ms) { show(p, now_ms, true); }
+
+  bool started() const { return started_; }
   int brightness() const { return current_ < 0 ? cfg_.day_brightness : current_; }
   Page page() const { return page_; }
   bool night() const { return night_now_; }
@@ -58,4 +72,6 @@ class ScreenCtrl {
   bool dimmed_ = false;
   int current_ = -1;
   uint32_t last_step_ = 0;
+  bool pinned_ = false;
+  Page pinned_page_ = PAGE_CLOCK;
 };

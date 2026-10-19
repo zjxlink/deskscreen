@@ -54,13 +54,22 @@ void ScreenCtrl::fade(uint32_t now_ms) {
 }
 
 void ScreenCtrl::auto_rotate(uint32_t now_ms) {
+  uint32_t interval = (cfg_.page_seconds ? cfg_.page_seconds : 15) * 1000UL;
+  if (pinned_) {
+    if (page_ == pinned_page_) {
+      page_shown_at_ = now_ms;
+    } else if ((uint32_t)(now_ms - page_shown_at_) >= interval) {
+      show(pinned_page_, now_ms, true);
+    }
+    return;
+  }
   // 夜间固定显示时钟，临时点亮期间也不自动轮播
   if (night_now_) {
     if (page_ != PAGE_CLOCK && !woken(now_ms)) show(PAGE_CLOCK, now_ms, true);
     page_shown_at_ = now_ms;
     return;
   }
-  if (cfg_.page_seconds == 0 || (uint32_t)(now_ms - page_shown_at_) < cfg_.page_seconds * 1000UL) return;
+  if (cfg_.page_seconds == 0 || (uint32_t)(now_ms - page_shown_at_) < interval) return;
   for (int k = 1; k <= PAGE_COUNT; k++) {
     Page p = (Page)((page_ + k) % PAGE_COUNT);
     if (cfg_.page_enabled[p]) {

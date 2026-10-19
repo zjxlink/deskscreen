@@ -69,6 +69,16 @@ static StockRow stock_rows[kMaxStocks];
 static lv_obj_t *lbl_stock_updated;
 static lv_obj_t *lbl_stock_msg;
 
+// 番茄钟：圆环在屏幕正中，半径 88
+static constexpr int kPomoRing = 176;
+static constexpr int kPomoMaxDots = 8;
+static lv_obj_t *pomo_arc;
+static lv_obj_t *lbl_pomo_time;
+static lv_obj_t *lbl_pomo_state;
+static lv_obj_t *lbl_pomo_today;
+static lv_obj_t *lbl_pomo_msg;
+static lv_obj_t *pomo_dots[kPomoMaxDots];
+
 static lv_obj_t *make_screen() {
   lv_obj_t *scr = lv_obj_create(nullptr);
   lv_obj_set_style_bg_color(scr, COLOR_BG, 0);
@@ -303,12 +313,59 @@ static void build_stocks() {
   lv_label_set_text(lbl_stock_msg, "获取中…");
 }
 
+static void build_pomodoro() {
+  lv_obj_t *scr = make_screen();
+  scr_pages[PAGE_POMODORO] = scr;
+
+  lv_obj_t *title = make_label(scr, &font_cn_16, COLOR_SUBTLE);
+  lv_label_set_text(title, "番茄钟");
+  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 12, 10);
+  dot_wifi[PAGE_POMODORO] = make_wifi_dot(scr);
+
+  pomo_arc = lv_arc_create(scr);
+  lv_obj_set_size(pomo_arc, kPomoRing, kPomoRing);
+  lv_obj_align(pomo_arc, LV_ALIGN_CENTER, 0, 0);
+  lv_arc_set_rotation(pomo_arc, 270);  // 从 12 点方向开始
+  lv_arc_set_bg_angles(pomo_arc, 0, 360);
+  lv_arc_set_range(pomo_arc, 0, 1000);
+  lv_obj_remove_style(pomo_arc, nullptr, LV_PART_KNOB);
+  lv_obj_clear_flag(pomo_arc, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_arc_width(pomo_arc, 12, LV_PART_MAIN);
+  lv_obj_set_style_arc_width(pomo_arc, 12, LV_PART_INDICATOR);
+  lv_obj_set_style_arc_color(pomo_arc, COLOR_LINE, LV_PART_MAIN);
+
+  lbl_pomo_time = make_label(scr, &lv_font_montserrat_48, COLOR_TEXT);
+  lv_obj_align(lbl_pomo_time, LV_ALIGN_CENTER, 0, -10);
+  lbl_pomo_state = make_label(scr, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_align(lbl_pomo_state, LV_ALIGN_CENTER, 0, 32);
+
+  // 阶段结束的提示放在顶栏正中，圆环里面放不下
+  lbl_pomo_msg = make_label(scr, &font_cn_16, COLOR_ACCENT);
+  lv_obj_align(lbl_pomo_msg, LV_ALIGN_TOP_MID, 0, 10);
+
+  lbl_pomo_today = make_label(scr, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_align(lbl_pomo_today, LV_ALIGN_BOTTOM_LEFT, 12, -10);
+
+  // 右下角：本轮进度，每个点代表一个番茄
+  for (int i = 0; i < kPomoMaxDots; i++) {
+    lv_obj_t *d = lv_obj_create(scr);
+    lv_obj_set_size(d, 8, 8);
+    lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(d, 0, 0);
+    lv_obj_align(d, LV_ALIGN_BOTTOM_RIGHT, -12 - (kPomoMaxDots - 1 - i) * 14, -14);
+    pomo_dots[i] = d;
+  }
+}
+
 void ui_init() {
   build_status();
   build_main();
   scr_pages[PAGE_CLOCK] = scr_main;
   build_github();
   build_stocks();
+  build_pomodoro();
+  Pomodoro idle;
+  ui_set_pomodoro(idle, 0, nullptr);
 }
 
 void ui_show_status(const char *title, const char *detail) {
@@ -457,6 +514,51 @@ void ui_set_stocks(const StockData &s) {
     lv_obj_set_style_bg_color(r.pill,
                               q.change_pct > 0 ? COLOR_UP : q.change_pct < 0 ? COLOR_DOWN : COLOR_FLAT, 0);
   }
+}
+
+void ui_set_pomodoro(const Pomodoro &p, uint32_t now_ms, const char *msg) {
+  uint32_t left = p.remaining_ms(now_ms);
+  uint32_t total = p.total_ms();
+  uint32_t secs = (left + 999) / 1000;  // 向上取整，开始时显示 25:00 而不是 24:59
+  lv_label_set_text_fmt(lbl_pomo_time, "%02u:%02u", (unsigned)(secs / 60), (unsigned)(secs % 60));
+  lv_arc_set_value(pomo_arc, total ? (int32_t)((uint64_t)left * 1000 / total) : 0);
+
+  bool on_break = p.phase() == PomoPhase::ShortBreak || p.phase() == PomoPhase::LongBreak;
+  lv_color_t color = !p.running() ? COLOR_SUBTLE : on_break ? COLOR_OK : COLOR_ERR;
+  lv_obj_set_style_arc_color(pomo_arc, color, LV_PART_INDICATOR);
+
+  const char *state;
+  if (p.phase() == PomoPhase::Idle) {
+    state = "点圆环开始专注";
+  } else if (!p.running()) {
+    state = p.remaining_ms(now_ms) == total ? "点圆环开始专注" : "已暂停";
+  } else if (p.phase() == PomoPhase::Focus) {
+    state = "专注中";
+  } else {
+    state = p.phase() == PomoPhase::LongBreak ? "长休息" : "短休息";
+  }
+  lv_label_set_text(lbl_pomo_state, state);
+  lv_label_set_text(lbl_pomo_msg, msg ? msg : "");
+  lv_label_set_text_fmt(lbl_pomo_today, "今日完成 %d 个", p.done_today());
+
+  // 点靠右对齐：只显示最右边的 long_every 个，从左到右标记本轮已完成的番茄
+  int every = p.config().long_every < kPomoMaxDots ? p.config().long_every : kPomoMaxDots;
+  for (int i = 0; i < kPomoMaxDots; i++) {
+    int k = i - (kPomoMaxDots - every);
+    if (k < 0) {
+      lv_obj_add_flag(pomo_dots[i], LV_OBJ_FLAG_HIDDEN);
+      continue;
+    }
+    lv_obj_clear_flag(pomo_dots[i], LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_bg_color(pomo_dots[i], k < p.cycle_done() ? COLOR_ERR : COLOR_LINE, 0);
+  }
+}
+
+bool ui_pomodoro_hit(int x, int y) {
+  int dx = x - SCREEN_W / 2;
+  int dy = y - SCREEN_H / 2;
+  int r = kPomoRing / 2 + 12;  // 比圆环稍大一点，好点中
+  return dx * dx + dy * dy <= r * r;
 }
 
 void ui_set_wifi(bool connected) {
