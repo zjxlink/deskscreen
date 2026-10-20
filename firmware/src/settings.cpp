@@ -44,6 +44,9 @@ void settings_begin() {
   current.temp_offset = prefs.getChar("temp_ofs", 0);
   current.away_off = prefs.getBool("away_off", true);
   current.away_min = prefs.getUChar("away_min", 5);
+  current.ai_key = prefs.getString("ai_key", "");
+  current.ai_model = prefs.getString("ai_model", "qwen3-omni-flash");
+  current.ai_voice = prefs.getString("ai_voice", "Cherry");
 }
 
 Settings settings_get() {
@@ -92,6 +95,9 @@ void settings_save(const Settings &s) {
   prefs.putChar("temp_ofs", s.temp_offset);
   prefs.putBool("away_off", s.away_off);
   prefs.putUChar("away_min", s.away_min);
+  prefs.putString("ai_key", s.ai_key);
+  prefs.putString("ai_model", s.ai_model);
+  prefs.putString("ai_voice", s.ai_voice);
 }
 
 void settings_load_pomo_stats(PomoStatsData &d) {

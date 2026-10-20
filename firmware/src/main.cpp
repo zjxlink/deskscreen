@@ -24,6 +24,7 @@
 #include "settings.h"
 #include "stock.h"
 #include "ui.h"
+#include "voice.h"
 #include "weather.h"
 #include "web_config.h"
 
@@ -100,6 +101,12 @@ static RunnerGame game;
 static int game_best = 0;
 static uint32_t game_last = 0;
 
+// AI 聊天页：按住按钮说话，松手发送
+static constexpr uint32_t kChatStayMs = 30000;  // 回答完后至少停留这么久，留时间看字
+static bool chat_has_key = false;
+static bool chat_holding = false;
+static uint32_t chat_busy_at = 0;
+
 static void apply_settings() {
   Settings s = settings_get();
   ui_set_city(s.city.c_str());
@@ -117,7 +124,9 @@ static void apply_settings() {
   c.page_enabled[PAGE_PET] = true;
   c.away_off = s.away_off;
   c.away_min = s.away_min;
-  screen.configure(c);  // 番茄钟页不参与轮播，进行中时固定显示
+  if (!voice_available()) c.page_unavailable |= 1u << PAGE_CHAT;  // 没有麦克风
+  chat_has_key = s.ai_key.length() > 0;
+  screen.configure(c);  // 番茄钟页和 AI 聊天页不参与轮播，番茄钟进行中时固定显示
 
   PomoConfig pc;
   pc.focus_min = s.pomo_focus;
@@ -579,6 +588,40 @@ static void update_quick() {
   if (quick_on && millis() - quick_last >= kQuickIdleMs) close_quick();
 }
 
+static void update_chat() {
+  static uint32_t last = 0;
+  uint32_t now = millis();
+  if (now - last < 50) return;
+  last = now;
+  VoiceStatus st = voice_status();
+  bool busy = st.state == VoiceState::Recording || st.state == VoiceState::Thinking || st.state == VoiceState::Speaking;
+  bool on_page = screen.page() == PAGE_CHAT && !alert_on && !quick_on && !game_on && !ota_screen;
+  if (busy && screen.page() != PAGE_CHAT) {
+    voice_cancel();  // 切到别的页面就不聊了
+    return;
+  }
+  if (busy) chat_busy_at = now;
+  if (screen.page() == PAGE_CHAT && chat_busy_at && now - chat_busy_at < kChatStayMs) {
+    screen.stay(now);  // 聊天中和刚回答完不自动轮播走
+    static uint32_t last_activity = 0;
+    if (busy && now - last_activity > 5000) {
+      last_activity = now;
+      screen.activity(now);  // 也不调暗
+    }
+  }
+  if (!on_page) return;
+  ChatView v;
+  v.state = st.state;
+  v.level = st.level;
+  v.rec_ms = st.rec_ms;
+  v.reply = st.reply;
+  v.error = st.error;
+  v.has_key = chat_has_key;
+  v.blink = st.state != VoiceState::Thinking && now % 4000 < 150;
+  v.bob = st.state == VoiceState::Speaking ? (now / 250) % 2 * -4 : 0;
+  ui_set_chat(v);
+}
+
 static void open_game(uint32_t now) {
   game_on = true;
   game_last = now;
@@ -699,6 +742,16 @@ static void check_touch() {
       was_touched = touched;
       return;
     }
+    if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && !quick_on &&
+        screen.page() == PAGE_CHAT && ui_chat_button_hit(x, y)) {
+      long_done = true;  // 按住说话，松手发送；不算点一下，也不打开快捷设置
+      chat_holding = true;
+      chat_busy_at = now;
+      screen.activity(now);
+      voice_press();
+      was_touched = touched;
+      return;
+    }
     // 屏幕调暗时第一下只点亮，交给 ScreenCtrl 处理
     on_ring = screen.started() && !screen.dimmed() && !ota_screen && !alert_on && !quick_on &&
               screen.page() == PAGE_POMODORO && ui_pomodoro_hit(x, y);
@@ -711,6 +764,9 @@ static void check_touch() {
       long_done = true;
       open_quick(now);
     }
+  } else if (!touched && was_touched && chat_holding) {
+    chat_holding = false;
+    voice_release();
   } else if (!touched && was_touched && !long_done) {
     if (on_ring) {
       pomo_command(PomoCmd::Toggle);
@@ -737,6 +793,7 @@ void setup() {
   game_best = settings_load_game_best();
   display_init();
   audio_begin();  // 解码芯片和触摸共用 I2C，要在屏幕初始化之后
+  voice_begin();
   sensors_begin();
   imu_ok = imu_begin();
   ui_init();
@@ -794,6 +851,7 @@ void loop() {
   update_pet();
   update_quick();
   update_game();
+  update_chat();
   update_screen();
   update_ota_screen();
 

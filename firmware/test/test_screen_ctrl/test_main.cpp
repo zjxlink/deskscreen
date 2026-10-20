@@ -172,6 +172,37 @@ static void test_day_rotation_skips_unconfigured_pages() {
   TEST_ASSERT_EQUAL(PAGE_GITHUB, s.take_page());
 }
 
+static void test_unavailable_page_skipped() {
+  ScreenConfig c = night_cfg();
+  c.page_enabled[PAGE_CHAT] = true;
+  c.page_unavailable = 1u << PAGE_CHAT;  // 没有麦克风
+  Sim s(c);
+  s.ctrl.go_to(PAGE_POMODORO, s.now);
+  s.take_page();
+  s.ctrl.on_input(s.now);
+  TEST_ASSERT_EQUAL(PAGE_CLOCK, s.take_page());  // 手动切换也跳过
+  s.ctrl.go_to(PAGE_POMODORO, s.now);
+  s.take_page();
+  s.run(15500);
+  TEST_ASSERT_EQUAL(PAGE_CLOCK, s.take_page());  // 自动轮播也跳过
+}
+
+static void test_stay_delays_rotation() {
+  ScreenConfig c = night_cfg();
+  c.page_enabled[PAGE_CHAT] = true;
+  Sim s(c);
+  s.ctrl.go_to(PAGE_CHAT, s.now);
+  s.take_page();
+  // 聊天中每秒说一次「还在用」，过了好几个轮播间隔也不切走
+  for (int i = 0; i < 40; i++) {
+    s.run(1000);
+    s.ctrl.stay(s.now);
+  }
+  TEST_ASSERT_EQUAL(PAGE_CHAT, s.take_page());
+  s.run(15500);
+  TEST_ASSERT_EQUAL(PAGE_CLOCK, s.take_page());  // 聊完了照常轮播
+}
+
 static void test_rotation_off_and_single_page() {
   ScreenConfig c = night_cfg();
   c.page_seconds = 0;
@@ -262,9 +293,9 @@ static void test_pinned_page_stays_and_returns() {
 
   // 手动切走，过一个轮播间隔（15 秒）自动回来
   s.ctrl.on_input(s.now);
-  TEST_ASSERT_EQUAL(PAGE_CLOCK, s.take_page());
+  TEST_ASSERT_EQUAL(PAGE_CHAT, s.take_page());  // 番茄钟后面是 AI 聊天页
   s.run(14000);
-  TEST_ASSERT_EQUAL(PAGE_CLOCK, s.ctrl.page());
+  TEST_ASSERT_EQUAL(PAGE_CHAT, s.ctrl.page());
   s.run(2000);
   TEST_ASSERT_EQUAL(PAGE_POMODORO, s.take_page());
 
@@ -430,6 +461,8 @@ int main() {
   RUN_TEST(test_no_auto_rotation_at_night);
   RUN_TEST(test_morning_restores_day);
   RUN_TEST(test_day_rotation_skips_unconfigured_pages);
+  RUN_TEST(test_unavailable_page_skipped);
+  RUN_TEST(test_stay_delays_rotation);
   RUN_TEST(test_rotation_off_and_single_page);
   RUN_TEST(test_night_brightness_zero_turns_off);
   RUN_TEST(test_night_mode_disabled);
