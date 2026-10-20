@@ -2,11 +2,24 @@
 
 #include <HTTPClient.h>
 #include <esp_heap_caps.h>
+#include <mbedtls/platform.h>
 #include <time.h>
 
 static SemaphoreHandle_t https_mutex() {
   static SemaphoreHandle_t m = xSemaphoreCreateMutex();
   return m;
+}
+
+static void *tls_calloc(size_t n, size_t size) {
+  void *p = heap_caps_calloc(n, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  return p ? p : heap_caps_calloc(n, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+}
+
+// heap_caps_free 认得两种内存，所以切换之前从内部 RAM 分配的也能正常释放
+static void tls_free(void *p) { heap_caps_free(p); }
+
+void net_tls_use_psram() {
+  if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0) mbedtls_platform_set_calloc_free(tls_calloc, tls_free);
 }
 
 HttpsLock::HttpsLock() { xSemaphoreTake(https_mutex(), portMAX_DELAY); }
@@ -100,7 +113,7 @@ String net_status_html() {
   html += String("<li>内部 RAM：剩余 ") + heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024 +
           " KB，开机以来最少 " + heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024 +
           " KB，最大连续块 " + heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024 + " KB</li>";
-  // PSRAM 只放界面对象、图片和大块数据，HTTPS 用不到，所以单独列一行
+  // HTTPS 优先用 PSRAM，内部 RAM 主要是任务栈、屏幕缓冲和 WiFi
   size_t psram_total = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
   if (psram_total == 0) {
     html += "<li>PSRAM：<b>没有检测到</b></li>";
