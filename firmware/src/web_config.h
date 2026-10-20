@@ -23,3 +23,6 @@ void web_config_set_pomo_stats(const PomoStats *s, int (*day)());
 
 // 留言板：设置页面提交留言后调用，sound 表示要不要响一声
 void web_config_set_message_hook(void (*hook)(const String &text, bool sound));
+
+// 设置页上「室内温湿度和人体感应」一节显示的当前状态
+void web_config_set_room_hook(String (*hook)());

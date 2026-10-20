@@ -4,7 +4,7 @@
 
 #include "pages.h"
 
-// 屏幕亮度和页面切换的状态机：夜间调暗、夜里临时点亮、自动轮播。
+// 屏幕亮度和页面切换的状态机：夜间调暗、夜里临时点亮、没人时熄屏、自动轮播。
 // 不依赖硬件，时间和输入都由调用方传入，可在电脑上按时间线模拟测试。
 
 struct ScreenConfig {
@@ -15,6 +15,8 @@ struct ScreenConfig {
   uint8_t night_brightness = 10;
   uint8_t page_seconds = 15;       // 自动轮播间隔，0 表示不轮播
   bool page_enabled[PAGE_COUNT] = {true};  // 自动轮播只轮到已设置好的页面，默认只有时钟页
+  bool away_off = false;           // 有人体感应时：没人一段时间后熄屏，有人回来再亮
+  uint8_t away_min = 5;            // 多久没人算离开
 };
 
 class ScreenCtrl {
@@ -40,6 +42,10 @@ class ScreenCtrl {
   }
   void unpin() { pinned_ = false; }
 
+  // 人体感应的结果，主循环每次调用；从没调用过（没有雷达）就当一直有人。
+  // 雷达只对动作敏感，坐着不动也可能一阵子没信号，所以离开要等 away_min 分钟
+  void set_presence(bool present, uint32_t now_ms);
+
   // 立即点亮屏幕（夜间时保持正常亮度 30 秒），用于番茄钟提醒
   void wake(uint32_t now_ms) { woken_until_ = now_ms + kWakeMs; }
 
@@ -51,6 +57,7 @@ class ScreenCtrl {
   Page page() const { return page_; }
   bool night() const { return night_now_; }
   bool dimmed() const { return dimmed_; }
+  bool away() const { return away_; }  // 没人，屏幕已熄灭
 
   // 页面有变化时返回 true，并给出是否需要切换动画
   bool take_page_change(Page &page, bool &animate);
@@ -69,6 +76,9 @@ class ScreenCtrl {
   uint32_t page_shown_at_ = 0;
   uint32_t woken_until_ = 0;
   bool night_now_ = false;
+  bool has_presence_ = false;
+  uint32_t last_present_ = 0;
+  bool away_ = false;
   bool dimmed_ = false;
   int current_ = -1;
   uint32_t last_step_ = 0;

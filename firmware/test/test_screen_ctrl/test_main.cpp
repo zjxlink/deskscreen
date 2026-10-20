@@ -297,6 +297,111 @@ static void test_wake_for_reminder() {
   TEST_ASSERT_EQUAL(10, s.ctrl.brightness());
 }
 
+static ScreenConfig away_cfg() {
+  ScreenConfig c = night_cfg();
+  c.away_off = true;
+  c.away_min = 5;
+  return c;
+}
+
+// 雷达：没人 5 分钟熄屏，有人回来再亮
+static void test_away_turns_off_and_back_on() {
+  Sim s(away_cfg());
+  s.ctrl.set_presence(true, s.now);
+  s.settle();
+  TEST_ASSERT_EQUAL(180, s.ctrl.brightness());
+  s.ctrl.set_presence(false, s.now);
+  s.run(4 * 60000);
+  s.settle();
+  TEST_ASSERT_EQUAL(180, s.ctrl.brightness());  // 不到 5 分钟
+  TEST_ASSERT_FALSE(s.ctrl.away());
+  s.run(61000);
+  s.settle();
+  TEST_ASSERT_TRUE(s.ctrl.away());
+  TEST_ASSERT_EQUAL(0, s.ctrl.brightness());
+  s.ctrl.set_presence(true, s.now);
+  s.run(5);
+  TEST_ASSERT_FALSE(s.ctrl.away());
+  s.settle();
+  TEST_ASSERT_EQUAL(180, s.ctrl.brightness());
+}
+
+// 坐着偶尔动一下就一直亮着
+static void test_occasional_motion_keeps_screen_on() {
+  Sim s(away_cfg());
+  for (int i = 0; i < 10; i++) {
+    s.ctrl.set_presence(true, s.now);
+    s.run(5);
+    s.ctrl.set_presence(false, s.now);
+    s.run(4 * 60000);
+  }
+  TEST_ASSERT_FALSE(s.ctrl.away());
+  TEST_ASSERT_EQUAL(180, s.ctrl.brightness());
+}
+
+// 熄屏时第一下只点亮，不切页面；之后重新计时
+static void test_tap_while_away_only_wakes() {
+  Sim s(away_cfg());
+  s.ctrl.set_presence(false, s.now);
+  s.run(6 * 60000);
+  s.take_page();
+  TEST_ASSERT_TRUE(s.ctrl.dimmed());
+  Page before = s.ctrl.page();
+  TEST_ASSERT_FALSE(s.ctrl.on_input(s.now));
+  TEST_ASSERT_EQUAL(before, s.take_page());
+  s.settle();
+  TEST_ASSERT_EQUAL(180, s.ctrl.brightness());
+  s.run(4 * 60000);
+  TEST_ASSERT_FALSE(s.ctrl.away());
+  s.run(61000);
+  TEST_ASSERT_TRUE(s.ctrl.away());
+}
+
+// 夜里有人回来只恢复到夜间亮度
+static void test_away_at_night_returns_to_night_brightness() {
+  Sim s(away_cfg());
+  s.minutes = hm(1, 0);
+  s.ctrl.set_presence(false, s.now);
+  s.run(6 * 60000);
+  s.settle();
+  TEST_ASSERT_EQUAL(0, s.ctrl.brightness());
+  s.ctrl.set_presence(true, s.now);
+  s.settle();
+  TEST_ASSERT_EQUAL(10, s.ctrl.brightness());
+}
+
+// 提醒会点亮屏幕 30 秒，即使没人
+static void test_wake_overrides_away() {
+  Sim s(away_cfg());
+  s.ctrl.set_presence(false, s.now);
+  s.run(6 * 60000);
+  s.settle();
+  TEST_ASSERT_EQUAL(0, s.ctrl.brightness());
+  s.minutes = hm(12, 0);
+  s.ctrl.wake(s.now);
+  s.settle();
+  TEST_ASSERT_EQUAL(180, s.ctrl.brightness());
+  s.run(31000);
+  s.settle();
+  TEST_ASSERT_EQUAL(0, s.ctrl.brightness());
+}
+
+// 关了这个功能，或者没有雷达（从没调用 set_presence），屏幕一直亮
+static void test_away_disabled_or_no_radar() {
+  ScreenConfig c = away_cfg();
+  c.away_off = false;
+  Sim off(c);
+  off.ctrl.set_presence(false, off.now);
+  off.run(10 * 60000);
+  off.settle();
+  TEST_ASSERT_EQUAL(180, off.ctrl.brightness());
+
+  Sim no_radar(away_cfg());
+  no_radar.run(10 * 60000);
+  no_radar.settle();
+  TEST_ASSERT_EQUAL(180, no_radar.ctrl.brightness());
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_boot_uses_day_brightness_without_fade);
@@ -315,5 +420,11 @@ int main() {
   RUN_TEST(test_pinned_page_stays_and_returns);
   RUN_TEST(test_pinned_page_wins_at_night);
   RUN_TEST(test_wake_for_reminder);
+  RUN_TEST(test_away_turns_off_and_back_on);
+  RUN_TEST(test_occasional_motion_keeps_screen_on);
+  RUN_TEST(test_tap_while_away_only_wakes);
+  RUN_TEST(test_away_at_night_returns_to_night_brightness);
+  RUN_TEST(test_wake_overrides_away);
+  RUN_TEST(test_away_disabled_or_no_radar);
   return UNITY_END();
 }

@@ -25,6 +25,9 @@ void ui_show_page(Page page, bool animate);
 void ui_tick_clock();
 
 void ui_set_city(const char *city);
+
+// 时钟页上的室内温湿度（SENSOR 底座），超过阈值的那一项显示成橙色；没调用过就不显示
+void ui_set_room(float temp, float humidity, bool hot, bool humid);
 void ui_set_weather(const WeatherData &w);
 void ui_set_github(const GithubData &g);
 void ui_set_stocks(const StockData &s);
@@ -39,7 +42,7 @@ void ui_set_pet(PetMood mood, bool blink, const char *line, const char *status);
 void ui_pet_anim(int bob, int zzz);
 
 // 全屏提醒（留言、久坐、喝水、闹钟），盖在当前页面上，关掉后用 ui_show_page 回到原来的页面
-enum class AlertIcon { Message, Sit, Water, Alarm };
+enum class AlertIcon { Message, Sit, Water, Alarm, Climate };
 void ui_show_alert(AlertIcon icon, const char *title, const char *body, const char *foot);
 
 // 触摸点是否落在番茄钟的圆环上（圆环居中，屏幕上下或左右翻转时判断结果也不变）

@@ -29,6 +29,12 @@
   #define PIN_I2S_DOUT      15
   #define PIN_AUDIO_PA      46   // 功放使能，高电平打开
   #define ES8311_ADDR       0x18
+  // SENSOR 底座（可选）：温湿度 AHT30 和毫米波雷达 AT581X 挂在单独的 I2C 上，雷达有人时输出高电平。
+  // 引脚来自乐鑫 esp-box 的 bsp_board.h；没插底座时开机探测不到，自动不用
+  #define HAS_SENSOR_DOCK
+  #define PIN_DOCK_SDA      41
+  #define PIN_DOCK_SCL      40
+  #define PIN_RADAR_OUT     21
 
 #elif defined(BOARD_DESK_V1)
   // 自己画的板子：2.0 寸 IPS ST7789（240x320）

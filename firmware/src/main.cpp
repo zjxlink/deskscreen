@@ -7,6 +7,7 @@
 
 #include "audio.h"
 #include "board.h"
+#include "climate.h"
 #include "clock_events.h"
 #include "display.h"
 #include "github.h"
@@ -16,6 +17,7 @@
 #include "pomodoro.h"
 #include "reminder.h"
 #include "screen_ctrl.h"
+#include "sensors.h"
 #include "settings.h"
 #include "stock.h"
 #include "ui.h"
@@ -57,6 +59,13 @@ static HourlyChime chime;
 static bool alarm_ringing = false;
 static uint32_t alarm_next_ring = 0;
 
+// 室内温湿度（SENSOR 底座），已经加上校准值
+static ClimateAlert climate_alert;
+static int8_t temp_offset = 0;
+static bool room_valid = false;
+static float room_temp = 0;
+static float room_humidity = 0;
+
 // 最近一次的 GitHub 和自选股数据，小猫要看
 static GithubData github_data;
 static StockData stock_data;
@@ -81,6 +90,8 @@ static void apply_settings() {
   c.page_enabled[PAGE_GITHUB] = s.github_token.length() > 0;
   c.page_enabled[PAGE_STOCKS] = s.stocks.length() > 0;
   c.page_enabled[PAGE_PET] = true;
+  c.away_off = s.away_off;
+  c.away_min = s.away_min;
   screen.configure(c);  // 番茄钟页不参与轮播，进行中时固定显示
 
   PomoConfig pc;
@@ -110,6 +121,17 @@ static void apply_settings() {
   ac.days = s.alarm_days;
   alarm_clock.configure(ac);
   chime.set_on(s.chime_on);
+
+  ClimateConfig cc;
+  cc.on = s.climate_on;
+  cc.hot_c = s.hot_c;
+  cc.humid_pct = s.humid_pct;
+  climate_alert.configure(cc);
+  if (temp_offset != s.temp_offset && room_valid) {
+    room_temp += (s.temp_offset - temp_offset) / 10.0f;  // 改了校准值，屏幕上立即按新的显示
+    ui_set_room(room_temp, room_humidity, climate_is_hot(cc, room_temp), climate_is_humid(cc, room_humidity));
+  }
+  temp_offset = s.temp_offset;
   audio_set_volume(s.sound_volume);
 }
 
@@ -265,6 +287,48 @@ static void update_clock_events() {
     audio_play(SoundId::Alarm);
     alarm_next_ring = now + kAlarmRepeatMs;
   }
+}
+
+// SENSOR 底座：雷达决定屏幕亮灭，温湿度显示在时钟页，太热太闷时提醒。没有底座时什么也不做
+static void update_room() {
+  if (!sensors_dock()) return;
+  uint32_t now = millis();
+  screen.set_presence(sensors_presence(), now);
+
+  float t, h;
+  if (!sensors_take_climate(t, h)) return;
+  room_valid = true;
+  room_temp = t + temp_offset / 10.0f;
+  room_humidity = h;
+  const ClimateConfig &cc = climate_alert.config();
+  ui_set_room(room_temp, room_humidity, climate_is_hot(cc, room_temp), climate_is_humid(cc, room_humidity));
+
+  // 夜里不吵人；已经有提醒在显示时等它关掉再说
+  ClimateEvent ev = climate_alert.tick(now, room_temp, room_humidity, screen.night() || alert_on);
+  if (ev == ClimateEvent::None) return;
+  char body[96];
+  if (ev == ClimateEvent::Hot) {
+    snprintf(body, sizeof(body), "室内 %.1f\xC2\xB0" "C，超过了 %d\xC2\xB0" "C\n开窗通通风，或者开空调降降温吧", room_temp, cc.hot_c);
+    show_alert(AlertIcon::Climate, "有点热了", body, "点屏幕或按 BOOT 键关闭", kReminderShowMs);
+  } else {
+    snprintf(body, sizeof(body), "室内湿度 %d%%，超过了 %d%%\n开窗通通风，或者开个除湿吧", (int)lroundf(room_humidity), cc.humid_pct);
+    show_alert(AlertIcon::Climate, "有点闷了", body, "点屏幕或按 BOOT 键关闭", kReminderShowMs);
+  }
+  play(SoundId::Reminder);
+}
+
+// 设置页上显示的底座状态
+static String room_text() {
+  if (!sensors_dock()) return "没有检测到 SENSOR 底座，这一节的设置不起作用。";
+  String s = "已检测到 SENSOR 底座。";
+  if (room_valid) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "现在室内 %.1f°C，湿度 %d%%。", room_temp, (int)lroundf(room_humidity));
+    s += buf;
+  }
+  s += sensors_presence() ? "雷达：有人" : "雷达：暂时没感应到动作";
+  if (screen.away()) s += "（已熄屏）";
+  return s;
 }
 
 // 像素小猫：只在小猫页显示时更新，每 100ms 一帧
@@ -458,6 +522,7 @@ void setup() {
   pomo_stats.load(sd);
   display_init();
   audio_begin();  // 解码芯片和触摸共用 I2C，要在屏幕初始化之后
+  sensors_begin();
   ui_init();
   apply_settings();
   update_screen();  // 还没对时，先用白天亮度
@@ -473,6 +538,7 @@ void setup() {
   web_config_set_pomodoro(&pomo, pomo_command);
   web_config_set_pomo_stats(&pomo_stats, local_day);
   web_config_set_message_hook(on_message);
+  web_config_set_room_hook(room_text);
   // 网页上传固件期间主循环被阻塞，由上传处理顺带刷新进度画面
   web_config_set_progress_hook([] {
     update_ota_screen();
@@ -506,6 +572,8 @@ void loop() {
   update_pomodoro();
   update_reminders();
   update_clock_events();
+  sensors_loop();
+  update_room();
   update_pet();
   update_screen();
   update_ota_screen();

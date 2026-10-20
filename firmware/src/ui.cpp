@@ -51,6 +51,7 @@ static lv_obj_t *lbl_temp;
 static lv_obj_t *lbl_desc;
 static lv_obj_t *lbl_range;
 static lv_obj_t *lbl_humidity;
+static lv_obj_t *lbl_room;
 
 static lv_obj_t *lbl_gh_login;
 static lv_obj_t *lbl_gh_today;
@@ -181,6 +182,12 @@ static void build_main() {
   lbl_sec = make_label(scr_main, &lv_font_montserrat_20, COLOR_SUBTLE);
   lv_label_set_text(lbl_sec, "--");
   lv_obj_align_to(lbl_sec, lbl_time, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -6);
+
+  // 时间下面：室内温湿度，插了 SENSOR 底座才显示
+  lbl_room = make_label(scr_main, &font_cn_16, COLOR_SUBTLE);
+  lv_label_set_recolor(lbl_room, true);
+  lv_obj_align(lbl_room, LV_ALIGN_TOP_MID, 0, 106);
+  lv_obj_add_flag(lbl_room, LV_OBJ_FLAG_HIDDEN);
 
   // 底部：天气卡片
   lv_obj_t *card = lv_obj_create(scr_main);
@@ -496,6 +503,16 @@ void ui_set_city(const char *city) {
   lv_obj_align_to(lbl_city, dot_wifi[PAGE_CLOCK], LV_ALIGN_OUT_LEFT_MID, -8, 0);
 }
 
+void ui_set_room(float temp, float humidity, bool hot, bool humid) {
+  // 超过阈值的数字用橙色；LVGL 的 # 重新着色语法：#RRGGBB 文字#
+  char t[32], h[32];
+  snprintf(t, sizeof(t), hot ? "#DB6D28 %.1f\xC2\xB0" "C#" : "%.1f\xC2\xB0" "C", temp);
+  snprintf(h, sizeof(h), humid ? "#DB6D28 %d%%#" : "%d%%", (int)lroundf(humidity));
+  lv_label_set_text_fmt(lbl_room, "室内 %s · 湿度 %s", t, h);
+  lv_obj_align(lbl_room, LV_ALIGN_TOP_MID, 0, 106);
+  lv_obj_clear_flag(lbl_room, LV_OBJ_FLAG_HIDDEN);
+}
+
 void ui_set_weather(const WeatherData &w) {
   if (w.error) {
     // 只有开机后一次都没成功过才会收到错误，天气描述那行保持「获取中…」
@@ -680,6 +697,10 @@ void ui_show_alert(AlertIcon icon, const char *title, const char *body, const ch
     case AlertIcon::Water:
       lv_label_set_text(alert_icon, LV_SYMBOL_TINT);
       lv_obj_set_style_bg_color(alert_badge, lv_color_hex(0x1F6FEB), 0);
+      break;
+    case AlertIcon::Climate:
+      lv_label_set_text(alert_icon, LV_SYMBOL_WARNING);
+      lv_obj_set_style_bg_color(alert_badge, lv_color_hex(0xDB6D28), 0);
       break;
   }
   lv_obj_center(alert_icon);
