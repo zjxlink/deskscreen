@@ -2,7 +2,7 @@
 
 只记录 v0.6.0 之后的版本。每个版本的固件在 [Releases](https://github.com/zjxlink/test-repo/releases) 下载，开了自动升级的设备会在凌晨 3～5 点自己装上。
 
-## 未发布
+## v0.16.0
 
 - 在线升级可以用自己的服务器：设置网页「系统 › 固件升级」多了「自建升级服务器」，填上 manifest.json 的地址后，检查更新时先试这里，连不上再用 GitHub。自建服务器可以用 http，固件地址可以写相对路径
 - 新增 `server/ota-mirror`：放在 NAS（飞牛 fnOS 等）上用 Docker 跑的小服务，每小时从 GitHub 拉最新固件，校验后提供下载，配合反向代理加 HTTPS
