@@ -43,17 +43,79 @@ static bool is_md5_hex(const char *s) {
   return true;
 }
 
-bool ota_parse_manifest(JsonDocument &doc, const char *board, OtaManifest &out) {
+static bool starts_with(const char *s, const char *prefix) {
+  return strncmp(s, prefix, strlen(prefix)) == 0;
+}
+
+static bool is_absolute_url(const char *s) {
+  return starts_with(s, "https://") || starts_with(s, "http://");
+}
+
+bool ota_resolve_url(const char *base, const char *ref, char *out, size_t n) {
+  if (!ref || !*ref || n == 0) return false;
+  size_t keep;  // base 里保留的前缀长度
+  if (is_absolute_url(ref)) {
+    keep = 0;
+  } else {
+    if (!base || !is_absolute_url(base)) return false;
+    const char *host = strstr(base, "://") + 3;
+    const char *path = strchr(host, '/');
+    if (*ref == '/') {
+      keep = path ? (size_t)(path - base) : strlen(base);
+    } else {
+      // 去掉 ?参数 后，保留到最后一个 / 为止
+      const char *end = strchr(host, '?');
+      if (!end) end = base + strlen(base);
+      const char *slash = nullptr;
+      for (const char *c = path; c && c < end; c++) {
+        if (*c == '/') slash = c;
+      }
+      if (!slash) {
+        keep = end - base;
+        if (keep + 1 + strlen(ref) >= n) return false;
+        memcpy(out, base, keep);
+        out[keep] = '/';
+        strcpy(out + keep + 1, ref);
+        return true;
+      }
+      keep = slash + 1 - base;
+    }
+  }
+  if (keep + strlen(ref) >= n) return false;
+  memcpy(out, base, keep);
+  strcpy(out + keep, ref);
+  return true;
+}
+
+bool ota_is_valid_source_url(const char *url) {
+  if (!url || !is_absolute_url(url) || strlen(url) >= 160) return false;
+  const char *host = strstr(url, "://") + 3;
+  if (*host == 0 || *host == '/') return false;
+  for (const char *c = url; *c; c++) {
+    if ((unsigned char)*c <= ' ') return false;
+  }
+  return true;
+}
+
+bool ota_parse_manifest(JsonDocument &doc, const char *board, OtaManifest &out, const char *manifest_url) {
   const char *version = doc["version"] | "";
   JsonObject b = doc["boards"][board];
-  const char *url = b["url"] | "";
+  const char *ref = b["url"] | "";
   const char *md5 = b["md5"] | "";
   uint32_t size = b["size"] | 0u;
 
   int x, y, z;
   if (!ota_parse_version(version, x, y, z)) return false;
-  if (strncmp(url, "https://", 8) != 0 || strlen(url) >= sizeof(out.url)) return false;
   if (!is_md5_hex(md5) || size == 0) return false;
+  char url[sizeof(out.url)];
+  if (!manifest_url) {
+    if (!starts_with(ref, "https://") || strlen(ref) >= sizeof(url)) return false;
+    strcpy(url, ref);
+  } else if (!ota_resolve_url(manifest_url, ref, url, sizeof(url))) {
+    return false;
+  }
+  // https 拿到的 manifest 不能把固件下载降级到 http
+  if (starts_with(manifest_url ? manifest_url : "https://", "https://") && !starts_with(url, "https://")) return false;
 
   strncpy(out.version, version, sizeof(out.version) - 1);
   out.version[sizeof(out.version) - 1] = 0;

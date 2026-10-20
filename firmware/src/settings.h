@@ -18,6 +18,7 @@ struct Settings {
   uint16_t night_end;      // 默认 07:00
   uint8_t night_brightness;  // 0 表示关闭背光
   bool auto_update;          // 发现新版本后在凌晨 3~5 点自动安装
+  String ota_url;            // 自建升级服务器的 manifest.json 地址，空表示只用 GitHub
   uint8_t pomo_focus;        // 番茄钟专注分钟数
   uint8_t pomo_short;        // 短休息分钟数
   uint8_t pomo_long;         // 长休息分钟数

@@ -171,6 +171,7 @@ nav a.on{color:var(--ink);font-weight:600}
 <div class="ver"><b id="curVer"></b><small id="otaText"></small></div>
 <div class="btns"><button type="button" class="btn g" data-act="check">检查更新</button><button type="button" class="btn" data-act="install">立即升级</button></div>
 <label class="row"><div class="l"><b>凌晨 3～5 点自动升级</b><small>发现新版本后自动安装</small></div><input type="checkbox" class="sw" name="auto_update"></label>
+<div class="fld"><label class="lab" for="f_ota_url">自建升级服务器（选填，填 manifest.json 的地址；先试这里，连不上再用 GitHub）</label><input class="txt" id="f_ota_url" name="ota_url" maxlength="159" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="https://ota.example.com/deskscreen/manifest.json"></div>
 <div class="fld"><label class="lab" for="fw">手动上传固件（Release 里的 firmware-板子名.bin）</label><div class="file"><input id="fw" type="file" accept=".bin"><button type="button" class="btn g s" id="fwGo">上传</button></div></div>
 </section>
 <section class="card">

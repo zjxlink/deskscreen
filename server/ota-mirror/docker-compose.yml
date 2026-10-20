@@ -1,0 +1,14 @@
+# 在 NAS 上：把这个文件夹拷过去，执行 docker compose up -d --build
+services:
+  ota-mirror:
+    build: .
+    container_name: deskscreen-ota
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      REPO: zjxlink/test-repo
+      INTERVAL: "3600"
+      # GH_PREFIX: https://你的加速地址/   # 家里连 GitHub 也慢时再填

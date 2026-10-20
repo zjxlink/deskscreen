@@ -17,7 +17,7 @@
 #define FW_VERSION "dev"
 #endif
 
-// 最新 Release 里的 manifest.json；国内访问 GitHub 慢的话，可以换成自己的镜像地址
+// 最新 Release 里的 manifest.json。设置里填了自己的升级服务器时先试那边，失败了再来这里
 #ifndef OTA_MANIFEST_URL
 #define OTA_MANIFEST_URL "https://github.com/zjxlink/test-repo/releases/latest/download/manifest.json"
 #endif
@@ -76,14 +76,35 @@ OtaStatus ota_status() {
   return s;
 }
 
-static void begin_https(WiFiClientSecure &client, HTTPClient &http, const char *url) {
-  client.setCACert(ROOT_CA_BUNDLE);
-  client.setHandshakeTimeout(kTlsHandshakeTimeoutS);
+// 自建服务器可能只有 http（比如局域网里的 NAS），所以两种连接都要能用
+struct Conn {
+  WiFiClientSecure tls;
+  WiFiClient plain;
+  HTTPClient http;
+  bool secure = true;
+};
+
+static void begin_get(Conn &c, const char *url) {
+  c.secure = strncmp(url, "https://", 8) == 0;
   // Release 的下载地址会跳转到 githubusercontent.com
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  http.setUserAgent("DeskScreen/" FW_VERSION);
-  http.setTimeout(15000);
-  http.begin(client, url);
+  c.http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  c.http.setUserAgent("DeskScreen/" FW_VERSION);
+  c.http.setTimeout(15000);
+  if (c.secure) {
+    c.tls.setCACert(ROOT_CA_BUNDLE);
+    c.tls.setHandshakeTimeout(kTlsHandshakeTimeoutS);
+    c.http.begin(c.tls, url);
+  } else {
+    c.http.begin(c.plain, url);
+  }
+}
+
+static void report(Conn &c, int code, const char *detail = nullptr) {
+  if (c.secure) {
+    net_report(NetService::Ota, code, c.tls, detail);
+  } else {
+    net_report(NetService::Ota, code, detail);
+  }
 }
 
 // 检查期间如果开始了网页上传，就不再改动状态，免得覆盖上传进度
@@ -97,31 +118,50 @@ static void check_failed(const char *error) {
   xSemaphoreGive(lock);
 }
 
-static bool check() {
-  set_state(OtaState::Checking, "");
+// 从一个地址取 manifest，失败时把原因写进 err
+static bool fetch_manifest(const char *url, OtaManifest &m, char *err, size_t n) {
   HttpsLock https;
-  WiFiClientSecure client;
-  HTTPClient http;
-  begin_https(client, http, OTA_MANIFEST_URL);
-  int code = http.GET();
+  Conn c;
+  begin_get(c, url);
+  int code = c.http.GET();
   if (code != HTTP_CODE_OK) {
-    net_report(NetService::Ota, code, client);
-    http.end();
-    char err[64];
-    snprintf(err, sizeof(err), "检查更新失败（HTTP %d）", code);
-    check_failed(err);
+    report(c, code);
+    c.http.end();
+    snprintf(err, n, "HTTP %d", code);
     return false;
   }
   JsonDocument doc;
-  DeserializationError e = deserializeJson(doc, http.getString());
-  http.end();
-  OtaManifest m;
-  if (e || !ota_parse_manifest(doc, BOARD_NAME, m)) {
-    net_report(NetService::Ota, kNetBadData, client, e ? e.c_str() : "manifest has no matching board");
-    check_failed("版本信息格式不对");
+  DeserializationError e = deserializeJson(doc, c.http.getString());
+  c.http.end();
+  if (e || !ota_parse_manifest(doc, BOARD_NAME, m, url)) {
+    report(c, kNetBadData, e ? e.c_str() : "manifest has no matching board");
+    strlcpy(err, "格式错", n);  // 和两个来源的原因拼在一起，要短，状态里只有 64 字节
     return false;
   }
-  net_report(NetService::Ota, HTTP_CODE_OK, client);
+  report(c, HTTP_CODE_OK);
+  return true;
+}
+
+static bool check() {
+  set_state(OtaState::Checking, "");
+  String own = settings_get().ota_url;
+  OtaManifest m;
+  bool mirror = false;
+  char own_err[32] = "", gh_err[32] = "";
+  if (own.length() > 0) {
+    mirror = fetch_manifest(own.c_str(), m, own_err, sizeof(own_err));
+    if (!mirror) log_w("ota: own server failed (%s), trying GitHub", own_err);
+  }
+  if (!mirror && !fetch_manifest(OTA_MANIFEST_URL, m, gh_err, sizeof(gh_err))) {
+    char err[64];
+    if (own.length() > 0) {
+      snprintf(err, sizeof(err), "检查更新失败（自建 %s，GitHub %s）", own_err, gh_err);
+    } else {
+      snprintf(err, sizeof(err), "检查更新失败（%s）", gh_err);
+    }
+    check_failed(err);
+    return false;
+  }
 
   bool newer = ota_is_newer(FW_VERSION, m.version);
   int x, y, z;
@@ -130,6 +170,7 @@ static bool check() {
   manifest = m;
   auto_ok = newer;
   strlcpy(status.latest, m.version, sizeof(status.latest));
+  status.mirror = mirror;
   // 开发版可以手动装上最新正式版，但不会自动安装
   if (status.state == OtaState::Checking) {
     status.state = newer || !release_build ? OtaState::Available : OtaState::UpToDate;
@@ -145,12 +186,12 @@ static void download() {
   if (!try_claim()) return;  // 网页上传抢先开始了
 
   HttpsLock https;  // 下载期间其他任务的请求会排队等着
-  WiFiClientSecure client;
-  HTTPClient http;
-  begin_https(client, http, m.url);
+  Conn c;
+  begin_get(c, m.url);
+  HTTPClient &http = c.http;
   int code = http.GET();
   if (code != HTTP_CODE_OK) {
-    net_report(NetService::Ota, code, client);
+    report(c, code);
     http.end();
     char err[64];
     snprintf(err, sizeof(err), "下载失败（HTTP %d）", code);

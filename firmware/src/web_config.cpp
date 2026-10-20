@@ -11,6 +11,7 @@
 #include "net.h"
 #include "night.h"
 #include "ota.h"
+#include "ota_util.h"
 #include "photos.h"
 #include "settings.h"
 #include "stock.h"
@@ -33,8 +34,9 @@ static String ota_text(const OtaStatus &s) {
   switch (s.state) {
     case OtaState::Idle: return "还没有检查过更新";
     case OtaState::Checking: return "正在检查更新…";
-    case OtaState::UpToDate: return String("已是最新版本（") + s.latest + "）";
-    case OtaState::Available: return String("发现新版本 ") + s.latest + "，可以点「立即升级」";
+    case OtaState::UpToDate: return String("已是最新版本（") + s.latest + (s.mirror ? "，来自自建服务器）" : "）");
+    case OtaState::Available:
+      return String("发现新版本 ") + s.latest + (s.mirror ? "（来自自建服务器）" : "") + "，可以点「立即升级」";
     case OtaState::Downloading: return String("正在升级：") + s.progress + "%";
     case OtaState::Done: return "升级完成，设备正在重启";
     case OtaState::Failed: return String("失败：") + s.error;
@@ -94,6 +96,7 @@ static void handle_api_settings() {
   doc["stocks"] = s.stocks;
   doc["has_token"] = s.github_token.length() > 0;  // Token 和 Key 不发给网页，只告诉有没有
   doc["auto_update"] = s.auto_update;
+  doc["ota_url"] = s.ota_url;
   doc["pomo_focus"] = s.pomo_focus;
   doc["pomo_short"] = s.pomo_short;
   doc["pomo_long"] = s.pomo_long;
@@ -252,6 +255,12 @@ static void handle_save() {
   s.night_on = server.hasArg("night_on");
   s.night_sun = server.hasArg("night_sun");
   s.auto_update = server.hasArg("auto_update");
+  if (server.hasArg("ota_url")) {
+    String ota_url = server.arg("ota_url");
+    ota_url.trim();
+    // 填错了就当没填，照样用 GitHub；网页上会提示格式
+    s.ota_url = ota_is_valid_source_url(ota_url.c_str()) ? ota_url : String("");
+  }
   s.sound_on = server.hasArg("sound_on");
   s.sound_quiet_night = server.hasArg("sound_quiet");
   long vol = server.arg("sound_volume").toInt();
