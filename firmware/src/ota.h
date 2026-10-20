@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// 在线升级：从 GitHub Release 的 manifest.json 检查新版本，下载后校验 MD5 写入另一个 OTA 分区
+// 在线升级：从自建服务器（设置里填了的话）或 GitHub Release 的 manifest.json 检查新版本，下载后校验 MD5 写入另一个 OTA 分区
 
 enum class OtaState : uint8_t {
   Idle,
@@ -18,6 +18,7 @@ enum class OtaState : uint8_t {
 struct OtaStatus {
   OtaState state;
   char latest[24];  // 最新版本号（检查过才有）
+  bool mirror;      // 版本信息来自自建服务器（否则是 GitHub）
   int progress;     // 下载进度 0~100
   char error[64];
 };

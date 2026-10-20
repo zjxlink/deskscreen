@@ -85,6 +85,57 @@ static void test_reject_bad_manifest() {
   check_bad_manifest("{}");
 }
 
+static void check_resolve(const char *base, const char *ref, const char *want) {
+  char out[192];
+  TEST_ASSERT_TRUE_MESSAGE(ota_resolve_url(base, ref, out, sizeof(out)), ref);
+  TEST_ASSERT_EQUAL_STRING(want, out);
+}
+
+static void test_resolve_url() {
+  check_resolve("https://ota.example.com/deskscreen/manifest.json", "v1.0.0/firmware-box3.bin",
+                "https://ota.example.com/deskscreen/v1.0.0/firmware-box3.bin");
+  check_resolve("https://ota.example.com/deskscreen/manifest.json?x=1", "a.bin",
+                "https://ota.example.com/deskscreen/a.bin");
+  check_resolve("https://ota.example.com/deskscreen/manifest.json", "/fw/a.bin", "https://ota.example.com/fw/a.bin");
+  check_resolve("http://192.168.0.2:8080", "a.bin", "http://192.168.0.2:8080/a.bin");
+  check_resolve("http://192.168.0.2:8080", "/a.bin", "http://192.168.0.2:8080/a.bin");
+  check_resolve("https://a/m.json", "https://b/c.bin", "https://b/c.bin");
+  char out[16];
+  TEST_ASSERT_FALSE(ota_resolve_url("ftp://a/m.json", "a.bin", out, sizeof(out)));
+  TEST_ASSERT_FALSE(ota_resolve_url("https://a/m.json", "", out, sizeof(out)));
+  TEST_ASSERT_FALSE(ota_resolve_url("https://a/m.json", "a-very-long-name.bin", out, sizeof(out)));
+}
+
+static void test_source_url() {
+  TEST_ASSERT_TRUE(ota_is_valid_source_url("https://ota.example.com/deskscreen/manifest.json"));
+  TEST_ASSERT_TRUE(ota_is_valid_source_url("http://192.168.0.2:8080/manifest.json"));
+  TEST_ASSERT_FALSE(ota_is_valid_source_url("ota.example.com/manifest.json"));
+  TEST_ASSERT_FALSE(ota_is_valid_source_url("https://"));
+  TEST_ASSERT_FALSE(ota_is_valid_source_url("https:///manifest.json"));
+  TEST_ASSERT_FALSE(ota_is_valid_source_url("https://a b/manifest.json"));
+  TEST_ASSERT_FALSE(ota_is_valid_source_url(""));
+}
+
+// 自建服务器的 manifest：相对地址、http
+static void test_mirror_manifest() {
+  JsonDocument doc;
+  deserializeJson(doc, "{\"version\":\"v1.0.0\",\"boards\":{\"box3\":{\"url\":\"v1.0.0/firmware-box3.bin\","
+                       "\"md5\":\"0123456789abcdef0123456789abcdef\",\"size\":1}}}");
+  OtaManifest m{};
+  TEST_ASSERT_TRUE(ota_parse_manifest(doc, "box3", m, "https://ota.example.com/ds/manifest.json"));
+  TEST_ASSERT_EQUAL_STRING("https://ota.example.com/ds/v1.0.0/firmware-box3.bin", m.url);
+  TEST_ASSERT_TRUE(ota_parse_manifest(doc, "box3", m, "http://192.168.0.2/manifest.json"));
+  TEST_ASSERT_EQUAL_STRING("http://192.168.0.2/v1.0.0/firmware-box3.bin", m.url);
+  // 不传 manifest 地址时不接受相对地址
+  TEST_ASSERT_FALSE(ota_parse_manifest(doc, "box3", m));
+
+  // https 的 manifest 不能指向 http 的固件；http 的 manifest 可以
+  deserializeJson(doc, "{\"version\":\"v1.0.0\",\"boards\":{\"box3\":{\"url\":\"http://x/f.bin\","
+                       "\"md5\":\"0123456789abcdef0123456789abcdef\",\"size\":1}}}");
+  TEST_ASSERT_FALSE(ota_parse_manifest(doc, "box3", m, "https://ota.example.com/manifest.json"));
+  TEST_ASSERT_TRUE(ota_parse_manifest(doc, "box3", m, "http://192.168.0.2/manifest.json"));
+}
+
 static void test_app_image_check() {
   uint8_t app[64] = {0};
   app[0] = 0xE9;
@@ -110,6 +161,9 @@ int main() {
   RUN_TEST(test_is_newer);
   RUN_TEST(test_parse_manifest);
   RUN_TEST(test_reject_bad_manifest);
+  RUN_TEST(test_resolve_url);
+  RUN_TEST(test_source_url);
+  RUN_TEST(test_mirror_manifest);
   RUN_TEST(test_app_image_check);
   return UNITY_END();
 }
