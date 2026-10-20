@@ -119,10 +119,9 @@ static RunnerGame game;
 static int game_best = 0;
 static uint32_t game_last = 0;
 
-// AI 聊天页：按住按钮说话，松手发送
+// AI 聊天页：点一下开始连续对话，小橘在说时点一下打断
 static constexpr uint32_t kChatStayMs = 30000;  // 回答完后至少停留这么久，留时间看字
 static bool chat_has_key = false;
-static bool chat_holding = false;
 static uint32_t chat_busy_at = 0;
 
 // 电子相册：照片在 TF 卡上，后台解码。在相册页时不自动轮播走；打开屏保后，空闲一段时间自动进相册，碰一下回到原来的页面
@@ -719,7 +718,8 @@ static void update_chat() {
   if (now - last < 50) return;
   last = now;
   VoiceStatus st = voice_status();
-  bool busy = st.state == VoiceState::Recording || st.state == VoiceState::Thinking || st.state == VoiceState::Speaking;
+  bool busy = st.state == VoiceState::Connecting || st.state == VoiceState::Listening ||
+              st.state == VoiceState::Hearing || st.state == VoiceState::Thinking || st.state == VoiceState::Speaking;
   bool on_page = screen.page() == PAGE_CHAT && !alert_on && !quick_on && !game_on && !ota_screen;
   if (busy && screen.page() != PAGE_CHAT) {
     voice_cancel();  // 切到别的页面就不聊了
@@ -738,7 +738,9 @@ static void update_chat() {
   ChatView v;
   v.state = st.state;
   v.level = st.level;
-  v.rec_ms = st.rec_ms;
+  v.latency_ms = st.latency_ms;
+  v.idle_left_ms = st.idle_left_ms;
+  v.heard = st.heard;
   v.reply = st.reply;
   v.error = st.error;
   v.has_key = chat_has_key;
@@ -978,11 +980,10 @@ static void check_touch() {
     }
     if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && !quick_on &&
         screen.page() == PAGE_CHAT && ui_chat_button_hit(x, y)) {
-      long_done = true;  // 按住说话，松手发送；不算点一下，也不打开快捷设置
-      chat_holding = true;
+      long_done = true;  // 按下就算：开始、挂断或打断；不算翻页，也不打开快捷设置
       chat_busy_at = now;
       screen.activity(now);
-      voice_press();
+      voice_tap();
       was_touched = touched;
       return;
     }
@@ -998,9 +999,6 @@ static void check_touch() {
       long_done = true;
       open_quick(now);
     }
-  } else if (!touched && was_touched && chat_holding) {
-    chat_holding = false;
-    voice_release();
   } else if (!touched && was_touched && !long_done && moved) {
     // 滑动：横着滑够远才翻页，竖着滑或者滑得太短什么也不做
     int dx = last_x - down_x;

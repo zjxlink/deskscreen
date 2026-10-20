@@ -293,7 +293,7 @@ const CARDS=[
 {t:'services',title:'AI 语音聊天',icon:'mic',meta:'has_ai',f:[
  {type:'secret',k:'ai_key',clear:'ai_clear',label:'阿里云百炼 API Key',ph:'sk-...'},
  {type:'two',f:[{k:'ai_model',label:'模型'},{k:'ai_voice',label:'音色'}]}],
- hint:'在「AI 聊天」页按住麦克风按钮说话，松手后小橘用语音回答。Key 在 <a href="https://bailian.console.aliyun.com/" target="_blank">阿里云百炼控制台</a> 的「API Key」里创建（北京地域），按用量计费。模型默认 qwen3-omni-flash；音色默认 Cherry（女声），也可以填 Ethan（男声）等。'},
+ hint:'在「AI 聊天」页点「开始聊天」，之后直接说话就行，说完小橘自动回答，可以一直聊下去；小橘说话时点「打断」插话，20 秒没人说话自动挂断。Key 在 <a href="https://bailian.console.aliyun.com/" target="_blank">阿里云百炼控制台</a> 的「API Key」里创建（北京地域），按用量计费。模型默认 qwen3-omni-flash（实时对话自动用它的 -realtime 版本）；音色默认 Cherry（女声），也可以填 Ethan（男声）等。'},
 {t:'remind',title:'番茄钟',icon:'timer',f:[
  {type:'num',k:'pomo_focus',label:'专注',unit:'分钟'},
  {type:'num',k:'pomo_short',label:'短休息',unit:'分钟'},

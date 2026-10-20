@@ -937,7 +937,7 @@ static void build_chat() {
   lv_label_set_long_mode(lbl_chat_hint, LV_LABEL_LONG_DOT);
   lv_obj_align(lbl_chat_hint, LV_ALIGN_TOP_MID, 0, 154);
 
-  // 按住说话的按钮，录音时下面有一条音量条
+  // 开始聊天 / 挂断 / 打断的按钮，在听的时候下面有一条音量条
   chat_button = lv_obj_create(scr);
   lv_obj_set_size(chat_button, 168, 46);
   lv_obj_align(chat_button, LV_ALIGN_BOTTOM_MID, 0, -14);
@@ -952,7 +952,7 @@ static void build_chat() {
   lv_obj_set_height(chat_level, 4);
   lv_obj_set_style_radius(chat_level, 2, 0);
   lv_obj_set_style_border_width(chat_level, 0, 0);
-  lv_obj_set_style_bg_color(chat_level, COLOR_ERR, 0);
+  lv_obj_set_style_bg_color(chat_level, COLOR_ACCENT, 0);
   lv_obj_add_flag(chat_level, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -977,10 +977,12 @@ static void set_text(lv_obj_t *label, const char *text) {
 void ui_set_chat(const ChatView &v) {
   PetMood mood = PetMood::Normal;
   const char *hint = "";
-  const char *button = "按住说话";
-  lv_color_t button_color = COLOR_ACCENT;
-  const char *reply = v.reply && v.reply[0] ? v.reply : "喵！按住下面的按钮跟我说话，说完松手，我就回答你。";
-  char rec[48];
+  const char *button = "挂断";
+  lv_color_t button_color = COLOR_ERR;
+  bool has_reply = v.reply && v.reply[0];
+  const char *reply = has_reply ? v.reply : "喵！点下面的按钮接通，然后直接跟我说话就行，不用一直按着。";
+  bool level = false;
+  char buf[192];
   switch (v.state) {
     case VoiceState::Off:
       reply = "这块板子没有麦克风，聊不了天喵。";
@@ -988,33 +990,65 @@ void ui_set_chat(const ChatView &v) {
       button_color = COLOR_FLAT;
       break;
     case VoiceState::Idle:
+      button = "开始聊天";
+      button_color = COLOR_ACCENT;
+      hint = v.error;
       if (!v.has_key) {
         reply = "先在设置网页里填上阿里云百炼的 API Key，我就能跟你聊天啦。";
         hint = "设置网页 →「AI 语音聊天」";
       }
       break;
-    case VoiceState::Recording:
-      snprintf(rec, sizeof(rec), "在听呢… %u 秒", (unsigned)(v.rec_ms / 1000));
-      hint = rec;
-      button = "松手发送";
-      button_color = COLOR_ERR;
+    case VoiceState::Connecting:
+      hint = "正在接通…";
+      break;
+    case VoiceState::Listening:
+      level = true;
+      if (v.error && v.error[0]) {
+        hint = v.error;
+      } else if (v.idle_left_ms > 0 && v.idle_left_ms < 8000) {
+        snprintf(buf, sizeof(buf), "没听到声音，%u 秒后挂断", (unsigned)(v.idle_left_ms / 1000 + 1));
+        hint = buf;
+      } else if (v.latency_ms) {
+        snprintf(buf, sizeof(buf), "在听，直接说吧 · 上次 %u.%u 秒回应", (unsigned)(v.latency_ms / 1000),
+                 (unsigned)(v.latency_ms % 1000 / 100));
+        hint = buf;
+      } else {
+        hint = "在听，直接说吧";
+      }
+      break;
+    case VoiceState::Hearing:
+      level = true;
+      hint = "在听…";
       break;
     case VoiceState::Thinking:
       mood = PetMood::Bored;
       hint = "小橘在想……";
-      button = "取消";
+      button = "打断";
       button_color = COLOR_FLAT;
       break;
     case VoiceState::Speaking:
       mood = PetMood::Happy;
-      hint = "点按钮可以让小橘停下";
-      button = "停下";
+      hint = "点「打断」可以插话";
+      button = "打断";
       button_color = COLOR_FLAT;
       break;
     case VoiceState::Error:
       mood = PetMood::Sad;
       hint = v.error;
+      button = "重新开始";
+      button_color = COLOR_ACCENT;
       break;
+  }
+  if (!has_reply && (v.state == VoiceState::Connecting || v.state == VoiceState::Listening ||
+                     v.state == VoiceState::Hearing)) {
+    reply = "我在听喵，想聊点什么？";
+  } else if (!has_reply && v.state == VoiceState::Thinking) {
+    reply = "嗯……让我想想。";
+  }
+  // 小橘在想或在说的时候，提示行显示主人刚才说的话
+  if ((v.state == VoiceState::Thinking || v.state == VoiceState::Speaking) && v.heard && v.heard[0]) {
+    snprintf(buf, sizeof(buf), "你：%s", v.heard);
+    hint = buf;
   }
   draw_chat_cat(mood, v.blink);
   lv_obj_set_y(chat_cat, 60 + v.bob);
@@ -1023,7 +1057,7 @@ void ui_set_chat(const ChatView &v) {
   lv_obj_set_style_text_color(lbl_chat_hint, v.state == VoiceState::Error ? COLOR_ERR : COLOR_SUBTLE, 0);
   set_text(lbl_chat_button, button);
   lv_obj_set_style_bg_color(chat_button, button_color, 0);
-  if (v.state == VoiceState::Recording) {
+  if (level) {
     int w = 8 + v.level * 160 / 100;
     lv_obj_set_width(chat_level, w);
     lv_obj_align(chat_level, LV_ALIGN_BOTTOM_MID, 0, -6);
