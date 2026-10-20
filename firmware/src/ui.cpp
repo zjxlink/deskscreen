@@ -40,6 +40,7 @@ static lv_obj_t *status_detail;
 static lv_obj_t *status_bar;
 
 static lv_obj_t *scr_pages[PAGE_COUNT];
+static lv_obj_t *page_arrows[PAGE_COUNT][2];  // 页面左右边缘淡淡的 < >：点两边翻页的提示
 
 static lv_obj_t *scr_main;
 static lv_obj_t *lbl_date;
@@ -446,6 +447,16 @@ void ui_set_album_photo(const uint16_t *px) {
   lv_img_set_src(album_img, &album_dsc);
   lv_obj_invalidate(album_img);
   lv_obj_clear_flag(album_img, LV_OBJ_FLAG_HIDDEN);
+}
+
+void ui_set_album_arrows(bool show) {
+  for (lv_obj_t *a : page_arrows[PAGE_ALBUM]) {
+    if (show) {
+      lv_obj_clear_flag(a, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(a, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
 }
 
 void ui_set_album_msg(const char *msg) {
@@ -927,6 +938,18 @@ void ui_init() {
   build_pomodoro();
   build_chat();
   build_album();
+  // 每个页面左右边缘加淡淡的 < >，提示点两边或左右滑动翻页
+  for (int p = 0; p < PAGE_COUNT; p++) {
+    for (int side = 0; side < 2; side++) {
+      lv_obj_t *a = make_label(scr_pages[p], &lv_font_montserrat_14, COLOR_SUBTLE);
+      lv_label_set_text(a, side ? LV_SYMBOL_RIGHT : LV_SYMBOL_LEFT);
+      lv_obj_set_style_text_opa(a, LV_OPA_40, 0);
+      // GitHub 页正中是热力图，箭头挪到上面数字那一行的两边，免得压住格子
+      lv_obj_align(a, side ? LV_ALIGN_RIGHT_MID : LV_ALIGN_LEFT_MID, side ? -1 : 1, p == PAGE_GITHUB ? -48 : 0);
+      lv_obj_clear_flag(a, LV_OBJ_FLAG_CLICKABLE);
+      page_arrows[p][side] = a;
+    }
+  }
   build_alert();
   build_quick();
   build_game();

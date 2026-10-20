@@ -41,6 +41,8 @@ static constexpr uint32_t kAlarmRingMs = 5 * 60000;     // 闹钟没人关时响
 static constexpr uint32_t kAlarmRepeatMs = 2500;        // 闹钟铃声的间隔
 static constexpr uint32_t kQuickHoldMs = 2000;          // 长按屏幕打开快捷设置
 static constexpr uint32_t kQuickIdleMs = 30000;         // 快捷设置页没人操作多久自动关掉
+static constexpr int kMoveSlop = 20;   // 手指移动超过这么多像素就不算点、也不算长按
+static constexpr int kSwipePx = 40;    // 左右滑动超过这么多像素算翻页
 
 static WiFiManager wm;
 static String ap_name;
@@ -730,6 +732,11 @@ static void update_album() {
   uint32_t now = millis();
   if (saver_active && screen.page() != PAGE_ALBUM) saver_active = false;  // 被番茄钟、提醒、夜间模式等切走了
   update_saver(now);
+  static bool arrows = true;
+  if (arrows == saver_active) {
+    arrows = !saver_active;
+    ui_set_album_arrows(arrows);  // 当屏保时照片上不放翻页提示
+  }
 
   const uint16_t *px;
   if (photos_take_frame(px)) {
@@ -801,7 +808,8 @@ static void check_button() {
   }
 }
 
-// 点一下屏幕切换页面（松手时触发）：点左半边回到上一页，点右半边到下一页；按住 2 秒打开快捷设置。
+// 点一下屏幕切换页面（松手时触发）：点左半边回到上一页，点右半边到下一页；也可以左右滑动翻页
+// （手指往左滑到下一页，往右滑回上一页，和手机一样）；按住 2 秒打开快捷设置。
 // 番茄钟页的圆环例外：松手时开始/暂停，按住 1.5 秒重置。小猫页点小橘打开小游戏
 static void check_touch() {
   static bool was_touched = false;
@@ -809,6 +817,8 @@ static void check_touch() {
   static bool long_done = false;
   static uint32_t down_at = 0;
   static int down_x = 0, down_y = 0;
+  static int last_x = 0, last_y = 0;
+  static bool moved = false;
   static uint32_t last_poll = 0;
   static uint32_t last_seen = 0;
   uint32_t now = millis();
@@ -821,10 +831,16 @@ static void check_touch() {
   // 按住时漏报一次不当成松手再按下，否则一下会被算成两下，番茄钟也会开始又暂停
   bool touched = raw || (was_touched && now - last_seen < kTouchReleaseMs);
   if (touched) last_input = now;
+  if (raw && was_touched) {
+    last_x = x;
+    last_y = y;
+    if (abs(x - down_x) > kMoveSlop || abs(y - down_y) > kMoveSlop) moved = true;
+  }
   if (touched && !was_touched) {
     down_at = now;
-    down_x = x;
-    down_y = y;
+    down_x = last_x = x;
+    down_y = last_y = y;
+    moved = false;
     long_done = false;
     if (game_on) {
       long_done = true;  // 小游戏里按下就起跳，松手和长按都不再算
@@ -845,7 +861,7 @@ static void check_touch() {
     // 屏幕调暗时第一下只点亮，交给 ScreenCtrl 处理
     on_ring = screen.started() && !screen.dimmed() && !ota_screen && !alert_on && !quick_on &&
               screen.page() == PAGE_POMODORO && ui_pomodoro_hit(x, y);
-  } else if (touched && !long_done && now - down_at >= (on_ring ? kPomoResetMs : kQuickHoldMs)) {
+  } else if (touched && !long_done && !moved && now - down_at >= (on_ring ? kPomoResetMs : kQuickHoldMs)) {
     // 有提醒或在快捷设置页时长按不算数，松手时照常当成点一下
     if (on_ring) {
       long_done = true;
@@ -857,6 +873,10 @@ static void check_touch() {
   } else if (!touched && was_touched && chat_holding) {
     chat_holding = false;
     voice_release();
+  } else if (!touched && was_touched && !long_done && moved) {
+    // 滑动：横着滑够远才翻页，竖着滑或者滑得太短什么也不做
+    int dx = last_x - down_x;
+    if (!quick_on && abs(dx) >= kSwipePx && abs(dx) > abs(last_y - down_y)) on_tap(now, dx > 0);
   } else if (!touched && was_touched && !long_done) {
     if (on_ring) {
       pomo_command(PomoCmd::Toggle);

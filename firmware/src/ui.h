@@ -90,6 +90,9 @@ bool ui_chat_button_hit(int x, int y);
 void ui_set_album_photo(const uint16_t *px);
 void ui_set_album_msg(const char *msg);
 
+// 相册页左右边缘的 < > 提示，当屏保时不显示
+void ui_set_album_arrows(bool show);
+
 // 触摸点是否落在番茄钟的圆环上（圆环居中，屏幕上下或左右翻转时判断结果也不变）
 bool ui_pomodoro_hit(int x, int y);
 void ui_set_wifi(bool connected);
