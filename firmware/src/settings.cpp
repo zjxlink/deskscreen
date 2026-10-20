@@ -47,6 +47,10 @@ void settings_begin() {
   current.ai_key = prefs.getString("ai_key", "");
   current.ai_model = prefs.getString("ai_model", "qwen3-omni-flash");
   current.ai_voice = prefs.getString("ai_voice", "Cherry");
+  current.album_sec = prefs.getUChar("album_sec", 10);
+  current.album_shuffle = prefs.getBool("album_shuf", true);
+  current.saver_on = prefs.getBool("saver_on", false);
+  current.saver_min = prefs.getUChar("saver_min", 5);
 }
 
 Settings settings_get() {
@@ -98,6 +102,10 @@ void settings_save(const Settings &s) {
   prefs.putString("ai_key", s.ai_key);
   prefs.putString("ai_model", s.ai_model);
   prefs.putString("ai_voice", s.ai_voice);
+  prefs.putUChar("album_sec", s.album_sec);
+  prefs.putBool("album_shuf", s.album_shuffle);
+  prefs.putBool("saver_on", s.saver_on);
+  prefs.putUChar("saver_min", s.saver_min);
 }
 
 void settings_load_pomo_stats(PomoStatsData &d) {

@@ -175,7 +175,7 @@ static void test_day_rotation_skips_unconfigured_pages() {
 static void test_unavailable_page_skipped() {
   ScreenConfig c = night_cfg();
   c.page_enabled[PAGE_CHAT] = true;
-  c.page_unavailable = 1u << PAGE_CHAT;  // 没有麦克风
+  c.page_unavailable = 1u << PAGE_CHAT | 1u << PAGE_ALBUM;  // 没有麦克风、没有 TF 卡槽
   Sim s(c);
   s.ctrl.go_to(PAGE_POMODORO, s.now);
   s.take_page();

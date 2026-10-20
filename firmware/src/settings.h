@@ -45,6 +45,11 @@ struct Settings {
   String ai_key;             // 百炼 API Key，空表示不用
   String ai_model;           // 默认 qwen3-omni-flash
   String ai_voice;           // 音色，默认 Cherry
+  // 电子相册（TF 卡）
+  uint8_t album_sec;         // 每张照片显示几秒，默认 10
+  bool album_shuffle;        // 随机顺序，否则按文件名
+  bool saver_on;             // 空闲时自动播放相册（屏保）
+  uint8_t saver_min;         // 多少分钟没碰屏幕算空闲，默认 5
 };
 
 // 时区固定为北京时间，POSIX 格式

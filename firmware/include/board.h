@@ -42,6 +42,15 @@
   #define PIN_DOCK_SDA      41
   #define PIN_DOCK_SCL      40
   #define PIN_RADAR_OUT     21
+  // SENSOR 底座上的 TF 卡槽，4 线 SDMMC；GPIO43 低电平给卡上电。引脚来自乐鑫 esp-bsp 的 esp-box-3.h
+  #define HAS_SD_CARD
+  #define PIN_SD_CLK        11
+  #define PIN_SD_CMD        14
+  #define PIN_SD_D0         9
+  #define PIN_SD_D1         13
+  #define PIN_SD_D2         42
+  #define PIN_SD_D3         12
+  #define PIN_SD_POWER      43
 
 #elif defined(BOARD_DESK_V1)
   // 自己画的板子：2.0 寸 IPS ST7789（240x320）
