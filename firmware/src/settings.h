@@ -56,3 +56,7 @@ void settings_save(const Settings &s);
 // 番茄钟统计单独存一块，只在主循环里读写
 void settings_load_pomo_stats(PomoStatsData &d);
 void settings_save_pomo_stats(const PomoStatsData &d);
+
+// 小游戏最高分
+int settings_load_game_best();
+void settings_save_game_best(int best);

@@ -18,6 +18,7 @@
 #include "pomo_stats.h"
 #include "pomodoro.h"
 #include "reminder.h"
+#include "runner.h"
 #include "screen_ctrl.h"
 #include "sensors.h"
 #include "settings.h"
@@ -91,6 +92,13 @@ static uint32_t alert_until = 0;
 // 快捷设置页：长按屏幕打开，点右上角、按 BOOT 键或 30 秒不操作关掉
 static bool quick_on = false;
 static uint32_t quick_last = 0;
+
+// 小橘跑酷：在小猫页点小橘打开，点右上角、按 BOOT 键或 30 秒不玩关掉
+static constexpr uint32_t kGameIdleMs = 30000;
+static bool game_on = false;
+static RunnerGame game;
+static int game_best = 0;
+static uint32_t game_last = 0;
 
 static void apply_settings() {
   Settings s = settings_get();
@@ -176,7 +184,8 @@ static void show_alert(AlertIcon icon, const char *title, const char *body, cons
                        uint32_t show_ms) {
   uint32_t now = millis();
   alert_on = true;
-  quick_on = false;  // 提醒盖掉快捷设置页，关掉提醒后回到原来的页面
+  quick_on = false;  // 提醒盖掉快捷设置页和小游戏，关掉提醒后回到原来的页面
+  game_on = false;
   alert_timed = show_ms > 0;
   alert_until = now + show_ms;
   if (screen.started()) screen.wake(now);
@@ -357,7 +366,7 @@ static void react(PetMood mood, uint32_t ms, bool show) {
   if (!screen.started()) return;
   screen.activity(now);  // 有人在动它，当然有人
   // 摇一摇、倒过来时跳到小猫页让你看到；急刹车只在已经显示小猫时有反应，开车时不乱翻页
-  if (show && !alert_on && !quick_on && !ota_screen) screen.go_to(PAGE_PET, now);
+  if (show && !alert_on && !quick_on && !game_on && !ota_screen) screen.go_to(PAGE_PET, now);
 }
 
 // 每 20ms 读一次加速度
@@ -387,7 +396,7 @@ static void update_motion() {
 static void update_pet() {
   static uint32_t last = 0;
   uint32_t now = millis();
-  if (screen.page() != PAGE_PET || alert_on || quick_on || ota_screen || now - last < 100) return;
+  if (screen.page() != PAGE_PET || alert_on || quick_on || game_on || ota_screen || now - last < 100) return;
   last = now;
 
   PetInputs in;
@@ -455,7 +464,8 @@ static void update_screen() {
   Page p;
   bool animate;
   // 升级进度和全屏提醒期间页面照常计算，只是先不显示
-  if (screen.take_page_change(p, animate) && !ota_screen && !alert_on && !quick_on) ui_show_page(p, animate);
+  if (screen.take_page_change(p, animate) && !ota_screen && !alert_on && !quick_on && !game_on)
+    ui_show_page(p, animate);
 }
 
 // 在线升级或网页上传固件时显示进度；成功后重启，失败时提示几秒再回到原来的页面
@@ -466,6 +476,7 @@ static void update_ota_screen() {
     if (!ota_screen || s.progress != last_progress) {
       ota_screen = true;
       quick_on = false;  // 升级完回到原来的页面
+      game_on = false;
       last_progress = s.progress;
       char detail[48];
       snprintf(detail, sizeof(detail), "请不要断电（%d%%）", s.progress);
@@ -568,10 +579,69 @@ static void update_quick() {
   if (quick_on && millis() - quick_last >= kQuickIdleMs) close_quick();
 }
 
+static void open_game(uint32_t now) {
+  game_on = true;
+  game_last = now;
+  game = RunnerGame(micros());
+  screen.activity(now);
+  ui_show_game();
+  ui_set_game(game, game_best);
+}
+
+static void close_game() {
+  game_on = false;
+  ui_show_page(screen.page(), false);
+}
+
+// 按下屏幕就起跳，比松手再跳跟手
+static void game_press(int x, int y, uint32_t now) {
+  bool was_dimmed = screen.dimmed();
+  game_last = now;
+  screen.activity(now);
+  if (was_dimmed) return;
+  if (ui_game_close_hit(x, y)) {
+    close_game();
+    return;
+  }
+  game.tap(now);
+}
+
+// 游戏逻辑每圈都跑，画面约 30 帧
+static void update_game() {
+  static uint32_t last_draw = 0;
+  static uint32_t last_activity = 0;
+  if (!game_on) return;
+  uint32_t now = millis();
+  RunnerGame::State before = game.state();
+  game.tick(now);
+  if (game.state() == RunnerGame::State::Playing) {
+    game_last = now;
+    if (now - last_activity > 5000) {
+      last_activity = now;
+      screen.activity(now);  // 玩的时候不调暗、不翻页
+    }
+  } else if (before == RunnerGame::State::Playing && game.score() > game_best) {
+    game_best = game.score();
+    settings_save_game_best(game_best);
+  }
+  if (game.state() != RunnerGame::State::Playing && now - game_last >= kGameIdleMs) {
+    close_game();
+    return;
+  }
+  if (now - last_draw >= 33 || game.state() != before) {
+    last_draw = now;
+    ui_set_game(game, game_best);
+  }
+}
+
 // 点屏幕或短按 BOOT 键：有全屏提醒时先关掉提醒（屏幕调暗时第一下只点亮），否则切换页面
 static void on_tap(uint32_t now) {
   if (quick_on) {
     close_quick();
+    return;
+  }
+  if (game_on) {
+    close_game();
     return;
   }
   if (alert_on && !ota_screen && !screen.dimmed()) {
@@ -600,7 +670,7 @@ static void check_button() {
 }
 
 // 点一下屏幕切换页面（松手时触发），按住 2 秒打开快捷设置。
-// 番茄钟页的圆环例外：松手时开始/暂停，按住 1.5 秒重置
+// 番茄钟页的圆环例外：松手时开始/暂停，按住 1.5 秒重置。小猫页点小橘打开小游戏
 static void check_touch() {
   static bool was_touched = false;
   static bool on_ring = false;
@@ -623,6 +693,12 @@ static void check_touch() {
     down_x = x;
     down_y = y;
     long_done = false;
+    if (game_on) {
+      long_done = true;  // 小游戏里按下就起跳，松手和长按都不再算
+      game_press(x, y, now);
+      was_touched = touched;
+      return;
+    }
     // 屏幕调暗时第一下只点亮，交给 ScreenCtrl 处理
     on_ring = screen.started() && !screen.dimmed() && !ota_screen && !alert_on && !quick_on &&
               screen.page() == PAGE_POMODORO && ui_pomodoro_hit(x, y);
@@ -640,6 +716,9 @@ static void check_touch() {
       pomo_command(PomoCmd::Toggle);
     } else if (quick_on) {
       quick_tap(down_x, down_y, now);
+    } else if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && screen.page() == PAGE_PET &&
+               ui_pet_hit(down_x, down_y)) {
+      open_game(now);
     } else {
       on_tap(now);
     }
@@ -655,6 +734,7 @@ void setup() {
   PomoStatsData sd;
   settings_load_pomo_stats(sd);
   pomo_stats.load(sd);
+  game_best = settings_load_game_best();
   display_init();
   audio_begin();  // 解码芯片和触摸共用 I2C，要在屏幕初始化之后
   sensors_begin();
@@ -713,6 +793,7 @@ void loop() {
   update_motion();
   update_pet();
   update_quick();
+  update_game();
   update_screen();
   update_ota_screen();
 
