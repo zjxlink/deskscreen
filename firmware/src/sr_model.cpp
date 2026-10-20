@@ -54,6 +54,16 @@ extern "C" srmodel_list_t *get_static_srmodels(void) {
   return models;
 }
 
+// 找名字里同时含两个关键字的第一个模型（关键字为 NULL 表示不限）
+extern "C" char *esp_srmodel_filter(srmodel_list_t *list, const char *keyword1, const char *keyword2) {
+  if (!list) return nullptr;
+  for (int i = 0; i < list->num; i++) {
+    const char *name = list->model_name[i];
+    if ((!keyword1 || strstr(name, keyword1)) && (!keyword2 || strstr(name, keyword2))) return list->model_name[i];
+  }
+  return nullptr;
+}
+
 // 返回 NULL 表示模型数据在内存里（不是从 SPIFFS、SD 卡按路径读文件）
 extern "C" char *get_model_base_path(void) { return nullptr; }
 
