@@ -3,9 +3,12 @@
 #include <Arduino.h>
 #include <WiFiClientSecure.h>
 
-// 同一时间只允许一个 HTTPS 连接。
-// Arduino 自带的 mbedTLS 只从内部 RAM 分配内存（不用 PSRAM），每个连接要 40~50KB，
-// 天气、GitHub、自选股、OTA 几个后台任务同时连接会把内部 RAM 耗尽，结果全部握手失败。
+// 让 mbedTLS 先从 PSRAM 分配内存，PSRAM 不够（或没有 PSRAM）时再用内部 RAM。
+// Arduino 自带的 mbedTLS 默认只用内部 RAM，每个连接要 40~50KB，内部 RAM 碎片多了就握手失败。
+// 要在第一次 HTTPS 连接之前调用
+void net_tls_use_psram();
+
+// 同一时间只允许一个 HTTPS 连接，免得几个后台任务同时握手，内存一下子不够
 // 用法：在函数里建一个 HttpsLock 对象，函数返回时自动释放
 class HttpsLock {
  public:

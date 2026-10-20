@@ -14,6 +14,7 @@
 #include "imu.h"
 #include "listen.h"
 #include "motion.h"
+#include "net.h"
 #include "night.h"
 #include "ota.h"
 #include "pet.h"
@@ -1021,6 +1022,7 @@ static void check_touch() {
 
 void setup() {
   Serial.begin(115200);
+  net_tls_use_psram();
   pinMode(PIN_BUTTON, INPUT_PULLUP);
 
   settings_begin();
