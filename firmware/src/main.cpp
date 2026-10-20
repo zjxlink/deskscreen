@@ -11,6 +11,8 @@
 #include "clock_events.h"
 #include "display.h"
 #include "github.h"
+#include "imu.h"
+#include "motion.h"
 #include "ota.h"
 #include "pet.h"
 #include "pomo_stats.h"
@@ -67,6 +69,15 @@ static int8_t temp_offset = 0;
 static bool room_valid = false;
 static float room_temp = 0;
 static float room_humidity = 0;
+
+// 板载加速度计：摇一摇、急刹急转、倒过来时小猫有反应
+static bool imu_ok = false;
+static MotionDetector motion;
+static PetMood reaction = PetMood::Normal;  // Normal 表示没有反应
+static uint32_t reaction_start = 0;
+static uint32_t reaction_until = 0;
+static constexpr uint32_t kDizzyMs = 4000;
+static constexpr uint32_t kStartledMs = 2500;
 
 // 最近一次的 GitHub 和自选股数据，小猫要看
 static GithubData github_data;
@@ -338,6 +349,40 @@ static String room_text() {
   return s;
 }
 
+static void react(PetMood mood, uint32_t ms, bool show) {
+  uint32_t now = millis();
+  reaction = mood;
+  reaction_start = now;
+  reaction_until = now + ms;
+  if (!screen.started()) return;
+  screen.activity(now);  // 有人在动它，当然有人
+  // 摇一摇、倒过来时跳到小猫页让你看到；急刹车只在已经显示小猫时有反应，开车时不乱翻页
+  if (show && !alert_on && !quick_on && !ota_screen) screen.go_to(PAGE_PET, now);
+}
+
+// 每 20ms 读一次加速度
+static void update_motion() {
+  static uint32_t last = 0;
+  uint32_t now = millis();
+  if (!imu_ok || now - last < 20) return;
+  last = now;
+  float x, y, z;
+  if (!imu_read(x, y, z)) return;
+  bool was_upside = motion.upside_down();
+  MotionEvent ev = motion.update(now, x, y, z);
+  if (ev == MotionEvent::Shake) {
+    react(PetMood::Dizzy, kDizzyMs, true);
+  } else if (ev == MotionEvent::Jolt && reaction != PetMood::Dizzy) {
+    react(PetMood::Startled, kStartledMs, false);
+  }
+  if (motion.upside_down() && !was_upside) react(PetMood::Flipped, 0, true);
+  if (reaction == PetMood::Flipped && !motion.upside_down()) {
+    react(PetMood::Startled, kStartledMs, false);  // 放正了，惊魂未定
+  } else if (reaction != PetMood::Normal && reaction != PetMood::Flipped && (int32_t)(now - reaction_until) >= 0) {
+    reaction = motion.upside_down() ? PetMood::Flipped : PetMood::Normal;
+  }
+}
+
 // 像素小猫：只在小猫页显示时更新，每 100ms 一帧
 static void update_pet() {
   static uint32_t last = 0;
@@ -364,7 +409,7 @@ static void update_pet() {
   int day = local_day();
   in.pomo_today = day >= 0 ? pomo_stats.count(day) : pomo.done_today();
 
-  PetMood mood = pet_mood(in);
+  PetMood mood = reaction != PetMood::Normal ? reaction : pet_mood(in);
   char line[96];
   pet_line(mood, in, line, sizeof(line));
 
@@ -379,15 +424,24 @@ static void update_pet() {
   bool blink = !sleeping && now % 4000 < 150;  // 每 4 秒眨一次眼
   ui_set_pet(mood, blink, line, status);
 
-  int bob;
-  if (sleeping) {
+  int bob, dx = 0;
+  uint32_t since = now - reaction_start;
+  if (mood == PetMood::Dizzy) {
+    dx = (now / 120) % 2 ? 6 : -6;  // 晃来晃去
+    bob = (now / 240) % 2 * 3;
+  } else if (mood == PetMood::Startled) {
+    bob = since < 300 ? -12 : 0;  // 吓得跳起来
+  } else if (mood == PetMood::Flipped) {
+    dx = (now / 200) % 2 ? 3 : -3;  // 挣扎
+    bob = (now / 400) % 2 * -4;
+  } else if (sleeping) {
     bob = (now / 1500) % 2 * 2;  // 睡觉时慢慢呼吸
   } else if (mood == PetMood::Happy) {
     bob = (now / 300) % 2 * -6;  // 开心得蹦起来
   } else {
     bob = (now / 800) % 2 * 3;
   }
-  ui_pet_anim(bob, sleeping ? (int)(now / 800 % 2) : -1);
+  ui_pet_anim(dx, bob, sleeping ? (int)(now / 800 % 2) : -1);
 }
 
 // 把 ScreenCtrl 的状态同步到屏幕：亮度和当前页面
@@ -604,6 +658,7 @@ void setup() {
   display_init();
   audio_begin();  // 解码芯片和触摸共用 I2C，要在屏幕初始化之后
   sensors_begin();
+  imu_ok = imu_begin();
   ui_init();
   apply_settings();
   update_screen();  // 还没对时，先用白天亮度
@@ -655,6 +710,7 @@ void loop() {
   update_clock_events();
   sensors_loop();
   update_room();
+  update_motion();
   update_pet();
   update_quick();
   update_screen();

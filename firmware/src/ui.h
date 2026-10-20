@@ -38,8 +38,8 @@ void ui_set_pomodoro(const Pomodoro &p, uint32_t now_ms, const char *msg, int do
 // 像素小猫页：心情或眨眼变化时重画小猫；line 是小猫说的话，status 是底部的一行小字
 void ui_set_pet(PetMood mood, bool blink, const char *line, const char *status);
 
-// 小猫的动画：bob 为上下浮动的像素数，zzz 为睡觉时"Zzz"的帧（0 或 1），不睡觉时传 -1
-void ui_pet_anim(int bob, int zzz);
+// 小猫的动画：dx、bob 为左右、上下偏移的像素数，zzz 为睡觉时"Zzz"的帧（0 或 1），不睡觉时传 -1
+void ui_pet_anim(int dx, int bob, int zzz);
 
 // 全屏提醒（留言、久坐、喝水、闹钟），盖在当前页面上，关掉后用 ui_show_page 回到原来的页面
 enum class AlertIcon { Message, Sit, Water, Alarm, Climate };

@@ -11,6 +11,10 @@ enum class PetMood {
   Sad,    // 自选股平均跌超过 2%
   Bored,  // 下午了今天还没提交
   Sleep,  // 夜间时段
+  // 下面几个是对动作的反应，持续几秒，由主循环决定
+  Dizzy,     // 被摇晕了
+  Startled,  // 急刹急转或者被拿起来，吓一跳
+  Flipped,   // 被倒过来了
 };
 
 struct PetInputs {

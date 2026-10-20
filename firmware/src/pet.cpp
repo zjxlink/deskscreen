@@ -32,6 +32,15 @@ void pet_line(PetMood mood, const PetInputs &in, char *buf, size_t len) {
     case PetMood::Normal:
       snprintf(buf, len, "陪你一起写代码");
       break;
+    case PetMood::Dizzy:
+      snprintf(buf, len, "晕……别摇啦");
+      break;
+    case PetMood::Startled:
+      snprintf(buf, len, "哇！吓我一跳");
+      break;
+    case PetMood::Flipped:
+      snprintf(buf, len, "我倒过来了！快把我放正");
+      break;
   }
 }
 
@@ -58,6 +67,11 @@ static const char *const kBody[kPetSize] = {
 static const char *eye_row(PetMood mood, bool blink, int y) {
   bool closed = blink || mood == PetMood::Sleep;
   switch (mood) {
+    case PetMood::Dizzy:
+      return y == 6 ? ".kkokooo" : ".kokoooo";  // x x（第三行在 row() 里）
+    case PetMood::Startled:
+    case PetMood::Flipped:
+      return y == 6 ? ".kokkkoo" : ".kokwkoo";  // 瞪大眼睛（第三行在 row() 里）
     case PetMood::Happy:
       return y == 6 ? ".kookooo" : ".kokokoo";  // ^ ^
     case PetMood::Bored:
@@ -72,11 +86,22 @@ static const char *eye_row(PetMood mood, bool blink, int y) {
 
 static const char *row(PetMood mood, bool blink, int y) {
   if (y == 6 || y == 7) return eye_row(mood, blink, y);
-  if (y == 8) return mood == PetMood::Sad ? ".koobooo" : ".koooooo";
+  if (y == 8) {
+    switch (mood) {
+      case PetMood::Sad: return ".koobooo";
+      case PetMood::Dizzy: return ".kkokooo";
+      case PetMood::Startled:
+      case PetMood::Flipped: return ".kokkkoo";
+      default: return ".koooooo";
+    }
+  }
   if (y == 10) {
     switch (mood) {
       case PetMood::Happy: return "..koowkw";  // 咧嘴笑
       case PetMood::Sad: return "..kooowk";    // 嘴角向下
+      case PetMood::Dizzy: return "..kookok";  // 波浪嘴
+      case PetMood::Startled:
+      case PetMood::Flipped: return "..koookk";  // 张大嘴
       default: return "..koooww";
     }
   }
