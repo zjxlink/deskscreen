@@ -5,7 +5,7 @@
 #include "pomo_stats.h"
 #include "pomodoro.h"
 
-// 局域网设置页面：城市、经纬度、亮度、重新配网
+// 局域网设置网页（web/index.html）和它用到的 JSON 接口
 void web_config_begin();
 void web_config_loop();
 
@@ -24,5 +24,13 @@ void web_config_set_pomo_stats(const PomoStats *s, int (*day)());
 // 留言板：设置页面提交留言后调用，sound 表示要不要响一声
 void web_config_set_message_hook(void (*hook)(const String &text, bool sound));
 
-// 设置页上「室内温湿度和人体感应」一节显示的当前状态
-void web_config_set_room_hook(String (*hook)());
+// 设置页上显示的室内温湿度和人体感应状态
+struct RoomInfo {
+  bool dock;      // 插了 SENSOR 底座
+  bool valid;     // 温湿度读数有效
+  float temp_c;
+  int humidity;
+  bool presence;  // 雷达感应到动作
+  bool away;      // 没人已熄屏
+};
+void web_config_set_room_info(void (*hook)(RoomInfo &info));

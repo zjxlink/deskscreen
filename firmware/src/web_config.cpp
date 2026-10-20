@@ -15,6 +15,7 @@
 #include "stock.h"
 #include "voice.h"
 #include "weather.h"
+#include "web_index_gz.h"
 
 static WebServer server(80);
 static bool changed = false;
@@ -24,304 +25,8 @@ static void (*pomo_cmd)(PomoCmd) = nullptr;
 static const PomoStats *pomo_stats = nullptr;
 static int (*today)() = nullptr;
 static void (*message_hook)(const String &, bool) = nullptr;
-static String (*room_hook)() = nullptr;
+static void (*room_info)(RoomInfo &) = nullptr;
 static constexpr int kMessageMaxChars = 60;
-
-static const char PAGE[] PROGMEM = R"html(<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>桌面信息屏设置</title>
-<style>
-body{font-family:-apple-system,system-ui,sans-serif;background:#0d1117;color:#e6edf3;margin:0;padding:16px}
-main{max-width:420px;margin:0 auto}
-h1{font-size:20px}
-label{display:block;margin:16px 0 6px;color:#8b949e;font-size:14px}
-input{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #30363d;background:#161b22;color:#e6edf3;font-size:16px}
-input[type=range]{padding:0}
-textarea{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #30363d;background:#161b22;color:#e6edf3;font-size:16px;font-family:inherit;resize:vertical}
-.row{display:flex;gap:8px}
-button{padding:10px 16px;border:0;border-radius:8px;background:#238636;color:#fff;font-size:16px}
-button.sub{background:#30363d}
-button.danger{background:#da3633}
-.tip{color:#3fb950;margin:8px 0}
-#results button{display:block;width:100%;margin-top:6px;text-align:left}
-.ota{background:#161b22;border-radius:8px;padding:10px 12px}
-hr{border:0;border-top:1px solid #30363d;margin:28px 0}
-h2{font-size:17px;margin-top:28px}
-a{color:#58a6ff}
-.hint{color:#8b949e;font-size:13px;line-height:1.6}
-label.check{display:flex;gap:8px;align-items:center;color:#e6edf3}
-label.check input{width:auto}
-.row > div{flex:1}
-</style></head><body><main>
-<h1>桌面信息屏设置</h1>
-%SAVED%
-<h2>留言板</h2>
-<form method="post" action="/message">
-<textarea name="text" rows="2" maxlength="60" placeholder="写一句话，会立即显示在屏幕上" required></textarea>
-<label class="check"><input type="checkbox" name="sound" checked> 叮咚响一声%SOUND_NOTE%</label>
-<p><button>发送到屏幕</button></p>
-</form>
-<p class="hint">最多 60 个字，点屏幕或按 BOOT 键关闭。表情符号显示不出来。</p>
-<hr>
-<form method="post" action="/save">
-<label>城市（显示在屏幕上）</label>
-<div class="row"><input name="city" id="city" value="%CITY%" maxlength="16">
-<button type="button" class="sub" onclick="search()">查坐标</button></div>
-<div id="results"></div>
-<label>纬度</label><input name="lat" id="lat" value="%LAT%" inputmode="decimal">
-<label>经度</label><input name="lon" id="lon" value="%LON%" inputmode="decimal">
-<label>屏幕亮度</label><input type="range" name="brightness" min="10" max="255" value="%BRIGHT%">
-<label>自动切换页面间隔（秒，0 表示不自动切换）</label>
-<input name="page_sec" value="%PAGE_SEC%" inputmode="numeric">
-<h2>夜间模式</h2>
-<label class="check"><input type="checkbox" name="night_on" %NIGHT_ON%> 夜间自动调暗</label>
-<div class="row">
-<div><label>开始</label><input type="time" name="night_start" value="%NIGHT_START%"></div>
-<div><label>结束</label><input type="time" name="night_end" value="%NIGHT_END%"></div>
-</div>
-<label>夜间亮度（拉到最左边会关闭屏幕）</label>
-<input type="range" name="night_bright" min="0" max="255" value="%NIGHT_BRIGHT%">
-<p class="hint">夜间只显示时钟页，不自动轮播。点一下屏幕或按 BOOT 键，会临时恢复正常亮度 30 秒。</p>
-<h2>番茄钟</h2>
-<div class="row">
-<div><label>专注（分钟）</label><input name="pomo_focus" value="%POMO_FOCUS%" inputmode="numeric"></div>
-<div><label>短休息</label><input name="pomo_short" value="%POMO_SHORT%" inputmode="numeric"></div>
-<div><label>长休息</label><input name="pomo_long" value="%POMO_LONG%" inputmode="numeric"></div>
-<div><label>每几个长休息</label><input name="pomo_every" value="%POMO_EVERY%" inputmode="numeric"></div>
-</div>
-
-<p class="hint">在设备上点圆环开始或暂停，按住圆环 1.5 秒重置；下面的按钮也能控制（没有触摸屏的板子用这个）。</p>
-<label class="check"><input type="checkbox" name="sound_on" %SOUND_ON%> 专注和休息结束时播放提示音%SOUND_NOTE%</label>
-<label>提示音音量</label><input type="range" name="sound_volume" min="0" max="100" value="%SOUND_VOL%">
-<label class="check"><input type="checkbox" name="sound_quiet" %SOUND_QUIET%> 夜间时段不响（只点亮屏幕）</label>
-<h2>健康提醒</h2>
-<div class="row">
-<div><label class="check"><input type="checkbox" name="sit_on" %SIT_ON%> 久坐提醒</label></div>
-<div><label>每隔（分钟）</label><input name="sit_min" value="%SIT_MIN%" inputmode="numeric"></div>
-</div>
-<div class="row">
-<div><label class="check"><input type="checkbox" name="water_on" %WATER_ON%> 喝水提醒</label></div>
-<div><label>每隔（分钟）</label><input name="water_min" value="%WATER_MIN%" inputmode="numeric"></div>
-</div>
-<div class="row">
-<div><label>提醒时段开始</label><input type="time" name="remind_start" value="%REMIND_START%"></div>
-<div><label>结束</label><input type="time" name="remind_end" value="%REMIND_END%"></div>
-</div>
-<h2>闹钟和整点报时</h2>
-<label class="check"><input type="checkbox" name="chime_on" %CHIME_ON%> 整点报时（每到整点叮一声，夜间时段跟提示音一样不响）</label>
-<div class="row">
-<div><label class="check"><input type="checkbox" name="alarm_on" %ALARM_ON%> 闹钟</label></div>
-<div><label>时间</label><input type="time" name="alarm_time" value="%ALARM_TIME%"></div>
-</div>
-<div class="row" style="flex-wrap:wrap;margin-top:8px">%ALARM_DAYS%</div>
-<p class="hint">闹钟响时屏幕全屏提示、每隔几秒响一次，夜里也会响；点屏幕或按 BOOT 键关掉，5 分钟后自动停止。%NO_SPEAKER%</p>
-<p class="hint">只在提醒时段内提醒，屏幕会弹出全屏提示并响一声（音量和夜间静音跟番茄钟一样）。番茄钟专注时先不打扰，等休息时再提醒；开始休息时久坐提醒重新计时。%REMIND_STATE%</p>
-<h2>室内温湿度和人体感应</h2>
-<p class="hint">%ROOM_STATE%</p>
-<label class="check"><input type="checkbox" name="climate_on" %CLIMATE_ON%> 太热或太闷时提醒（持续 3 分钟才提醒，同一种提醒 1 小时最多一次，夜间时段不提醒）</label>
-<div class="row">
-<div><label>温度达到（°C）</label><input name="hot_c" value="%HOT_C%" inputmode="numeric"></div>
-<div><label>湿度达到（%）</label><input name="humid_pct" value="%HUMID_PCT%" inputmode="numeric"></div>
-<div><label>温度校准（°C）</label><input name="temp_offset" value="%TEMP_OFFSET%" inputmode="decimal"></div>
-</div>
-<p class="hint">温度校准：如果显示的温度比实际偏高 1.5 度，就填 -1.5。</p>
-<div class="row">
-<div><label class="check"><input type="checkbox" name="away_off" %AWAY_OFF%> 没人时熄屏，有人回来自动亮</label></div>
-<div><label>多久没人算离开（分钟）</label><input name="away_min" value="%AWAY_MIN%" inputmode="numeric"></div>
-</div>
-<p class="hint">雷达感应的是动作，人坐着一动不动时可能感应不到，所以离开时间别设太短。熄屏后点屏幕或按 BOOT 键也能亮；有提醒时会自动亮屏。</p>
-<h2>AI 语音聊天</h2>
-<p class="hint">%AI_STATE%在「AI 聊天」页按住麦克风按钮说话，松手后小橘用语音回答。用的是阿里云百炼的 Qwen-Omni 模型，按用量计费，新用户有免费额度。</p>
-<label>百炼 API Key（%AI_KEY_STATE%）</label>
-<input type="password" name="ai_key" placeholder="%AI_KEY_PLACEHOLDER%" autocomplete="off">
-<p class="hint">登录 <a href="https://bailian.console.aliyun.com/" target="_blank">阿里云百炼控制台</a>，在「API Key」里创建一个（北京地域），复制粘贴到这里。Key 只保存在设备上，不会显示出来。</p>
-<label class="check"><input type="checkbox" name="ai_clear"> 清除已保存的 Key</label>
-<div class="row">
-<div><label>模型</label><input name="ai_model" value="%AI_MODEL%"></div>
-<div><label>音色</label><input name="ai_voice" value="%AI_VOICE%"></div>
-</div>
-<p class="hint">模型默认 qwen3-omni-flash；音色默认 Cherry（女声），也可以填 Ethan（男声）等百炼文档里列出的音色名。</p>
-<h2>电子相册</h2>
-<p class="hint">%ALBUM_STATE%</p>
-<div class="row">
-<div><label>每张照片显示（秒）</label><input name="album_sec" value="%ALBUM_SEC%" inputmode="numeric"></div>
-<div><label class="check" style="margin-top:38px"><input type="checkbox" name="album_shuffle" %ALBUM_SHUFFLE%> 随机顺序</label></div>
-</div>
-<div class="row">
-<div><label class="check"><input type="checkbox" name="saver_on" %SAVER_ON%> 空闲时自动播放相册（屏保）</label></div>
-<div><label>多久没碰屏幕算空闲（分钟）</label><input name="saver_min" value="%SAVER_MIN%" inputmode="numeric"></div>
-</div>
-<p class="hint">点屏幕切到「相册」页就开始播放，会一直放下去不自动切走。屏保：碰一下屏幕或按 BOOT 键回到原来的页面；番茄钟进行中、夜间时段和没人熄屏时不会启动。</p>
-<h2>GitHub 贡献热力图</h2>
-<label>GitHub Token（%GH_STATE%）</label>
-<input type="password" name="gh_token" placeholder="%GH_PLACEHOLDER%" autocomplete="off">
-<p class="hint">打开 <a href="https://github.com/settings/tokens/new?description=DeskScreen" target="_blank">GitHub 创建 Token</a>（classic），
-<b>不用勾选任何权限</b>，有效期按需选择，生成后复制粘贴到这里。Token 只保存在设备上，不会显示出来。</p>
-<label class="check"><input type="checkbox" name="gh_clear"> 清除已保存的 Token</label>
-<h2>自选股</h2>
-<label>股票代码（最多 6 个，用逗号或空格分隔）</label>
-<input name="stocks" value="%STOCKS%" placeholder="600519, 000001, 00700, AAPL">
-<p class="hint">A 股直接写 6 位代码；指数和深市代码冲突时加前缀，如 <b>sh000001</b> 是上证指数；
-港股写 5 位代码（如 00700）；美股写代码（如 AAPL）。ETF 和股票写法一样。数据来自东方财富，交易时段每 30 秒刷新。</p>
-<h2>固件升级</h2>
-<label class="check"><input type="checkbox" name="auto_update" %AUTO_UPDATE%> 发现新版本后，在凌晨 3～5 点自动升级</label>
-<p><button type="submit">保存</button></p>
-</form>
-<p class="ota">番茄钟：%POMO_STATE%</p>
-<div class="row">
-<form method="post" action="/pomodoro/toggle"><button>开始 / 暂停</button></form>
-<form method="post" action="/pomodoro/skip"><button class="sub">跳过当前阶段</button></form>
-<form method="post" action="/pomodoro/reset" onsubmit="return confirm('重置番茄钟？')"><button class="sub">重置</button></form>
-<form method="post" action="/sound/test"><button class="sub">试听提示音</button></form>
-</div>
-<hr>
-<p>当前版本：<b>%FW_VERSION%</b></p>
-<p class="ota" id="ota" data-busy="%OTA_BUSY%">%OTA_TEXT%</p>
-<div class="row">
-<form method="post" action="/ota/check"><button class="sub">检查更新</button></form>
-<form method="post" action="/ota/install" onsubmit="return confirm('现在下载并安装最新版本？升级大约需要 1 分钟，期间请不要断电。')"><button>立即升级</button></form>
-</div>
-<label>也可以上传固件文件（Release 里的 firmware-板子名.bin）</label>
-<form method="post" action="/ota/upload" enctype="multipart/form-data" onsubmit="const b=this.querySelector('button');b.disabled=true;b.textContent='上传中，请不要关闭页面…'">
-<input type="file" name="firmware" accept=".bin" required>
-<p><button>上传并升级</button></p>
-</form>
-<hr>
-<h2>网络诊断</h2>
-<ul class="hint">%NET_STATUS%<li>%PANEL_STATUS%</li></ul>
-<hr>
-<form method="post" action="/reset-wifi" onsubmit="return confirm('清除 WiFi 并重启进入配网模式？')">
-<button class="danger">重新配置 WiFi</button>
-</form>
-</main>
-<script>
-async function search(){
-  const q=document.getElementById('city').value.trim(); if(!q) return;
-  const box=document.getElementById('results'); box.textContent='查询中…';
-  try{
-    const r=await fetch('https://geocoding-api.open-meteo.com/v1/search?count=5&language=zh&name='+encodeURIComponent(q));
-    const j=await r.json(); box.textContent='';
-    if(!j.results){box.textContent='没找到，可以手动填写经纬度';return;}
-    for(const p of j.results){
-      const b=document.createElement('button'); b.type='button'; b.className='sub';
-      b.textContent=[p.name,p.admin1,p.country].filter(Boolean).join('，');
-      b.onclick=()=>{lat.value=p.latitude.toFixed(4);lon.value=p.longitude.toFixed(4);box.textContent='';};
-      box.appendChild(b);
-    }
-  }catch(e){box.textContent='查询失败，可以手动填写经纬度';}
-}
-async function poll(){
-  const el=document.getElementById('ota');
-  try{const j=await (await fetch('/ota/status')).json();el.textContent=j.text;if(j.busy)setTimeout(poll,2000);}
-  catch(e){setTimeout(poll,3000);}
-}
-if(document.getElementById('ota').dataset.busy==='1')poll();
-</script></body></html>)html";
-
-static const char ALBUM_PAGE[] PROGMEM = R"html(<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>电子相册</title>
-<style>
-body{font-family:-apple-system,system-ui,sans-serif;background:#0d1117;color:#e6edf3;margin:0;padding:16px}
-main{max-width:420px;margin:0 auto}
-h1{font-size:20px}
-h2{font-size:17px;margin-top:28px}
-a{color:#58a6ff}
-label{display:block;margin:16px 0 6px;color:#8b949e;font-size:14px}
-input{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #30363d;background:#161b22;color:#e6edf3;font-size:16px}
-button{padding:10px 16px;border:0;border-radius:8px;background:#238636;color:#fff;font-size:16px}
-button:disabled{opacity:.6}
-.hint{color:#8b949e;font-size:13px;line-height:1.6}
-.tip{color:#3fb950;margin:8px 0}
-.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-.ph{position:relative;background:#161b22;border-radius:6px;aspect-ratio:4/3;overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:11px;color:#8b949e;word-break:break-all;text-align:center}
-.ph img{width:100%;height:100%;object-fit:contain}
-.ph button{position:absolute;top:4px;right:4px;padding:2px 8px;font-size:14px;background:#da3633cc;border-radius:12px}
-</style></head><body><main>
-<p><a href="/">← 返回设置</a></p>
-<h1>电子相册</h1>
-<p class="hint" id="state">正在读取 TF 卡…</p>
-<div id="up" hidden>
-<label>选择照片（可以一次选多张）</label>
-<input type="file" id="files" accept="image/*" multiple>
-<p class="hint">照片会先在手机上缩小到屏幕大小（320x240）再上传，每张只有几十 KB，很快；iPhone 的 HEIC 照片也会自动转成 JPG。</p>
-<p><button id="go" onclick="upload()">上传到相框</button></p>
-<p class="tip" id="msg"></p>
-</div>
-<h2 id="count"></h2>
-<div class="grid" id="grid"></div>
-</main>
-<script>
-const $=id=>document.getElementById(id);
-function fmt(b){return b>=1073741824?(b/1073741824).toFixed(1)+' GB':Math.round(b/1048576)+' MB';}
-async function load(){
-  let j;
-  try{j=await (await fetch('/album/list')).json();}catch(e){$('state').textContent='读取失败，刷新页面再试';return;}
-  const grid=$('grid');grid.textContent='';$('count').textContent='';
-  if(j.card==='noslot'){$('state').textContent='这块板子没有 TF 卡槽，用不了相册。';return;}
-  if(j.card!=='ok'){$('state').textContent='没有检测到 TF 卡。请插入 FAT32 格式的 TF 卡（32GB 以内的卡出厂就是 FAT32），插好后刷新这个页面。';$('up').hidden=true;return;}
-  $('up').hidden=false;
-  $('state').textContent='TF 卡已用 '+fmt(j.used)+'，共 '+fmt(j.total)+'。照片在卡里的 photos 文件夹，也可以拔下卡用电脑管理。'+
-    (j.failed?'有 '+j.failed+' 张照片读不出来（可能是 HEIC 或渐进式 JPEG），可以删掉后在这里重新上传。':'');
-  $('count').textContent='照片（'+j.photos.length+' 张）';
-  for(const p of j.photos){
-    const d=document.createElement('div');d.className='ph';
-    if(p.s<=1048576){const i=document.createElement('img');i.loading='lazy';i.src='/album/file?name='+encodeURIComponent(p.n);i.alt=p.n;d.appendChild(i);}
-    else d.textContent=p.n+'（原图，不显示缩略图）';
-    const b=document.createElement('button');b.textContent='×';b.title='删除';
-    b.onclick=async()=>{if(!confirm('删除 '+p.n+'？'))return;
-      const r=await fetch('/album/delete',{method:'POST',body:new URLSearchParams({name:p.n})});
-      if(!(await r.json()).ok)alert('删除失败');load();};
-    d.appendChild(b);grid.appendChild(d);
-  }
-}
-function canvas(w,h){const c=document.createElement('canvas');c.width=w;c.height=h;const x=c.getContext('2d');x.imageSmoothingQuality='high';return [c,x];}
-// 缩小到能完整放进 320x240（不放大），转成 JPG；每次缩一半，最后一步缩到目标大小，比一步缩到位清晰
-async function shrink(file){
-  let src;
-  try{src=await createImageBitmap(file,{imageOrientation:'from-image'});}
-  catch(e){src=await new Promise((ok,no)=>{const i=new Image();i.onload=()=>ok(i);i.onerror=no;i.src=URL.createObjectURL(file);});}
-  let w=src.width,h=src.height;const s=Math.min(1,320/w,240/h);
-  const tw=Math.max(1,Math.round(w*s)),th=Math.max(1,Math.round(h*s));
-  let cur=src;
-  while(w>tw*2){const [c,x]=canvas(Math.round(w/2),Math.round(h/2));x.drawImage(cur,0,0,c.width,c.height);cur=c;w=c.width;h=c.height;}
-  const [c,x]=canvas(tw,th);x.fillStyle='#000';x.fillRect(0,0,tw,th);x.drawImage(cur,0,0,tw,th);
-  return await new Promise(r=>c.toBlob(r,'image/jpeg',0.88));
-}
-async function upload(){
-  const files=[...$('files').files];if(!files.length){$('msg').textContent='先选择照片';return;}
-  const go=$('go');go.disabled=true;let ok=0;const bad=[];
-  for(let i=0;i<files.length;i++){
-    $('msg').textContent='正在上传 '+(i+1)+' / '+files.length+'…';
-    try{
-      const blob=await shrink(files[i]);
-      const fd=new FormData();fd.append('photo',blob,files[i].name.replace(/\.[^.]*$/,'')+'.jpg');
-      const j=await (await fetch('/album/upload',{method:'POST',body:fd})).json();
-      if(j.ok)ok++;else bad.push(files[i].name+'（'+j.error+'）');
-    }catch(e){bad.push(files[i].name+'（浏览器打不开这张图）');}
-  }
-  $('msg').textContent='上传了 '+ok+' 张'+(bad.length?'，失败：'+bad.join('，'):'');
-  go.disabled=false;$('files').value='';load();
-}
-load();
-</script></body></html>)html";
-
-static String html_escape(const String &s) {
-  String out;
-  for (size_t i = 0; i < s.length(); i++) {
-    char c = s[i];
-    switch (c) {
-      case '&': out += "&amp;"; break;
-      case '<': out += "&lt;"; break;
-      case '>': out += "&gt;"; break;
-      case '"': out += "&quot;"; break;
-      default: out += c;
-    }
-  }
-  return out;
-}
 
 static String ota_text(const OtaStatus &s) {
   switch (s.state) {
@@ -336,22 +41,6 @@ static String ota_text(const OtaStatus &s) {
   return "";
 }
 
-static String pomo_text() {
-  if (!pomodoro) return "";
-  const Pomodoro &p = *pomodoro;
-  uint32_t secs = (p.remaining_ms(millis()) + 999) / 1000;
-  char left[16];
-  snprintf(left, sizeof(left), "%02u:%02u", (unsigned)(secs / 60), (unsigned)(secs % 60));
-  String phase;
-  switch (p.phase()) {
-    case PomoPhase::Idle: return "未开始";
-    case PomoPhase::Focus: phase = "专注"; break;
-    case PomoPhase::ShortBreak: phase = "短休息"; break;
-    case PomoPhase::LongBreak: phase = "长休息"; break;
-  }
-  return phase + (p.running() ? "中，剩余 " : "（已暂停），剩余 ") + left;
-}
-
 static String stats_text() {
   if (!pomo_stats || !today) return "";
   int day = today();
@@ -363,92 +52,151 @@ static bool ota_busy(const OtaStatus &s) {
   return s.state == OtaState::Checking || s.state == OtaState::Downloading;
 }
 
-static void handle_root() {
+// 设置网页是一个压缩好的静态文件（web/index.html，编译时由 tools/web_gz.py 生成），
+// 设置和状态由网页用下面两个 JSON 接口读取
+static void handle_index() {
+  server.sendHeader("Content-Encoding", "gzip");
+  server.sendHeader("Cache-Control", "no-cache");
+  server.send_P(200, "text/html; charset=utf-8", (const char *)WEB_INDEX_GZ, WEB_INDEX_GZ_LEN);
+}
+
+static void send_doc(const JsonDocument &doc) {
+  String out;
+  serializeJson(doc, out);
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/json", out);
+}
+
+static void send_ok() {
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+// 字段名和 /save 提交的名字一致，网页按名字填进表单
+static void handle_api_settings() {
   Settings s = settings_get();
-  String page = FPSTR(PAGE);
-  page.replace("%SAVED%", server.hasArg("saved") ? "<p class=\"tip\">已保存</p>" : "");
-  page.replace("%CITY%", html_escape(s.city));
-  page.replace("%LAT%", String(s.lat, 4));
-  page.replace("%LON%", String(s.lon, 4));
-  page.replace("%BRIGHT%", String(s.brightness));
-  page.replace("%PAGE_SEC%", String(s.page_seconds));
+  JsonDocument doc;
   char hhmm[8];
-  page.replace("%NIGHT_ON%", s.night_on ? "checked" : "");
-  night_format_hhmm(s.night_start, hhmm, sizeof(hhmm));
-  page.replace("%NIGHT_START%", hhmm);
-  night_format_hhmm(s.night_end, hhmm, sizeof(hhmm));
-  page.replace("%NIGHT_END%", hhmm);
-  page.replace("%NIGHT_BRIGHT%", String(s.night_brightness));
-  page.replace("%STOCKS%", html_escape(s.stocks));
-  bool has_token = s.github_token.length() > 0;
-  page.replace("%GH_STATE%", has_token ? "已设置" : "未设置");
-  page.replace("%GH_PLACEHOLDER%", has_token ? "已设置，留空则不修改" : "ghp_...");
-  page.replace("%AUTO_UPDATE%", s.auto_update ? "checked" : "");
-  bool has_ai = s.ai_key.length() > 0;
-  page.replace("%AI_STATE%", voice_available() ? "" : "这块板子没有麦克风，用不了语音聊天。");
-  page.replace("%AI_KEY_STATE%", has_ai ? "已设置" : "未设置");
-  page.replace("%AI_KEY_PLACEHOLDER%", has_ai ? "已设置，留空则不修改" : "sk-...");
-  page.replace("%AI_MODEL%", html_escape(s.ai_model));
-  page.replace("%AI_VOICE%", html_escape(s.ai_voice));
-  page.replace("%ALBUM_STATE%", photos_supported()
-                                    ? "照片放在 TF 卡的 photos 文件夹里，支持 JPG 和 PNG。<a href=\"/album\">用手机上传和管理照片 →</a>"
-                                    : "这块板子没有 TF 卡槽，用不了相册。");
-  page.replace("%ALBUM_SEC%", String(s.album_sec));
-  page.replace("%ALBUM_SHUFFLE%", s.album_shuffle ? "checked" : "");
-  page.replace("%SAVER_ON%", s.saver_on ? "checked" : "");
-  page.replace("%SAVER_MIN%", String(s.saver_min));
-  page.replace("%POMO_FOCUS%", String(s.pomo_focus));
-  page.replace("%POMO_SHORT%", String(s.pomo_short));
-  page.replace("%POMO_LONG%", String(s.pomo_long));
-  page.replace("%POMO_EVERY%", String(s.pomo_every));
-  String stats = stats_text();
-  page.replace("%POMO_STATE%", html_escape(stats.length() ? pomo_text() + "。" + stats : pomo_text()));
-  page.replace("%SIT_ON%", s.sit_on ? "checked" : "");
-  page.replace("%SIT_MIN%", String(s.sit_min));
-  page.replace("%WATER_ON%", s.water_on ? "checked" : "");
-  page.replace("%WATER_MIN%", String(s.water_min));
-  night_format_hhmm(s.remind_start, hhmm, sizeof(hhmm));
-  page.replace("%REMIND_START%", hhmm);
-  night_format_hhmm(s.remind_end, hhmm, sizeof(hhmm));
-  page.replace("%REMIND_END%", hhmm);
-  page.replace("%CHIME_ON%", s.chime_on ? "checked" : "");
-  page.replace("%ALARM_ON%", s.alarm_on ? "checked" : "");
-  night_format_hhmm(s.alarm_time, hhmm, sizeof(hhmm));
-  page.replace("%ALARM_TIME%", hhmm);
-  static const char *const day_names[] = {"日", "一", "二", "三", "四", "五", "六"};
-  String days;
-  for (int i = 1; i <= 7; i++) {  // 从周一排到周日
-    int d = i % 7;
-    days += String("<label class=\"check\" style=\"margin:0 12px 0 0\"><input type=\"checkbox\" name=\"ad") + d +
-            "\" " + ((s.alarm_days & (1 << d)) ? "checked" : "") + "> 周" + day_names[d] + "</label>";
+  auto put_time = [&](const char *key, uint16_t minutes) {
+    night_format_hhmm(minutes, hhmm, sizeof(hhmm));
+    doc[key] = hhmm;
+  };
+  doc["city"] = s.city;
+  doc["lat"] = serialized(String(s.lat, 4));
+  doc["lon"] = serialized(String(s.lon, 4));
+  doc["brightness"] = s.brightness;
+  doc["page_sec"] = s.page_seconds;
+  doc["night_on"] = s.night_on;
+  put_time("night_start", s.night_start);
+  put_time("night_end", s.night_end);
+  doc["night_bright"] = s.night_brightness;
+  doc["stocks"] = s.stocks;
+  doc["has_token"] = s.github_token.length() > 0;  // Token 和 Key 不发给网页，只告诉有没有
+  doc["auto_update"] = s.auto_update;
+  doc["pomo_focus"] = s.pomo_focus;
+  doc["pomo_short"] = s.pomo_short;
+  doc["pomo_long"] = s.pomo_long;
+  doc["pomo_every"] = s.pomo_every;
+  doc["sound_on"] = s.sound_on;
+  doc["sound_volume"] = s.sound_volume;
+  doc["sound_quiet"] = s.sound_quiet_night;
+  doc["sit_on"] = s.sit_on;
+  doc["sit_min"] = s.sit_min;
+  doc["water_on"] = s.water_on;
+  doc["water_min"] = s.water_min;
+  put_time("remind_start", s.remind_start);
+  put_time("remind_end", s.remind_end);
+  doc["chime_on"] = s.chime_on;
+  doc["alarm_on"] = s.alarm_on;
+  put_time("alarm_time", s.alarm_time);
+  doc["alarm_days"] = s.alarm_days;
+  doc["climate_on"] = s.climate_on;
+  doc["hot_c"] = s.hot_c;
+  doc["humid_pct"] = s.humid_pct;
+  doc["temp_offset"] = serialized(String(s.temp_offset / 10.0f, 1));
+  doc["away_off"] = s.away_off;
+  doc["away_min"] = s.away_min;
+  doc["has_ai"] = s.ai_key.length() > 0;
+  doc["ai_model"] = s.ai_model;
+  doc["ai_voice"] = s.ai_voice;
+  doc["album_sec"] = s.album_sec;
+  doc["album_shuffle"] = s.album_shuffle;
+  doc["saver_on"] = s.saver_on;
+  doc["saver_min"] = s.saver_min;
+  // 这块板子有没有这些硬件
+  doc["audio"] = audio_available();
+  doc["voice"] = voice_available();
+  doc["photos"] = photos_supported();
+  send_doc(doc);
+}
+
+static const char *ota_state_name(OtaState s) {
+  switch (s) {
+    case OtaState::Idle: return "idle";
+    case OtaState::Checking: return "checking";
+    case OtaState::UpToDate: return "uptodate";
+    case OtaState::Available: return "available";
+    case OtaState::Downloading: return "downloading";
+    case OtaState::Done: return "done";
+    case OtaState::Failed: return "failed";
   }
-  page.replace("%ALARM_DAYS%", days);
-  page.replace("%NO_SPEAKER%", audio_available() ? "" : "这块板子没有喇叭，只会在屏幕上提示。");
-  page.replace("%REMIND_STATE%", s.sit_on || s.water_on ? "" : "两个提醒默认都关着。");
-  page.replace("%ROOM_STATE%", room_hook ? html_escape(room_hook()) : "");
-  page.replace("%CLIMATE_ON%", s.climate_on ? "checked" : "");
-  page.replace("%HOT_C%", String(s.hot_c));
-  page.replace("%HUMID_PCT%", String(s.humid_pct));
-  page.replace("%TEMP_OFFSET%", String(s.temp_offset / 10.0f, 1));
-  page.replace("%AWAY_OFF%", s.away_off ? "checked" : "");
-  page.replace("%AWAY_MIN%", String(s.away_min));
-  page.replace("%SOUND_ON%", s.sound_on ? "checked" : "");
-  page.replace("%SOUND_NOTE%", audio_available() ? "" : "（这块板子没有喇叭）");
-  page.replace("%SOUND_VOL%", String(s.sound_volume));
-  page.replace("%SOUND_QUIET%", s.sound_quiet_night ? "checked" : "");
-  page.replace("%FW_VERSION%", html_escape(ota_current_version()));
+  return "";
+}
+
+static void handle_api_status() {
+  JsonDocument doc;
+  doc["ver"] = ota_current_version();
+  doc["uptime"] = millis() / 1000;
+  JsonObject wifi = doc["wifi"].to<JsonObject>();
+  wifi["ssid"] = WiFi.SSID();
+  wifi["rssi"] = WiFi.RSSI();
+  wifi["ip"] = WiFi.localIP().toString();
+
   OtaStatus os = ota_status();
-  page.replace("%OTA_BUSY%", ota_busy(os) ? "1" : "0");
-  page.replace("%OTA_TEXT%", html_escape(ota_text(os)));
-  page.replace("%NET_STATUS%", net_status_html());
-  String panel = String("屏幕：已运行 ") + millis() / 3600000 + " 小时，";
+  JsonObject ota = doc["ota"].to<JsonObject>();
+  ota["state"] = ota_state_name(os.state);
+  ota["text"] = ota_text(os);
+  ota["busy"] = ota_busy(os);
+  ota["latest"] = os.latest;
+
+  JsonObject po = doc["pomo"].to<JsonObject>();
+  if (pomodoro) {
+    const Pomodoro &p = *pomodoro;
+    static const char *const phases[] = {"idle", "focus", "short", "long"};
+    PomoPhase ph = p.phase();
+    po["phase"] = ph == PomoPhase::Focus        ? phases[1]
+                  : ph == PomoPhase::ShortBreak ? phases[2]
+                  : ph == PomoPhase::LongBreak  ? phases[3]
+                                                : phases[0];
+    po["running"] = p.running();
+    po["left"] = (p.remaining_ms(millis()) + 999) / 1000;
+  } else {
+    po["phase"] = "idle";
+    po["running"] = false;
+    po["left"] = 0;
+  }
+  int day = today ? today() : -1;
+  po["today"] = pomo_stats && day >= 0 ? pomo_stats->count(day) : -1;
+  po["stats"] = stats_text();
+
+  JsonObject room = doc["room"].to<JsonObject>();
+  RoomInfo ri = {};
+  if (room_info) room_info(ri);
+  room["dock"] = ri.dock;
+  room["valid"] = ri.valid;
+  room["temp"] = serialized(String(ri.temp_c, 1));
+  room["hum"] = ri.humidity;
+  room["presence"] = ri.presence;
+  room["away"] = ri.away;
+
+  doc["net"] = net_status_html();
+  String panel = "屏幕：";
   if (display_panel_watching()) {
     panel += String("自动恢复白屏、花屏 ") + display_panel_recoveries() + " 次";
   } else {
     panel += "读不出屏幕状态，每 10 分钟重新初始化一次";
   }
-  page.replace("%PANEL_STATUS%", panel);
-  server.send(200, "text/html; charset=utf-8", page);
+  doc["panel"] = panel;
+  send_doc(doc);
 }
 
 static void handle_save() {
@@ -565,8 +313,7 @@ static void handle_save() {
   github_request_refresh();
   stock_request_refresh();
 
-  server.sendHeader("Location", "/?saved=1");
-  server.send(303);
+  send_ok();
 }
 
 // 留言：去掉首尾空白，超过 60 个字截断（按 UTF-8 字符数，不会切坏汉字）
@@ -582,29 +329,12 @@ static void handle_message() {
     }
   }
   if (text.length() > 0 && message_hook) message_hook(text, server.hasArg("sound"));
-  server.sendHeader("Location", "/");
-  server.send(303);
+  send_ok();
 }
 
 static void handle_pomo(PomoCmd cmd) {
   if (pomo_cmd) pomo_cmd(cmd);
-  server.sendHeader("Location", "/");
-  server.send(303);
-}
-
-static void redirect_to_ota() {
-  server.sendHeader("Location", "/#ota");
-  server.send(303);
-}
-
-static void handle_ota_status() {
-  OtaStatus s = ota_status();
-  JsonDocument doc;
-  doc["text"] = ota_text(s);
-  doc["busy"] = ota_busy(s);
-  String out;
-  serializeJson(doc, out);
-  server.send(200, "application/json", out);
+  send_ok();
 }
 
 static bool upload_ok = false;
@@ -638,11 +368,10 @@ static void handle_upload_chunk() {
 }
 
 static void handle_upload_done() {
-  String msg = upload_ok ? String("升级成功，设备正在重启，大约 10 秒后刷新设置页面即可。")
-                         : String("升级失败：") + html_escape(ota_status().error);
-  server.send(200, "text/html; charset=utf-8",
-              "<meta charset=utf-8><meta name=viewport content='width=device-width'>"
-              "<p>" + msg + "</p><p><a href='/'>返回设置页面</a></p>");
+  JsonDocument doc;
+  doc["ok"] = upload_ok;
+  if (!upload_ok) doc["error"] = String(ota_status().error);
+  send_doc(doc);
 }
 
 // 电子相册：照片列表、上传、删除、缩略图
@@ -705,8 +434,7 @@ static void handle_photo_file() {
 }
 
 static void handle_reset_wifi() {
-  server.send(200, "text/html; charset=utf-8",
-              "<meta charset=utf-8><p>已清除 WiFi，设备正在重启进入配网模式。</p>");
+  send_ok();
   delay(500);
   WiFi.disconnect(true, true);  // 第二个参数会擦除保存的 WiFi 信息
   delay(500);
@@ -714,29 +442,32 @@ static void handle_reset_wifi() {
 }
 
 void web_config_begin() {
-  server.on("/", HTTP_GET, handle_root);
+  server.on("/", HTTP_GET, handle_index);
+  server.on("/api/settings", HTTP_GET, handle_api_settings);
+  server.on("/api/status", HTTP_GET, handle_api_status);
   server.on("/save", HTTP_POST, handle_save);
   server.on("/reset-wifi", HTTP_POST, handle_reset_wifi);
-  server.on("/ota/status", HTTP_GET, handle_ota_status);
   server.on("/message", HTTP_POST, handle_message);
   server.on("/pomodoro/toggle", HTTP_POST, [] { handle_pomo(PomoCmd::Toggle); });
   server.on("/pomodoro/skip", HTTP_POST, [] { handle_pomo(PomoCmd::Skip); });
   server.on("/pomodoro/reset", HTTP_POST, [] { handle_pomo(PomoCmd::Reset); });
   server.on("/sound/test", HTTP_POST, [] {
     audio_play(SoundId::FocusDone);
-    server.sendHeader("Location", "/");
-    server.send(303);
+    send_ok();
   });
   server.on("/ota/check", HTTP_POST, [] {
     ota_check_now();
-    redirect_to_ota();
+    send_ok();
   });
   server.on("/ota/install", HTTP_POST, [] {
     ota_install_now();
-    redirect_to_ota();
+    send_ok();
   });
   server.on("/ota/upload", HTTP_POST, handle_upload_done, handle_upload_chunk);
-  server.on("/album", HTTP_GET, [] { server.send_P(200, "text/html; charset=utf-8", ALBUM_PAGE); });
+  server.on("/album", HTTP_GET, [] {  // 旧的相册地址，现在是设置网页里的子页面
+    server.sendHeader("Location", "/#album");
+    server.send(302);
+  });
   server.on("/album/list", HTTP_GET, [] { server.send(200, "application/json", photos_list_json()); });
   server.on("/album/file", HTTP_GET, handle_photo_file);
   server.on("/album/upload", HTTP_POST, [] { send_json(photo_ok, photo_error); }, handle_photo_chunk);
@@ -768,8 +499,8 @@ void web_config_set_message_hook(void (*hook)(const String &text, bool sound)) {
   message_hook = hook;
 }
 
-void web_config_set_room_hook(String (*hook)()) {
-  room_hook = hook;
+void web_config_set_room_info(void (*hook)(RoomInfo &info)) {
+  room_info = hook;
 }
 
 void web_config_set_progress_hook(void (*hook)()) {

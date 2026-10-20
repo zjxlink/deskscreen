@@ -372,17 +372,13 @@ static void update_room() {
 }
 
 // 设置页上显示的底座状态
-static String room_text() {
-  if (!sensors_dock()) return "没有检测到 SENSOR 底座，这一节的设置不起作用。";
-  String s = "已检测到 SENSOR 底座。";
-  if (room_valid) {
-    char buf[64];
-    snprintf(buf, sizeof(buf), "现在室内 %.1f°C，湿度 %d%%。", room_temp, (int)lroundf(room_humidity));
-    s += buf;
-  }
-  s += sensors_presence() ? "雷达：有人" : "雷达：暂时没感应到动作";
-  if (screen.away()) s += "（已熄屏）";
-  return s;
+static void room_info(RoomInfo &info) {
+  info.dock = sensors_dock();
+  info.valid = info.dock && room_valid;
+  info.temp_c = room_temp;
+  info.humidity = (int)lroundf(room_humidity);
+  info.presence = sensors_presence();
+  info.away = screen.away();
 }
 
 static void react(PetMood mood, uint32_t ms, bool show) {
@@ -922,7 +918,7 @@ void setup() {
   web_config_set_pomodoro(&pomo, pomo_command);
   web_config_set_pomo_stats(&pomo_stats, local_day);
   web_config_set_message_hook(on_message);
-  web_config_set_room_hook(room_text);
+  web_config_set_room_info(room_info);
   // 网页上传固件期间主循环被阻塞，由上传处理顺带刷新进度画面
   web_config_set_progress_hook([] {
     update_ota_screen();
