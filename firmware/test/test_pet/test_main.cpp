@@ -92,6 +92,27 @@ static void test_frames_differ() {
   TEST_ASSERT_EQUAL(0, diff(PetMood::Sleep, false, PetMood::Sleep, true));  // 睡着了不眨眼
 }
 
+// 动作反应的表情：每个像素都是合法颜色，并且和平时的脸不一样
+static void test_reaction_faces() {
+  PetMood ms[] = {PetMood::Dizzy, PetMood::Startled, PetMood::Flipped};
+  PetInputs in;
+  for (PetMood m : ms) {
+    int diff = 0;
+    for (int y = 0; y < kPetSize; y++) {
+      for (int x = 0; x < kPetSize; x++) {
+        int c = pet_pixel(m, false, x, y);
+        TEST_ASSERT_TRUE(c >= PET_NONE && c <= PET_TEAR);
+        TEST_ASSERT_EQUAL(c, pet_pixel(m, false, kPetSize - 1 - x, y));  // 左右对称
+        if (c != pet_pixel(PetMood::Normal, false, x, y)) diff++;
+      }
+    }
+    TEST_ASSERT_TRUE(diff >= 4);
+    char line[96] = "";
+    pet_line(m, in, line, sizeof(line));
+    TEST_ASSERT_TRUE(line[0] != 0);
+  }
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_mood_priority);
@@ -100,5 +121,6 @@ int main() {
   RUN_TEST(test_lines);
   RUN_TEST(test_sprite_is_symmetric_and_in_bounds);
   RUN_TEST(test_frames_differ);
+  RUN_TEST(test_reaction_faces);
   return UNITY_END();
 }

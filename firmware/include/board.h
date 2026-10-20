@@ -29,6 +29,9 @@
   #define PIN_I2S_DOUT      15
   #define PIN_AUDIO_PA      46   // 功放使能，高电平打开
   #define ES8311_ADDR       0x18
+  // 六轴姿态传感器 ICM-42607-P，和触摸、解码芯片共用 I2C
+  #define HAS_IMU
+  #define IMU_ADDR          0x68
   // SENSOR 底座（可选）：温湿度 AHT30 和毫米波雷达 AT581X 挂在单独的 I2C 上，雷达有人时输出高电平。
   // 引脚来自乐鑫 esp-box 的 bsp_board.h；没插底座时开机探测不到，自动不用
   #define HAS_SENSOR_DOCK

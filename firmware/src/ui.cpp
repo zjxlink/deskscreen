@@ -816,8 +816,8 @@ void ui_set_pet(PetMood mood, bool blink, const char *line, const char *status) 
   if (strcmp(lv_label_get_text(lbl_pet_status), status) != 0) lv_label_set_text(lbl_pet_status, status);
 }
 
-void ui_pet_anim(int bob, int zzz) {
-  lv_obj_set_y(pet_canvas, kPetTop + bob);
+void ui_pet_anim(int dx, int bob, int zzz) {
+  lv_obj_align(pet_canvas, LV_ALIGN_TOP_MID, dx, kPetTop + bob);
   if (zzz < 0) {
     lv_obj_add_flag(lbl_pet_zzz, LV_OBJ_FLAG_HIDDEN);
     return;
