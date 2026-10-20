@@ -78,6 +78,7 @@ static size_t record() {
     status.rec_ms = millis() - start;
     xSemaphoreGive(lock);
   }
+  audio_mic_end();
   return n;
 }
 

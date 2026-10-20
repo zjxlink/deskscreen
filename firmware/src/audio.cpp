@@ -16,6 +16,8 @@ void audio_stream_end() {}
 bool audio_mic_available() { return false; }
 void audio_mic_begin() {}
 size_t audio_mic_read(int16_t *, size_t) { return 0; }
+void audio_mic_end() {}
+size_t audio_mic_listen(int16_t *, size_t) { return 0; }
 
 #else
 
@@ -34,6 +36,8 @@ static SemaphoreHandle_t out_lock;  // 提示音和语音回答轮流用喇叭
 static volatile int volume = 60;
 static bool ready = false;
 static bool mic_ready = false;
+static SemaphoreHandle_t mic_lock;        // AI 聊天录音时一直占着，音乐律动每次读之前试一下
+static volatile bool speaker_on = false;  // 喇叭在响时音乐律动不听，免得听到自己的声音
 
 static bool codec_write(uint8_t reg, uint8_t val) {
   return lgfx::i2c::writeRegister8(kI2cPort, ES8311_ADDR, reg, val).has_value();
@@ -192,12 +196,14 @@ static void audio_task(void *) {
 
     // 功放只在播放时打开，平时关着，避免底噪
     xSemaphoreTake(out_lock, portMAX_DELAY);
+    speaker_on = true;
     digitalWrite(PIN_AUDIO_PA, HIGH);
     delay(20);
     write_stereo(pcm, n);
     write_stereo(nullptr, kRate / 10);  // 再送 100ms 静音，确保最后一个音放完
     delay(50);
     digitalWrite(PIN_AUDIO_PA, LOW);
+    speaker_on = false;
     xSemaphoreGive(out_lock);
     free(pcm);
   }
@@ -223,6 +229,7 @@ void audio_begin() {
   if (!mic_ready) log_w("audio: ES7210 not responding, no microphone");
 #endif
   out_lock = xSemaphoreCreateMutex();
+  mic_lock = xSemaphoreCreateMutex();
   queue = xQueueCreate(4, sizeof(SoundId));
   xTaskCreate(audio_task, "audio", 4096, nullptr, 2, nullptr);
   ready = true;
@@ -240,6 +247,7 @@ void audio_play(SoundId id) {
 void audio_stream_begin() {
   if (!ready) return;
   xSemaphoreTake(out_lock, portMAX_DELAY);
+  speaker_on = true;
   digitalWrite(PIN_AUDIO_PA, HIGH);
   delay(20);
 }
@@ -267,14 +275,14 @@ void audio_stream_end() {
   write_stereo(nullptr, kRate / 10);
   delay(50);
   digitalWrite(PIN_AUDIO_PA, LOW);
+  speaker_on = false;
   xSemaphoreGive(out_lock);
 }
 
 bool audio_mic_available() { return mic_ready; }
 
-void audio_mic_begin() {
-  if (!mic_ready) return;
-  // 没人读的时候 DMA 缓冲里攒着旧的录音，先读掉
+// 没人读的时候 DMA 缓冲里攒着旧的录音，先读掉
+static void mic_flush() {
   static int16_t junk[256 * 2];
   size_t got = 0;
   for (int i = 0; i < 16; i++) {
@@ -282,8 +290,17 @@ void audio_mic_begin() {
   }
 }
 
-size_t audio_mic_read(int16_t *mono, size_t max) {
-  if (!mic_ready) return 0;
+void audio_mic_begin() {
+  if (!mic_ready) return;
+  xSemaphoreTake(mic_lock, portMAX_DELAY);  // 等音乐律动读完手上这一小段
+  mic_flush();
+}
+
+void audio_mic_end() {
+  if (mic_ready) xSemaphoreGive(mic_lock);
+}
+
+static size_t mic_read(int16_t *mono, size_t max) {
   static int16_t buf[256 * 2];
   if (max > 256) max = 256;
   size_t got = 0;
@@ -291,6 +308,24 @@ size_t audio_mic_read(int16_t *mono, size_t max) {
   size_t frames = got / 4;
   for (size_t i = 0; i < frames; i++) mono[i] = (int16_t)(((int32_t)buf[2 * i] + buf[2 * i + 1]) / 2);
   return frames;
+}
+
+size_t audio_mic_read(int16_t *mono, size_t max) {
+  return mic_ready ? mic_read(mono, max) : 0;
+}
+
+size_t audio_mic_listen(int16_t *mono, size_t max) {
+  static bool paused = true;
+  if (!mic_ready) return 0;
+  if (speaker_on || xSemaphoreTake(mic_lock, 0) != pdTRUE) {
+    paused = true;
+    return 0;
+  }
+  if (paused) mic_flush();  // 停过一阵，缓冲里是喇叭的声音或者旧的录音
+  paused = false;
+  size_t n = mic_read(mono, max);
+  xSemaphoreGive(mic_lock);
+  return n;
 }
 
 #endif

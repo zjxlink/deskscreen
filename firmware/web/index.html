@@ -241,6 +241,7 @@ drop:'<path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z"/>',
 thermo:'<path d="M14 14.8V5a2 2 0 0 0-4 0v9.8a4 4 0 1 0 4 0z"/>',
 theme:'<circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 0 0 16z" fill="currentColor"/>',
 pulse:'<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+music:'<path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>',
 left:'<path d="M15 5l-7 7 7 7"/>'};
 const ic=n=>P+ICONS[n]+'</svg>';
 
@@ -260,6 +261,8 @@ const CARDS=[
  {type:'time',k:'night_end',label:'结束'},
  {type:'range',k:'night_bright',label:'夜间亮度（拉到最左边会关闭屏幕）',min:0,max:255}],
  hint:'夜间只显示时钟页，不自动轮播。点一下屏幕或按 BOOT 键，会临时恢复正常亮度 30 秒。'},
+{t:'display',title:'音乐律动',icon:'music',sw:'music_on',f:[],
+ hint:'麦克风听到音乐时，小橘页底部出现跳动的频谱条，小橘跟着节拍摇摆；一分钟没碰屏幕时会自动切到小橘页，音乐停了再切回来。声音只在设备上分析，不录音也不上传；AI 聊天用麦克风或喇叭在响时自动暂停。'},
 {t:'display',title:'人体感应',icon:'person',meta:'presence',f:[
  {type:'sw',k:'away_off',label:'没人时熄屏',sub:'有人回来自动亮'},
  {type:'num',k:'away_min',label:'多久没人算离开',unit:'分钟'}],

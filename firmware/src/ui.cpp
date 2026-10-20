@@ -93,6 +93,11 @@ static lv_color_t *pet_buf;
 static lv_obj_t *lbl_pet_line;
 static lv_obj_t *lbl_pet_status;
 static lv_obj_t *lbl_pet_zzz;
+static lv_obj_t *pet_bars[kMusicBands];  // 音乐律动的频谱，放音乐时代替底部那行状态
+static constexpr int kPetBarW = 14;
+static constexpr int kPetBarGap = 4;
+static constexpr int kPetBarMaxH = 40;
+static constexpr int kPetBarBase = SCREEN_H - 10;  // 频谱条底边
 
 // 全屏提醒
 static lv_obj_t *scr_alert;
@@ -490,6 +495,23 @@ static void build_pet() {
   lv_obj_set_width(lbl_pet_status, SCREEN_W - 32);
   lv_obj_set_style_text_align(lbl_pet_status, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_align(lbl_pet_status, LV_ALIGN_BOTTOM_MID, 0, -12);
+
+  // 频谱：16 根橘色的条，低音在左
+  int w = kMusicBands * (kPetBarW + kPetBarGap) - kPetBarGap;
+  for (int i = 0; i < kMusicBands; i++) {
+    lv_obj_t *b = lv_obj_create(scr);
+    lv_obj_set_style_border_width(b, 0, 0);
+    lv_obj_set_style_radius(b, 2, 0);
+    lv_obj_set_style_pad_all(b, 0, 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(0xF28C3C), 0);
+    lv_obj_set_style_bg_grad_color(b, lv_color_hex(0xFFD08A), 0);
+    lv_obj_set_style_bg_grad_dir(b, LV_GRAD_DIR_VER, 0);
+    lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(b, kPetBarW, 2);
+    lv_obj_set_pos(b, (SCREEN_W - w) / 2 + i * (kPetBarW + kPetBarGap), kPetBarBase - 2);
+    lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
+    pet_bars[i] = b;
+  }
 }
 
 static void build_album() {
@@ -1322,6 +1344,21 @@ void ui_set_pet(PetMood mood, bool blink, const char *line, const char *status) 
   }
   if (strcmp(lv_label_get_text(lbl_pet_line), line) != 0) lv_label_set_text(lbl_pet_line, line);
   if (strcmp(lv_label_get_text(lbl_pet_status), status) != 0) lv_label_set_text(lbl_pet_status, status);
+}
+
+void ui_set_pet_music(const float *bands) {
+  if (!bands) {
+    for (lv_obj_t *b : pet_bars) lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(lbl_pet_status, LV_OBJ_FLAG_HIDDEN);
+    return;
+  }
+  lv_obj_add_flag(lbl_pet_status, LV_OBJ_FLAG_HIDDEN);
+  for (int i = 0; i < kMusicBands; i++) {
+    int h = 2 + (int)(bands[i] * (kPetBarMaxH - 2));
+    lv_obj_set_height(pet_bars[i], h);
+    lv_obj_set_y(pet_bars[i], kPetBarBase - h);
+    lv_obj_clear_flag(pet_bars[i], LV_OBJ_FLAG_HIDDEN);
+  }
 }
 
 void ui_pet_anim(int dx, int bob, int zzz) {

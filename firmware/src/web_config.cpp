@@ -112,6 +112,7 @@ static void handle_api_settings() {
   doc["alarm_days"] = s.alarm_days;
   doc["climate_on"] = s.climate_on;
   doc["rain_on"] = s.rain_on;
+  doc["music_on"] = s.music_on;
   doc["hot_c"] = s.hot_c;
   doc["humid_pct"] = s.humid_pct;
   doc["temp_offset"] = serialized(String(s.temp_offset / 10.0f, 1));
@@ -275,6 +276,7 @@ static void handle_save() {
   s.sit_on = server.hasArg("sit_on");
   s.water_on = server.hasArg("water_on");
   s.rain_on = server.hasArg("rain_on");
+  s.music_on = server.hasArg("music_on");
   s.chime_on = server.hasArg("chime_on");
   s.alarm_on = server.hasArg("alarm_on");
   int at = night_parse_hhmm(server.arg("alarm_time").c_str());

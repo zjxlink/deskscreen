@@ -1,6 +1,7 @@
 #pragma once
 
 #include "github.h"
+#include "music.h"
 #include "pages.h"
 #include "pet.h"
 #include "pomodoro.h"
@@ -42,6 +43,9 @@ void ui_set_pet(PetMood mood, bool blink, const char *line, const char *status);
 
 // 小猫的动画：dx、bob 为左右、上下偏移的像素数，zzz 为睡觉时"Zzz"的帧（0 或 1），不睡觉时传 -1
 void ui_pet_anim(int dx, int bob, int zzz);
+
+// 小猫页底部的音乐频谱：bands 是 kMusicBands 根条的高度（0～1），nullptr 表示不放音乐，换回状态那一行
+void ui_set_pet_music(const float *bands);
 
 // 全屏提醒（留言、久坐、喝水、闹钟），盖在当前页面上，关掉后用 ui_show_page 回到原来的页面
 enum class AlertIcon { Message, Sit, Water, Alarm, Climate, Rain };
