@@ -14,6 +14,7 @@ struct Settings {
   uint8_t page_seconds;  // 自动切换页面的间隔，0 表示不自动切换
   bool night_on;           // 夜间自动调暗
   uint16_t night_start;    // 当天第几分钟，默认 23:00
+  bool night_sun;          // 日落时开始（按天气预报里的日落时间，没拿到时用 night_start）
   uint16_t night_end;      // 默认 07:00
   uint8_t night_brightness;  // 0 表示关闭背光
   bool auto_update;          // 发现新版本后在凌晨 3~5 点自动安装

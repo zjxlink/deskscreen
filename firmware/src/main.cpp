@@ -138,14 +138,23 @@ static uint32_t last_input = 0;  // 最近一次碰屏幕或按 BOOT 键
 static bool saver_active = false;
 static Page saver_return = PAGE_CLOCK;
 
+// 夜间模式跟着日落开始：今天的日落时间（当天第几分钟），还没拿到天气预报时为 -1
+static int sunset_min = -1;
+static ScreenConfig screen_cfg;
+
+static int night_start_of(const Settings &s) {
+  return s.night_sun && sunset_min >= 0 ? sunset_min : s.night_start;
+}
+
 static void apply_settings() {
   Settings s = settings_get();
   ui_set_city(s.city.c_str());
 
-  ScreenConfig c;
+  ScreenConfig &c = screen_cfg;
+  c = ScreenConfig();
   c.day_brightness = s.brightness;
   c.night_on = s.night_on;
-  c.night_start = s.night_start;
+  c.night_start = night_start_of(s);
   c.night_end = s.night_end;
   c.night_brightness = s.night_brightness;
   c.page_seconds = s.page_seconds;
@@ -351,8 +360,16 @@ static void update_reminders() {
 // 新的天气预报到了：快下雨时提醒一次。夜间时段、留言没看、闹钟在响时先不提醒，下次拿到预报时再看
 static void on_weather(const WeatherData &w) {
   Settings s = settings_get();
+  // 日落时间每天变一点，夜间模式的开始时间跟着改
+  int sunset = !w.error && w.ndays > 0 ? w.days[0].sunset : -1;
+  if (sunset >= 0 && sunset != sunset_min) {
+    sunset_min = sunset;
+    screen_cfg.night_start = night_start_of(s);
+    screen.configure(screen_cfg);
+  }
+
   int minutes = local_minutes();
-  bool quiet = !rain_on || minutes < 0 || night_is_active(minutes, s.night_start, s.night_end) ||
+  bool quiet = !rain_on || minutes < 0 || night_is_active(minutes, night_start_of(s), s.night_end) ||
                (alert_on && !alert_timed) || alarm_ringing;
   if (!rain_alert.update(w, quiet)) return;
   char body[96];

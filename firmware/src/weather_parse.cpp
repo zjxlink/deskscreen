@@ -2,12 +2,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "astro.h"
 #include "weather.h"
 
 const char *const kWeatherQuery =
     "&current=temperature_2m,relative_humidity_2m,weather_code"
     "&hourly=precipitation_probability,precipitation,weather_code"
-    "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum"
+    "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,sunrise,sunset"
     "&timezone=auto&forecast_days=4&forecast_hours=12";
 
 // "2026-10-20" 是星期几（周日为 0），格式不对时返回 -1
@@ -44,6 +45,8 @@ bool weather_parse(JsonDocument &doc, WeatherData &out) {
     d.rain_prob = daily["precipitation_probability_max"][i] | 0;
     d.rain_mm = daily["precipitation_sum"][i] | 0.0f;
     d.wday = weekday_of(dates[i]);
+    d.sunrise = astro_parse_time(daily["sunrise"][i]);
+    d.sunset = astro_parse_time(daily["sunset"][i]);
   }
 
   // 逐小时：从现在这个小时开始。请求里限制了 12 个小时，万一返回的是整天的，就按当前时间找起点

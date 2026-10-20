@@ -27,7 +27,9 @@ static const char *kSample = R"({
     "temperature_2m_max": [21.4, 23.0, 19.2, 24.8],
     "temperature_2m_min": [15.1, 14.0, 13.6, 15.9],
     "precipitation_probability_max": [85, 10, 65, 0],
-    "precipitation_sum": [3.0, 0.0, 4.2, 0.0]
+    "precipitation_sum": [3.0, 0.0, 4.2, 0.0],
+    "sunrise": ["2026-10-20T06:04","2026-10-21T06:05","2026-10-22T06:06","2026-10-23T06:06"],
+    "sunset": ["2026-10-20T17:21","2026-10-21T17:20","2026-10-22T17:19","2026-10-23T17:18"]
   }
 })";
 
@@ -57,6 +59,9 @@ static void test_parse_current_and_days() {
   TEST_ASSERT_FLOAT_WITHIN(0.01, 4.2, w.days[2].rain_mm);
   TEST_ASSERT_FLOAT_WITHIN(0.01, 24.8, w.days[3].temp_max);
   TEST_ASSERT_FLOAT_WITHIN(0.01, 13.6, w.days[2].temp_min);
+  TEST_ASSERT_EQUAL(6 * 60 + 4, w.days[0].sunrise);
+  TEST_ASSERT_EQUAL(17 * 60 + 21, w.days[0].sunset);
+  TEST_ASSERT_EQUAL(17 * 60 + 18, w.days[3].sunset);
 }
 
 static void test_parse_hours() {
@@ -95,6 +100,7 @@ static void test_parse_missing() {
   TEST_ASSERT_EQUAL(1, w.ndays);
   TEST_ASSERT_EQUAL(0, w.nhours);
   TEST_ASSERT_EQUAL(-1, weather_rain_index(w));
+  TEST_ASSERT_EQUAL(-1, w.days[0].sunset);  // 没有日出日落，夜间模式按设定的时间
 }
 
 static void test_wet() {
