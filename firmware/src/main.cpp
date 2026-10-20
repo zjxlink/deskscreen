@@ -15,6 +15,7 @@
 #include "motion.h"
 #include "ota.h"
 #include "pet.h"
+#include "bing.h"
 #include "photos.h"
 #include "pomo_stats.h"
 #include "pomodoro.h"
@@ -116,6 +117,10 @@ static uint8_t album_sec = 10;
 static bool album_shuffle = true;
 static bool saver_on = false;
 static uint8_t saver_min = 5;
+static bool album_local = true;
+static bool album_bing = true;
+static bool show_caption = true;
+static const char *album_caption = "";  // 屏幕上这张图的说明（必应图片才有）
 static uint32_t last_input = 0;  // 最近一次碰屏幕或按 BOOT 键
 static bool saver_active = false;
 static Page saver_return = PAGE_CLOCK;
@@ -145,6 +150,12 @@ static void apply_settings() {
   album_shuffle = s.album_shuffle;
   saver_on = s.saver_on && photos_supported();
   saver_min = s.saver_min;
+  album_local = s.album_local;
+  album_bing = s.album_bing;
+  show_caption = s.bing_caption;
+  photos_set_sources(album_local, album_bing);
+  ui_set_album_caption(show_caption ? album_caption : "");
+  bing_kick();  // 刚打开必应时立即下载
 
   PomoConfig pc;
   pc.focus_min = s.pomo_focus;
@@ -697,26 +708,36 @@ static void update_saver(uint32_t now) {
   if (screen.page() == PAGE_ALBUM || screen.night() || screen.dimmed() || alert_on || quick_on || game_on ||
       ota_screen || pomo.running() || pomo_msg || (chat_busy_at && now - chat_busy_at < kChatStayMs))
     return;
-  if (photos_status().card != PhotoCard::Ok) return;
+  if (photos_status().count == 0) return;
   saver_return = screen.page();
   saver_active = true;
   screen.go_to(PAGE_ALBUM, now);
 }
 
 static const char *album_message(const PhotoStatus &st, bool has_photo) {
+  if (st.count > 0) {
+    if (has_photo) return nullptr;
+    if (photos_busy() || st.failed < st.count) return "正在读取照片…";
+    return "#E6EDF3 照片都读不出来#\n\n只支持 JPG 和 PNG，HEIC 和渐进式 JPEG 读不了。用网页设置上传的照片会自动转换好";
+  }
+  if (!album_local && !album_bing)
+    return "#E6EDF3 图片来源都关掉了#\n\n在网页设置的「显示 › 相册与屏保」里打开自己的照片或必应每日一图";
+  if (!album_local) {
+    return WiFi.isConnected() ? "#E6EDF3 正在下载必应每日一图…#\n\n下载好后会在这里播放"
+                              : "#E6EDF3 还没有必应每日一图#\n\n连上网后会自动下载";
+  }
   switch (st.card) {
     case PhotoCard::NoSlot:
     case PhotoCard::NoCard:
-      return photos_busy() ? "正在读取 TF 卡…"
-                           : "#E6EDF3 没有检测到 TF 卡#\n\n插入 FAT32 格式的 TF 卡，照片放在卡里的 photos 文件夹，也可以在网页设置里用手机上传";
+      if (photos_busy()) return "正在读取 TF 卡…";
+      return album_bing ? "#E6EDF3 没有检测到 TF 卡#\n\n必应每日一图下载好后会先在这里播放。插入 FAT32 格式的 TF 卡，就能放自己的照片，也能存下更多必应图片"
+                        : "#E6EDF3 没有检测到 TF 卡#\n\n插入 FAT32 格式的 TF 卡，照片放在卡里的 photos 文件夹，也可以在网页设置里用手机上传";
     case PhotoCard::Empty:
-      return "#E6EDF3 TF 卡里还没有照片#\n\n把 JPG 或 PNG 照片放进卡里的 photos 文件夹，或者在网页设置里用手机上传";
     case PhotoCard::Ok:
-      if (has_photo) return nullptr;
-      if (photos_busy() || st.failed < st.count) return "正在读取照片…";
-      return "#E6EDF3 照片都读不出来#\n\n只支持 JPG 和 PNG，HEIC 和渐进式 JPEG 读不了。用网页设置上传的照片会自动转换好";
+      break;
   }
-  return nullptr;
+  return album_bing ? "#E6EDF3 TF 卡里还没有照片#\n\n把照片放进卡里的 photos 文件夹，或者在网页设置里用手机上传。必应每日一图下载好后也会在这里播放"
+                    : "#E6EDF3 TF 卡里还没有照片#\n\n把 JPG 或 PNG 照片放进卡里的 photos 文件夹，或者在网页设置里用手机上传";
 }
 
 // 相册页：按间隔请后台解码下一张，解码好了就换上
@@ -735,15 +756,20 @@ static void update_album() {
   }
 
   const uint16_t *px;
-  if (photos_take_frame(px)) {
+  const char *caption;
+  if (photos_take_frame(px, caption)) {
     ui_set_album_photo(px);
+    album_caption = caption;
+    ui_set_album_caption(show_caption ? caption : "");
     has_photo = true;
     shown_at = now;
   }
   PhotoStatus st = photos_status();
-  if (st.card != PhotoCard::Ok && has_photo) {
-    has_photo = false;  // 卡被拔了，或者照片都删了
+  if (st.count == 0 && has_photo) {
+    has_photo = false;  // 卡被拔了、照片都删了，或者来源都关了
     ui_set_album_photo(nullptr);
+    album_caption = "";
+    ui_set_album_caption("");
   }
   const char *msg = album_message(st, has_photo);
   if (msg != last_msg) {
@@ -928,6 +954,7 @@ void setup() {
   github_begin();
   stock_begin();
   ota_begin();
+  bing_begin();
   log_i("heap: internal %u (largest block %u), psram %u", heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
         heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL), heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
