@@ -119,7 +119,7 @@ static bool saver_on = false;
 static uint8_t saver_min = 5;
 static bool album_local = true;
 static bool album_bing = true;
-static bool bing_caption = true;
+static bool show_caption = true;
 static const char *album_caption = "";  // 屏幕上这张图的说明（必应图片才有）
 static uint32_t last_input = 0;  // 最近一次碰屏幕或按 BOOT 键
 static bool saver_active = false;
@@ -152,9 +152,9 @@ static void apply_settings() {
   saver_min = s.saver_min;
   album_local = s.album_local;
   album_bing = s.album_bing;
-  bing_caption = s.bing_caption;
+  show_caption = s.bing_caption;
   photos_set_sources(album_local, album_bing);
-  ui_set_album_caption(bing_caption ? album_caption : "");
+  ui_set_album_caption(show_caption ? album_caption : "");
   bing_kick();  // 刚打开必应时立即下载
 
   PomoConfig pc;
@@ -760,7 +760,7 @@ static void update_album() {
   if (photos_take_frame(px, caption)) {
     ui_set_album_photo(px);
     album_caption = caption;
-    ui_set_album_caption(bing_caption ? caption : "");
+    ui_set_album_caption(show_caption ? caption : "");
     has_photo = true;
     shown_at = now;
   }
