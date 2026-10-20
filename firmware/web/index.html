@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>桌面信息屏</title>
+<style>
+:root{--bg:#F2F3F5;--card:#FFF;--text:#1D2129;--sub:#5C6370;--line:#E4E7EB;--field:#F7F8FA;--accent:#C2410C;--on:#FFF;--ink:#B93D0A;--soft:#FFF0E6;--danger:#C62828;--ok:#1F7A3D;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0E1013;--card:#181B20;--text:#E7E9EC;--sub:#A2A9B4;--line:#2A2F37;--field:#111418;--accent:#F28C3C;--on:#1A0F05;--ink:#F7A563;--soft:#33200F;--danger:#FF7A6E;--ok:#5BD08A;color-scheme:dark}}
+:root[data-theme=dark]{--bg:#0E1013;--card:#181B20;--text:#E7E9EC;--sub:#A2A9B4;--line:#2A2F37;--field:#111418;--accent:#F28C3C;--on:#1A0F05;--ink:#F7A563;--soft:#33200F;--danger:#FF7A6E;--ok:#5BD08A;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.4 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;-webkit-tap-highlight-color:transparent}
+a{color:var(--ink)}
+[hidden]{display:none!important}
+.top{display:flex;align-items:center;gap:10px;max-width:480px;margin:0 auto;padding:18px 16px 6px}
+.top h1{margin:0;font-size:19px;font-weight:650;flex:1}
+.cat{width:30px;flex:none}
+.back{display:flex;align-items:center;min-height:44px;padding-right:4px;text-decoration:none;font-weight:500}
+.back svg{width:20px;height:20px}
+.pill{font-size:12px;color:var(--sub);background:var(--card);border:1px solid var(--line);border-radius:999px;padding:4px 10px}
+main{max-width:480px;margin:0 auto;padding:10px 16px 170px}
+.panel{display:flex;flex-direction:column;gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.card.hi{background:var(--soft);border-color:transparent}
+.ch{display:flex;align-items:center;gap:10px;padding:14px 16px 8px}
+.ch h2{margin:0;font-size:15px;font-weight:650;flex:1}
+.ch ~ * + *{border-top:1px solid var(--line)}
+.meta{font-size:12.5px;color:var(--sub);text-align:right}
+.ok{color:var(--ok)}
+.bad{color:var(--danger)}
+.ic{width:28px;height:28px;border-radius:8px;background:var(--soft);color:var(--ink);display:flex;align-items:center;justify-content:center;flex:none}
+.hi .ic{background:var(--card)}
+.ic svg{width:17px;height:17px}
+.row{display:flex;align-items:center;gap:12px;min-height:52px;padding:6px 16px}
+.l{flex:1;min-width:0}
+.l b{display:block;font-weight:500}
+.l small,.hint{color:var(--sub);font-size:12.5px;line-height:1.6}
+.l small{display:block;margin-top:2px;line-height:1.45}
+.hint{margin:0;padding:10px 16px 14px}
+.hint b{color:var(--text)}
+.sw{appearance:none;-webkit-appearance:none;width:46px;height:28px;border-radius:999px;background:var(--line);position:relative;margin:0;flex:none;cursor:pointer}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left .15s}
+.sw:checked{background:var(--accent)}
+.sw:checked::after{left:21px}
+.num,.txt{height:38px;border:1px solid var(--line);border-radius:10px;background:var(--field);color:var(--text);font:inherit;font-size:16px}
+.num{width:72px;text-align:center;padding:0 4px}
+.num.w{width:120px}
+.span{align-items:center}
+.span .num{flex:1;width:auto}
+.span .unit{min-width:0}
+.unit{color:var(--sub);font-size:13px;min-width:28px}
+.fld{padding:12px 16px 14px;display:flex;flex-direction:column;gap:8px}
+.lab{font-size:13px;color:var(--sub)}
+.txt{width:100%;height:44px;border-radius:12px;padding:0 12px;min-width:0}
+textarea.txt{height:76px;padding:10px 12px;resize:none}
+.inl{display:flex;gap:8px}
+.inl .txt{flex:1}
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.two>div{display:flex;flex-direction:column;gap:8px}
+.rng{display:flex;align-items:center;gap:12px}
+.rng input{flex:1;accent-color:var(--accent);margin:0;height:28px}
+.rng output{font-size:13px;color:var(--sub);min-width:40px;text-align:right}
+.btn{height:44px;border:0;border-radius:12px;background:var(--accent);color:var(--on);font:inherit;font-weight:600;padding:0 18px;cursor:pointer;white-space:nowrap}
+.btn:disabled{opacity:.55}
+.btn.g{background:var(--field);color:var(--text);border:1px solid var(--line);font-weight:500}
+.btn.d{background:transparent;color:var(--danger);border:1px solid var(--line);width:100%}
+.btn.s{height:36px;padding:0 14px;font-size:14px;border-radius:10px}
+.btns{display:flex;gap:8px;padding:4px 16px 16px}
+.btns .btn{flex:1}
+.ch ~ .btns{border-top:0}
+.chk{display:flex;align-items:center;gap:8px;font-size:14px;flex:1}
+.chk input{width:18px;height:18px;accent-color:var(--accent);margin:0}
+.tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:4px 16px 16px}
+.tile{background:var(--field);border:1px solid var(--line);border-radius:12px;padding:10px 12px;min-width:0}
+.tile small{display:block;font-size:12px;color:var(--sub)}
+.tile b{display:block;font-size:20px;font-weight:650;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile em{font-style:normal;font-size:13px;font-weight:500;color:var(--sub);margin-left:2px}
+.pomo{display:flex;align-items:baseline;gap:10px;padding:2px 16px 10px}
+.pomo b{font-size:38px;font-weight:650;letter-spacing:1px;font-variant-numeric:tabular-nums}
+.pomo span{color:var(--sub);font-size:13px}
+.ch ~ .pomo,.ch ~ .pomo + *{border-top:0}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{display:inline-flex;align-items:center;gap:2px;height:34px;padding:0 2px 0 12px;border-radius:999px;background:var(--soft);color:var(--ink);font-size:14px;font-weight:600}
+.chip button{width:30px;height:30px;border:0;border-radius:50%;background:transparent;color:inherit;font-size:17px;cursor:pointer}
+.chipin{height:34px;width:110px;border:1px dashed var(--line);border-radius:999px;background:transparent;color:var(--text);font:inherit;font-size:14px;padding:0 12px}
+.days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;padding:10px 16px 14px}
+.day{position:relative;display:flex;align-items:center;justify-content:center;height:40px;border-radius:10px;border:1px solid var(--line);background:var(--field);font-size:14px;color:var(--sub)}
+.day input{position:absolute;opacity:0;inset:0;margin:0;cursor:pointer}
+.day:has(input:checked){background:var(--accent);border-color:var(--accent);color:var(--on);font-weight:600}
+.day:has(input:focus-visible),.seg label:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
+.seg{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:4px;margin:2px 16px 16px;background:var(--field);border:1px solid var(--line);border-radius:12px}
+.seg label{position:relative;display:flex;align-items:center;justify-content:center;height:36px;border-radius:9px;font-size:14px;color:var(--sub)}
+.seg input{position:absolute;opacity:0;inset:0;margin:0;cursor:pointer}
+.seg label:has(input:checked){background:var(--card);color:var(--text);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.ch ~ .seg{border-top:0}
+.diag{margin:0;padding:4px 16px 14px 34px;color:var(--sub);font-size:13px;line-height:1.7}
+.diag b{color:var(--danger)}
+.ver{padding:2px 16px 12px}
+.ver b{font-size:26px;font-weight:650}
+.ver small{display:block;color:var(--sub);font-size:13px;margin-top:2px}
+.ch ~ .ver,.ch ~ .ver + .btns{border-top:0}
+.file{display:flex;align-items:center;gap:10px}
+.file input{flex:1;min-width:0;font:inherit;font-size:13px;color:var(--sub)}
+.res button{display:block;width:100%;margin-top:6px;text-align:left}
+.album{display:flex;align-items:center;gap:12px;padding:6px 16px 14px;text-decoration:none;color:inherit}
+.go{color:var(--ink);text-decoration:none;font-size:14px;font-weight:500;white-space:nowrap}
+.bar{height:8px;border-radius:999px;background:var(--field);border:1px solid var(--line);overflow:hidden;margin:2px 16px 14px}
+.bar i{display:block;height:100%;width:0;background:var(--accent);border-radius:999px}
+.drop{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;margin:4px 16px 12px;height:128px;border:1.5px dashed var(--line);border-radius:14px;background:var(--field);color:var(--sub);font-size:14px}
+.drop b{color:var(--ink);font-size:15px}
+.drop svg{width:28px;height:28px;color:var(--ink)}
+.drop input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.ch ~ .drop,.ch ~ .bar{border-top:0}
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;padding:4px 16px 16px}
+.ph{position:relative;aspect-ratio:4/3;border-radius:10px;background:var(--field);overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--sub);text-align:center;word-break:break-all;padding:4px}
+.ph img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.ph button{position:absolute;top:4px;right:4px;width:28px;height:28px;border:0;border-radius:50%;background:rgba(0,0,0,.5);color:#fff;font-size:16px;cursor:pointer}
+.dock{position:fixed;left:0;right:0;bottom:0;z-index:5}
+.save,.toast{max-width:456px;margin:0 auto 10px;border-radius:14px;box-shadow:0 8px 24px rgba(0,0,0,.18)}
+.save{display:flex;align-items:center;gap:12px;padding:8px 8px 8px 16px;background:var(--text);color:var(--bg);width:calc(100% - 24px)}
+.save span{flex:1;font-size:14px}
+.save .btn{height:38px}
+.toast{width:fit-content;max-width:calc(100% - 24px);padding:10px 16px;background:var(--text);color:var(--bg);font-size:14px}
+nav{background:var(--card);border-top:1px solid var(--line);padding:4px 4px calc(10px + env(safe-area-inset-bottom))}
+nav div{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);max-width:480px;margin:0 auto}
+nav a{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;min-height:52px;font-size:11.5px;color:var(--sub);text-decoration:none}
+nav a svg{width:22px;height:22px}
+nav a.on{color:var(--ink);font-weight:600}
+</style></head><body>
+<header class="top">
+<a class="back" href="#display" id="back" hidden></a>
+<svg class="cat" id="logo" viewBox="0 0 12 9" shape-rendering="crispEdges" role="img" aria-label="小橘"><path fill="#F28C3C" d="M2 0h1v1H2zM9 0h1v1H9zM1 1h3v1H1zM8 1h3v1H8zM1 2h10v1H1zM0 3h12v4H0zM1 7h10v1H1zM2 8h8v1H2z"/><path fill="#C2560F" d="M5 2h2v1H5zM0 5h1v1H0zM11 5h1v1h-1z"/><path fill="#F4A3A8" d="M2 1h1v1H2zM9 1h1v1H9zM5 6h2v1H5z"/><path fill="#1D2129" d="M2 4h2v1H2zM8 4h2v1H8z"/></svg>
+<h1 id="title">桌面信息屏</h1>
+<span class="pill" id="ver"></span>
+</header>
+<form id="f" autocomplete="off" onsubmit="return false">
+<main>
+
+<section class="panel" id="p_home">
+<section class="card">
+<div class="ch"><span class="ic" data-ic="wifi"></span><h2 id="ssid">WiFi</h2><span class="meta" id="netState"></span></div>
+<div class="tiles" id="tiles"></div>
+<p class="hint" id="roomNote" hidden></p>
+</section>
+<section class="card hi" id="upd" hidden>
+<div class="row"><span class="ic" data-ic="download"></span><div class="l"><b id="updTitle"></b><small id="updSub"></small></div><button type="button" class="btn s" data-act="install">立即升级</button></div>
+</section>
+<section class="card">
+<div class="ch"><span class="ic" data-ic="message"></span><h2>留言板</h2><span class="meta">最多 60 字</span></div>
+<div class="fld"><label class="lab" for="msg">写一句话，会立即显示在屏幕上；点屏幕或按 BOOT 键关闭</label><textarea id="msg" class="txt" maxlength="60" placeholder="晚上记得带伞"></textarea></div>
+<div class="row" style="border-top:0;padding-top:0"><label class="chk"><input type="checkbox" id="ding" checked> 叮咚响一声</label><button type="button" class="btn" id="send">发送到屏幕</button></div>
+</section>
+<section class="card">
+<div class="ch"><span class="ic" data-ic="timer"></span><h2>番茄钟</h2><a class="go" href="#remind">时长设置 ›</a></div>
+<div class="pomo"><b id="pomoLeft">--:--</b><span id="pomoPhase"></span></div>
+<p class="hint" id="pomoStats" style="padding-top:0"></p>
+<div class="btns"><button type="button" class="btn" data-act="pomodoro/toggle" id="pomoToggle">开始</button><button type="button" class="btn g" data-act="pomodoro/skip">跳过</button><button type="button" class="btn g" data-act="pomodoro/reset" data-confirm="重置番茄钟？">重置</button></div>
+</section>
+</section>
+
+<section class="panel" id="p_display" hidden></section>
+<section class="panel" id="p_services" hidden></section>
+<section class="panel" id="p_remind" hidden></section>
+
+<section class="panel" id="p_system" hidden>
+<section class="card">
+<div class="ch"><span class="ic" data-ic="download"></span><h2>固件升级</h2></div>
+<div class="ver"><b id="curVer"></b><small id="otaText"></small></div>
+<div class="btns"><button type="button" class="btn g" data-act="check">检查更新</button><button type="button" class="btn" data-act="install">立即升级</button></div>
+<label class="row"><div class="l"><b>凌晨 3～5 点自动升级</b><small>发现新版本后自动安装</small></div><input type="checkbox" class="sw" name="auto_update"></label>
+<div class="fld"><label class="lab" for="fw">手动上传固件（Release 里的 firmware-板子名.bin）</label><div class="file"><input id="fw" type="file" accept=".bin"><button type="button" class="btn g s" id="fwGo">上传</button></div></div>
+</section>
+<section class="card">
+<div class="ch"><span class="ic" data-ic="theme"></span><h2>网页外观</h2></div>
+<div class="seg" role="radiogroup" aria-label="网页主题"><label><input type="radio" name="_theme" value="auto">跟随手机</label><label><input type="radio" name="_theme" value="light">浅色</label><label><input type="radio" name="_theme" value="dark">深色</label></div>
+</section>
+<section class="card">
+<div class="ch"><span class="ic" data-ic="pulse"></span><h2>诊断</h2><span class="meta">每 5 秒刷新</span></div>
+<ul class="diag" id="diag"></ul>
+</section>
+<section class="card">
+<div class="ch"><span class="ic" data-ic="wifi" style="color:var(--danger)"></span><h2>WiFi</h2></div>
+<div class="fld"><span class="hint" style="padding:0">清除保存的 WiFi 并重启，板子会开热点等你重新配网。也可以长按 BOOT 键 3 秒。</span><button type="button" class="btn d" data-act="reset-wifi" data-confirm="清除 WiFi 并重启进入配网模式？">重新配置 WiFi</button></div>
+</section>
+</section>
+
+<section class="panel" id="p_album" hidden>
+<section class="card">
+<div class="ch"><h2>TF 卡</h2><span class="meta" id="cardUse"></span></div>
+<div class="bar" id="cardBar"><i></i></div>
+<p class="hint" id="cardNote"></p>
+</section>
+<section class="card" id="upCard" hidden>
+<div class="ch"><h2>上传照片</h2></div>
+<label class="drop"><span data-ic="image"></span><b>从手机相册选择</b><span>可以一次选多张</span><input type="file" id="files" accept="image/*" multiple></label>
+<p class="hint" id="upMsg">照片会先在手机上缩小到 320×240 再上传，每张只有几十 KB；iPhone 的 HEIC 照片也会自动转成 JPG。</p>
+</section>
+<section class="card" id="phCard" hidden>
+<div class="ch"><h2 id="phCount"></h2><span class="meta">点 × 删除</span></div>
+<div class="grid" id="grid"></div>
+</section>
+</section>
+
+</main>
+</form>
+<div class="dock">
+<div class="toast" id="toast" role="status" hidden></div>
+<div class="save" id="save" hidden><span id="dirty"></span><button type="button" class="btn" id="saveBtn">保存</button></div>
+<nav aria-label="设置分区"><div id="nav"></div></nav>
+</div>
+<script>
+const $=id=>document.getElementById(id), F=$('f');
+const P='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">';
+const ICONS={
+home:'<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>',
+screen:'<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+cloud:'<path d="M7 18a4 4 0 0 1-.5-8A6 6 0 0 1 18 9a4.5 4.5 0 0 1-.5 9z"/>',
+bell:'<path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21h4"/>',
+sliders:'<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
+wifi:'<path d="M2 9a15 15 0 0 1 20 0M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1"/>',
+download:'<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
+message:'<path d="M4 5h16v11H9l-5 4z"/>',
+timer:'<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2h6"/>',
+sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+moon:'<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
+person:'<circle cx="12" cy="7" r="3"/><path d="M5 21a7 7 0 0 1 14 0"/>',
+image:'<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.5"/><path d="M21 16l-5-5-8 8"/>',
+grid:'<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/>',
+chart:'<path d="M4 19h16M6 15l4-4 3 3 6-6"/>',
+mic:'<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
+speaker:'<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/>',
+drop:'<path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z"/>',
+thermo:'<path d="M14 14.8V5a2 2 0 0 0-4 0v9.8a4 4 0 1 0 4 0z"/>',
+theme:'<circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 0 0 16z" fill="currentColor"/>',
+pulse:'<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+left:'<path d="M15 5l-7 7 7 7"/>'};
+const ic=n=>P+ICONS[n]+'</svg>';
+
+// 底部导航的分区。超过 5 个时手机上会挤，到时候加一个「应用」分区收纳
+const TABS=[['home','概览','home'],['display','显示','screen'],['services','服务','cloud'],['remind','提醒','bell'],['system','系统','sliders']];
+// 不在导航里的子页面：[id, 标题, 返回到哪个分区]
+const SUBS={album:['相册','display']};
+
+// 设置卡片：t 放在哪个分区，sw 标题栏右边的总开关，f 字段（k 是提交给 /save 的名字）。
+// 加新功能的设置时在这里加一张卡片，固件的 /api/settings 和 /save 加上同名字段即可
+const CARDS=[
+{t:'display',title:'屏幕',icon:'sun',f:[
+ {type:'range',k:'brightness',label:'亮度',min:10,max:255},
+ {type:'num',k:'page_sec',label:'自动翻页',sub:'0 表示不自动切换',unit:'秒'}]},
+{t:'display',title:'夜间模式',icon:'moon',sw:'night_on',f:[
+ {type:'time',k:'night_start',label:'开始'},
+ {type:'time',k:'night_end',label:'结束'},
+ {type:'range',k:'night_bright',label:'夜间亮度（拉到最左边会关闭屏幕）',min:0,max:255}],
+ hint:'夜间只显示时钟页，不自动轮播。点一下屏幕或按 BOOT 键，会临时恢复正常亮度 30 秒。'},
+{t:'display',title:'人体感应',icon:'person',meta:'presence',f:[
+ {type:'sw',k:'away_off',label:'没人时熄屏',sub:'有人回来自动亮'},
+ {type:'num',k:'away_min',label:'多久没人算离开',unit:'分钟'}],
+ hint:'雷达感应的是动作，人坐着一动不动时可能感应不到，所以离开时间别设太短。熄屏后点屏幕或按 BOOT 键也能亮；有提醒时会自动亮屏。需要 SENSOR 底座。'},
+{t:'display',title:'相册与屏保',icon:'image',f:[
+ {type:'html',html:'<a class="album" href="#album"><span class="l"><b id="albumSum">相册</b><small id="albumSub">照片存在 TF 卡的 photos 文件夹里</small></span><span class="go">上传 / 管理 ›</span></a>'},
+ {type:'num',k:'album_sec',label:'每张照片显示',unit:'秒'},
+ {type:'sw',k:'album_shuffle',label:'随机顺序'},
+ {type:'sw',k:'saver_on',label:'空闲时播放相册（屏保）'},
+ {type:'num',k:'saver_min',label:'多久没碰屏幕算空闲',unit:'分钟'}],
+ hint:'切到屏幕上的「相册」页会一直播放。屏保：碰一下屏幕或按 BOOT 键回到原来的页面；番茄钟进行中、夜间时段和没人熄屏时不会启动。'},
+{t:'services',title:'天气',icon:'cloud',meta:'Open-Meteo',f:[
+ {type:'html',html:'<div class="fld"><label class="lab" for="f_city">城市（显示在屏幕上）</label><div class="inl"><input class="txt" id="f_city" name="city" maxlength="16"><button type="button" class="btn g" id="geo">查坐标</button></div><div class="res" id="results"></div></div>'},
+ {type:'two',f:[{k:'lat',label:'纬度',dec:1},{k:'lon',label:'经度',dec:1}]}],
+ hint:'查坐标需要手机能上网；连着板子的热点时可以手动填经纬度。'},
+{t:'services',title:'GitHub 贡献热力图',icon:'grid',meta:'has_token',f:[
+ {type:'secret',k:'gh_token',clear:'gh_clear',label:'GitHub Token',ph:'ghp_...'}],
+ hint:'打开 <a href="https://github.com/settings/tokens/new?description=DeskScreen" target="_blank">GitHub 创建 Token</a>（classic），<b>不用勾选任何权限</b>，生成后复制粘贴到这里。Token 只保存在设备上，不会显示出来。'},
+{t:'services',title:'自选股',icon:'chart',meta:'stocks',f:[{type:'chips',k:'stocks',max:6}],
+ hint:'A 股写 6 位代码，指数和深市代码冲突时加前缀，如 <b>sh000001</b> 是上证指数；港股写 5 位代码（如 00700）；美股写代码（如 AAPL）。ETF 和股票写法一样。数据来自东方财富，交易时段每 30 秒刷新。'},
+{t:'services',title:'AI 语音聊天',icon:'mic',meta:'has_ai',f:[
+ {type:'secret',k:'ai_key',clear:'ai_clear',label:'阿里云百炼 API Key',ph:'sk-...'},
+ {type:'two',f:[{k:'ai_model',label:'模型'},{k:'ai_voice',label:'音色'}]}],
+ hint:'在「AI 聊天」页按住麦克风按钮说话，松手后小橘用语音回答。Key 在 <a href="https://bailian.console.aliyun.com/" target="_blank">阿里云百炼控制台</a> 的「API Key」里创建（北京地域），按用量计费。模型默认 qwen3-omni-flash；音色默认 Cherry（女声），也可以填 Ethan（男声）等。'},
+{t:'remind',title:'番茄钟',icon:'timer',f:[
+ {type:'num',k:'pomo_focus',label:'专注',unit:'分钟'},
+ {type:'num',k:'pomo_short',label:'短休息',unit:'分钟'},
+ {type:'num',k:'pomo_long',label:'长休息',unit:'分钟'},
+ {type:'num',k:'pomo_every',label:'长休息间隔',sub:'每完成几个番茄来一次长休息',unit:'个'}],
+ hint:'在设备上点圆环开始或暂停，按住圆环 1.5 秒重置；「概览」里也能控制。'},
+{t:'remind',title:'提示音',icon:'speaker',btn:['试听','sound/test'],f:[
+ {type:'sw',k:'sound_on',label:'专注 / 休息结束时响'},
+ {type:'range',k:'sound_volume',label:'音量',min:0,max:100,raw:1},
+ {type:'sw',k:'sound_quiet',label:'夜间时段不响',sub:'只点亮屏幕，各种提醒和整点报时都按这个来'}]},
+{t:'remind',title:'健康提醒',icon:'drop',f:[
+ {type:'num',k:'sit_min',sw:'sit_on',label:'久坐提醒',unit:'分钟'},
+ {type:'num',k:'water_min',sw:'water_on',label:'喝水提醒',unit:'分钟'},
+ {type:'span',a:'remind_start',b:'remind_end',label:'提醒时段'}],
+ hint:'只在提醒时段内提醒，屏幕会弹出全屏提示并响一声。番茄钟专注时先不打扰，等休息时再提醒；开始休息时久坐提醒重新计时。'},
+{t:'remind',title:'闹钟',icon:'bell',sw:'alarm_on',f:[
+ {type:'time',k:'alarm_time',label:'时间'},
+ {type:'days'},
+ {type:'sw',k:'chime_on',label:'整点报时',sub:'每到整点叮一声，夜间时段不响'}],
+ hint:'闹钟响时屏幕全屏提示、每隔几秒响一次，夜里也会响；点屏幕或按 BOOT 键关掉，5 分钟后自动停止。'},
+{t:'remind',title:'太热 / 太闷提醒',icon:'thermo',sw:'climate_on',f:[
+ {type:'num',k:'hot_c',label:'温度达到',unit:'°C'},
+ {type:'num',k:'humid_pct',label:'湿度达到',unit:'%'},
+ {type:'num',k:'temp_offset',label:'温度校准',sub:'显示比实际偏高 1.5 度就填 -1.5',unit:'°C',dec:1}],
+ hint:'持续 3 分钟才提醒，同一种提醒 1 小时最多一次，夜间时段不提醒。需要 SENSOR 底座。'}];
+
+const lab=f=>`<div class="l"><b>${f.label}</b>${f.sub?`<small>${f.sub}</small>`:''}</div>`;
+const sw=(k,label)=>`<input type="checkbox" class="sw" name="${k}" aria-label="${label}">`;
+const num=(k,label,dec,cls)=>`<input class="num${cls||''}" name="${k}" inputmode="${dec?'decimal':'numeric'}" aria-label="${label}">`;
+const time=(k,label)=>`<input type="time" class="num w" name="${k}" aria-label="${label}">`;
+function field(f){
+ switch(f.type){
+ case 'num':return `<div class="row">${lab(f)}${num(f.k,f.label,f.dec)}<span class="unit">${f.unit}</span>${f.sw?sw(f.sw,f.label):''}</div>`;
+ case 'sw':return `<label class="row">${lab(f)}${sw(f.k,f.label)}</label>`;
+ case 'time':return `<div class="row">${lab(f)}${time(f.k,f.label)}</div>`;
+ case 'span':return `<div class="fld"><span class="lab">${f.label}</span><div class="inl span">${time(f.a,f.label+'开始')}<span class="unit">至</span>${time(f.b,f.label+'结束')}</div></div>`;
+ case 'range':return `<div class="fld"><label class="lab" for="f_${f.k}">${f.label}</label><div class="rng"><input type="range" id="f_${f.k}" name="${f.k}" min="${f.min}" max="${f.max}"${f.raw?' data-raw':''}><output></output></div></div>`;
+ case 'two':return `<div class="fld"><div class="two">${f.f.map(g=>`<div><label class="lab" for="f_${g.k}">${g.label}</label><input class="txt" id="f_${g.k}" name="${g.k}" maxlength="64"${g.dec?' inputmode="decimal"':''}></div>`).join('')}</div></div>`;
+ case 'secret':return `<div class="fld"><label class="lab" for="f_${f.k}">${f.label}（留空表示不修改）</label><div class="inl"><input class="txt" type="password" id="f_${f.k}" name="${f.k}" data-ph="${f.ph}"><button type="button" class="btn g" data-clear="${f.clear}">清除</button></div><input type="checkbox" name="${f.clear}" hidden></div>`;
+ case 'chips':return `<div class="fld"><div class="chips" data-chips="${f.k}" data-max="${f.max}"><input class="chipin" placeholder="+ 添加" aria-label="添加股票代码" enterkeyhint="done"></div><input type="hidden" name="${f.k}"></div>`;
+ case 'days':return `<div class="days" role="group" aria-label="重复">${[1,2,3,4,5,6,0].map(d=>`<label class="day"><input type="checkbox" name="ad${d}" aria-label="周${'日一二三四五六'[d]}">${'日一二三四五六'[d]}</label>`).join('')}</div>`;
+ case 'html':return f.html;
+ }
+}
+function card(c){
+ return `<section class="card"><div class="ch"><span class="ic">${ic(c.icon)}</span><h2>${c.title}</h2>`+
+  (c.meta?`<span class="meta" data-meta="${c.meta}"></span>`:'')+(c.sw?sw(c.sw,c.title):'')+
+  (c.btn?`<button type="button" class="btn g s" data-act="${c.btn[1]}">${c.btn[0]}</button>`:'')+
+  `</div>${c.f.map(field).join('')}${c.hint?`<p class="hint">${c.hint}</p>`:''}</section>`;
+}
+for(const c of CARDS)$('p_'+c.t).insertAdjacentHTML('beforeend',card(c));
+for(const el of document.querySelectorAll('[data-ic]'))el.innerHTML=ic(el.dataset.ic);
+$('nav').innerHTML=TABS.map(([id,name,i])=>`<a href="#${id}" data-tab="${id}">${ic(i)}${name}</a>`).join('');
+
+// 分区切换：用地址里的 #，刷新和手机返回键都正常
+function route(){
+ let id=location.hash.slice(1);
+ if(!$('p_'+id))id='home';
+ const sub=SUBS[id], tab=sub?sub[1]:id, name=sub?sub[0]:TABS.find(t=>t[0]===id)[1];
+ for(const p of document.querySelectorAll('.panel'))p.hidden=p.id!=='p_'+id;
+ for(const a of document.querySelectorAll('nav a')){a.classList.toggle('on',a.dataset.tab===tab);a.toggleAttribute('aria-current',a.dataset.tab===tab);}
+ $('title').textContent=id==='home'?'桌面信息屏':name;
+ $('back').hidden=!sub;$('logo').toggleAttribute('hidden',!!sub);
+ if(sub){$('back').href='#'+sub[1];$('back').innerHTML=ic('left')+TABS.find(t=>t[0]===sub[1])[1];}
+ if(id==='album')loadAlbum();
+ scrollTo(0,0);
+}
+addEventListener('hashchange',route);
+
+let toastT;
+function toast(s){const t=$('toast');t.textContent=s;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>t.hidden=true,2600);}
+async function post(url,body){
+ const r=await fetch('/'+url,{method:'POST',body:body||new URLSearchParams()});
+ if(!r.ok)throw new Error(r.status);
+ return r.json();
+}
+
+// ---- 设置：读取、改动计数、保存 ----
+let S={}, base={};
+function snap(){const m={};for(const el of F.elements)if(el.name&&el.name[0]!=='_')m[el.name]=el.type==='checkbox'?el.checked:el.value;return m;}
+function dirty(){
+ const now=snap();let n=0;for(const k in now)if(now[k]!==base[k])n++;
+ $('save').hidden=!n;$('dirty').textContent='改了 '+n+' 项，还没保存';
+}
+function rangeOut(el){const o=el.nextElementSibling;o.textContent=el.hasAttribute('data-raw')?el.value:Math.round(el.value/2.55)+'%';}
+function fill(s){
+ S=s;
+ for(const el of F.elements){
+  if(!el.name||el.name[0]==='_')continue;
+  const v=s[el.name];
+  if(el.type==='checkbox')el.checked=/^ad\d$/.test(el.name)?!!(s.alarm_days>>el.name[2]&1):!!v;
+  else if(el.type==='password'){el.value='';const has=s[el.name==='gh_token'?'has_token':'has_ai'];el.placeholder=has?'已保存，留空则不修改':el.dataset.ph;el.nextElementSibling.hidden=!has;el.nextElementSibling.textContent='清除';}
+  else if(v!==undefined)el.value=v;
+  if(el.type==='range')rangeOut(el);
+ }
+ for(const box of document.querySelectorAll('[data-chips]'))chips(box,s[box.dataset.chips]||'');
+ meta('has_token',s.has_token?'● 已保存':'未设置',s.has_token);
+ meta('has_ai',!s.voice?'这块板子没有麦克风':s.has_ai?'● 已保存':'未设置',s.has_ai&&s.voice);
+ base=snap();dirty();
+}
+function meta(k,text,ok){for(const el of document.querySelectorAll(`[data-meta="${k}"]`)){el.textContent=text;el.classList.toggle('ok',!!ok);}}
+async function loadSettings(){fill(await (await fetch('/api/settings')).json());}
+async function save(){
+ const b=$('saveBtn');b.disabled=true;
+ try{await post('save',new URLSearchParams(new FormData(F)));await loadSettings();toast('已保存');}
+ catch(e){toast('保存失败，请检查网络后重试');}
+ b.disabled=false;
+}
+$('saveBtn').onclick=save;
+F.addEventListener('input',e=>{if(e.target.type==='range')rangeOut(e.target);dirty();});
+F.addEventListener('change',dirty);
+
+// 自选股：标签式增删，提交时拼成逗号分隔
+function chips(box,v){
+ for(const c of box.querySelectorAll('.chip'))c.remove();
+ const inp=box.lastElementChild, codes=v.split(/[\s,，、]+/).filter(Boolean);
+ for(const code of codes){
+  const c=document.createElement('span');c.className='chip';c.textContent=code;
+  const x=document.createElement('button');x.type='button';x.textContent='×';x.setAttribute('aria-label','删除 '+code);
+  x.onclick=()=>{chips(box,codes.filter(k=>k!==code).join(','));dirty();};
+  c.appendChild(x);box.insertBefore(c,inp);
+ }
+ inp.hidden=codes.length>=+box.dataset.max;
+ box.parentNode.querySelector('input[type=hidden]').value=codes.join(',');
+ meta('stocks',codes.length+' / '+box.dataset.max);
+}
+for(const box of document.querySelectorAll('[data-chips]')){
+ const inp=box.lastElementChild;
+ const add=()=>{const v=inp.value.trim();if(!v)return;const h=box.parentNode.querySelector('input[type=hidden]');chips(box,h.value+','+v);inp.value='';dirty();};
+ inp.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===','||e.key===' '){e.preventDefault();add();}});
+ inp.addEventListener('blur',add);
+}
+// 清除 Token / Key：勾上隐藏的复选框，保存时生效
+document.addEventListener('click',e=>{
+ const b=e.target.closest('[data-clear]');if(!b)return;
+ const c=F.elements[b.dataset.clear];c.checked=!c.checked;
+ b.textContent=c.checked?'撤销':'清除';
+ b.previousElementSibling.placeholder=c.checked?'保存后会清除':'已保存，留空则不修改';
+ dirty();
+});
+
+// ---- 按钮：番茄钟、提示音、升级、重新配网 ----
+document.addEventListener('click',async e=>{
+ const b=e.target.closest('[data-act]');if(!b)return;
+ const act=b.dataset.act;
+ if(b.dataset.confirm&&!confirm(b.dataset.confirm))return;
+ if(act==='install'&&!confirm('现在下载并安装最新版本？升级大约需要 1 分钟，期间请不要断电。'))return;
+ b.disabled=true;
+ try{
+  await post(act==='check'||act==='install'?'ota/'+act:act);
+  if(act==='reset-wifi'){toast('已清除 WiFi，设备正在重启进入配网模式');return;}
+  if(act==='sound/test')toast('正在播放提示音');
+  await status();
+ }catch(e){toast('操作失败，请检查网络');}
+ b.disabled=false;
+});
+$('send').onclick=async()=>{
+ const t=$('msg').value.trim();if(!t){$('msg').focus();return;}
+ const body=new URLSearchParams({text:t});if($('ding').checked)body.set('sound','1');
+ try{await post('message',body);$('msg').value='';toast('已显示在屏幕上');}catch(e){toast('发送失败');}
+};
+$('geo').onclick=async()=>{
+ const q=F.elements.city.value.trim();if(!q)return;
+ const box=$('results');box.textContent='查询中…';
+ try{
+  const j=await (await fetch('https://geocoding-api.open-meteo.com/v1/search?count=5&language=zh&name='+encodeURIComponent(q))).json();
+  box.textContent='';
+  if(!j.results){box.textContent='没找到，可以手动填写经纬度';return;}
+  for(const p of j.results){
+   const b=document.createElement('button');b.type='button';b.className='btn g';
+   b.textContent=[p.name,p.admin1,p.country].filter(Boolean).join('，');
+   b.onclick=()=>{F.elements.lat.value=p.latitude.toFixed(4);F.elements.lon.value=p.longitude.toFixed(4);box.textContent='';dirty();};
+   box.appendChild(b);
+  }
+ }catch(e){box.textContent='查询失败（手机可能没联网），可以手动填写经纬度';}
+};
+$('fwGo').onclick=()=>{
+ const f=$('fw').files[0];if(!f){toast('先选择固件文件');return;}
+ const b=$('fwGo'),fd=new FormData();fd.append('firmware',f);b.disabled=true;
+ const x=new XMLHttpRequest();x.open('POST','/ota/upload');
+ x.upload.onprogress=e=>{$('otaText').textContent='上传中 '+Math.round(e.loaded*100/e.total)+'%，请不要关闭页面…';};
+ x.onload=()=>{let j={};try{j=JSON.parse(x.responseText);}catch(e){}
+  $('otaText').textContent=j.ok?'升级成功，设备正在重启，大约 10 秒后刷新这个页面':'升级失败：'+(j.error||'连接中断');b.disabled=false;};
+ x.onerror=()=>{$('otaText').textContent='上传失败，连接中断了';b.disabled=false;};
+ x.send(fd);
+};
+
+// ---- 状态：每 5 秒刷新，番茄钟每秒走 ----
+let pomo=null, pomoAt=0, statT;
+const mmss=s=>String(s/60|0).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
+function tick(){
+ if(!pomo)return;
+ const left=Math.max(0,pomo.left-(pomo.running?Math.round((Date.now()-pomoAt)/1000):0));
+ $('pomoLeft').textContent=pomo.phase==='idle'?mmss(S.pomo_focus*60||1500):mmss(left);
+}
+setInterval(tick,1000);
+const PHASE={idle:'未开始',focus:'专注',short:'短休息',long:'长休息'};
+function tile(name,val,unit){return `<div class="tile"><small>${name}</small><b>${val}${unit?`<em>${unit}</em>`:''}</b></div>`;}
+async function status(){
+ clearTimeout(statT);
+ let j;
+ try{j=await (await fetch('/api/status')).json();}catch(e){$('netState').textContent='连不上设备';$('netState').className='meta bad';statT=setTimeout(status,5000);return;}
+ $('ver').textContent=$('curVer').textContent=j.ver;
+ $('ssid').textContent=j.wifi.ssid||'WiFi';
+ $('netState').textContent=j.wifi.rssi>-67?'● 在线 · 信号好':j.wifi.rssi>-78?'● 在线 · 信号一般':'● 在线 · 信号弱';
+ $('netState').className='meta ok';
+ const r=j.room;
+ $('tiles').innerHTML=r.dock?
+  tile('室温',r.valid?r.temp.toFixed(1):'--','°C')+tile('湿度',r.valid?r.hum:'--','%')+tile('人体感应',r.away?'熄屏':r.presence?'有人':'没动静'):
+  tile('信号',j.wifi.rssi,'dBm')+tile('已运行',j.uptime>=86400?(j.uptime/86400|0):(j.uptime/3600|0),j.uptime>=86400?'天':'小时')+tile('今日番茄',j.pomo.today<0?'--':j.pomo.today,'个');
+ $('roomNote').hidden=r.dock;$('roomNote').textContent='没有检测到 SENSOR 底座，插上以后这里显示室内温湿度。';
+ meta('presence',!r.dock?'没有底座':r.away?'现在：没人（已熄屏）':r.presence?'现在：有人':'现在：没感应到动作',r.dock);
+ pomo=j.pomo;pomoAt=Date.now();tick();
+ $('pomoPhase').textContent=pomo.phase==='idle'?'未开始':PHASE[pomo.phase]+(pomo.running?'中':'（已暂停）');
+ $('pomoToggle').textContent=pomo.running?'暂停':pomo.phase==='idle'?'开始':'继续';
+ $('pomoStats').textContent=pomo.stats;$('pomoStats').hidden=!pomo.stats;
+ const o=j.ota;
+ $('otaText').textContent=o.text;$('otaText').className=o.state==='failed'?'bad':o.state==='uptodate'?'ok':'';
+ $('upd').hidden=o.state!=='available'&&o.state!=='downloading';
+ $('updTitle').textContent=o.state==='downloading'?o.text:'发现新版本 '+o.latest;
+ $('updSub').textContent=S.auto_update?'今晚 3～5 点会自动升级，也可以现在升级':'点右边按钮现在升级';
+ $('diag').innerHTML=j.net+'<li>'+j.panel+'</li>';
+ statT=setTimeout(status,o.busy?2000:5000);
+}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)status();});
+
+// ---- 网页主题：存在这台手机的浏览器里 ----
+function theme(v){try{localStorage.theme=v;}catch(e){}if(v==='auto')delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=v;}
+let th='auto';try{th=localStorage.theme||'auto';}catch(e){}
+theme(th);
+for(const el of F.elements._theme){el.checked=el.value===th;el.onchange=()=>theme(el.value);}
+
+// ---- 相册 ----
+function fmt(b){return b>=1073741824?(b/1073741824).toFixed(1)+' GB':Math.round(b/1048576)+' MB';}
+async function loadAlbum(){
+ let j;
+ try{j=await (await fetch('/album/list')).json();}catch(e){$('cardNote').textContent='读取失败，刷新页面再试';return;}
+ const ok=j.card==='ok';
+ $('upCard').hidden=$('phCard').hidden=$('cardBar').hidden=!ok;
+ $('albumSum').textContent=ok?j.photos.length+' 张照片':j.card==='noslot'?'这块板子没有 TF 卡槽':'没有检测到 TF 卡';
+ $('albumSub').textContent=ok?'TF 卡剩余 '+fmt(j.total-j.used):'照片存在 TF 卡的 photos 文件夹里';
+ if(j.card==='noslot'){$('cardUse').textContent='';$('cardNote').textContent='这块板子没有 TF 卡槽，用不了相册。';return;}
+ if(!ok){$('cardUse').textContent='';$('cardNote').textContent='没有检测到 TF 卡。请插入 FAT32 格式的 TF 卡（32GB 以内的卡出厂就是 FAT32），插好后刷新这个页面。';return;}
+ $('cardUse').textContent='已用 '+fmt(j.used)+' / 共 '+fmt(j.total);
+ $('cardBar').firstChild.style.width=Math.max(1,Math.round(j.used*100/j.total))+'%';
+ $('cardNote').textContent='照片在卡里的 photos 文件夹，支持 JPG 和 PNG，也可以拔下卡用电脑管理。'+(j.failed?'有 '+j.failed+' 张照片读不出来（可能是 HEIC 或渐进式 JPEG），可以删掉后在这里重新上传。':'');
+ $('phCount').textContent='已有照片（'+j.photos.length+' 张）';
+ const grid=$('grid');grid.textContent='';
+ for(const p of j.photos){
+  const d=document.createElement('div');d.className='ph';
+  if(p.s<=1048576){const i=document.createElement('img');i.loading='lazy';i.src='/album/file?name='+encodeURIComponent(p.n);i.alt=p.n;d.appendChild(i);}
+  else d.textContent=p.n+'（原图，不显示缩略图）';
+  const b=document.createElement('button');b.type='button';b.textContent='×';b.setAttribute('aria-label','删除 '+p.n);
+  b.onclick=async()=>{if(!confirm('删除 '+p.n+'？'))return;
+   try{if(!(await post('album/delete',new URLSearchParams({name:p.n}))).ok)toast('删除失败');}catch(e){toast('删除失败');}loadAlbum();};
+  d.appendChild(b);grid.appendChild(d);
+ }
+}
+function canvas(w,h){const c=document.createElement('canvas');c.width=w;c.height=h;const x=c.getContext('2d');x.imageSmoothingQuality='high';return [c,x];}
+// 缩小到能完整放进 320x240（不放大），转成 JPG；每次缩一半，最后一步缩到目标大小，比一步缩到位清晰
+async function shrink(file){
+ let src;
+ try{src=await createImageBitmap(file,{imageOrientation:'from-image'});}
+ catch(e){src=await new Promise((ok,no)=>{const i=new Image();i.onload=()=>ok(i);i.onerror=no;i.src=URL.createObjectURL(file);});}
+ let w=src.width,h=src.height;const s=Math.min(1,320/w,240/h);
+ const tw=Math.max(1,Math.round(w*s)),th=Math.max(1,Math.round(h*s));
+ let cur=src;
+ while(w>tw*2){const [c,x]=canvas(Math.round(w/2),Math.round(h/2));x.drawImage(cur,0,0,c.width,c.height);cur=c;w=c.width;h=c.height;}
+ const [c,x]=canvas(tw,th);x.fillStyle='#000';x.fillRect(0,0,tw,th);x.drawImage(cur,0,0,tw,th);
+ return await new Promise(r=>c.toBlob(r,'image/jpeg',0.88));
+}
+$('files').onchange=async()=>{
+ const files=[...$('files').files];if(!files.length)return;
+ let ok=0;const bad=[];
+ for(let i=0;i<files.length;i++){
+  $('upMsg').textContent='正在上传 '+(i+1)+' / '+files.length+'…';
+  try{
+   const blob=await shrink(files[i]);
+   const fd=new FormData();fd.append('photo',blob,files[i].name.replace(/\.[^.]*$/,'')+'.jpg');
+   const j=await post('album/upload',fd);
+   if(j.ok)ok++;else bad.push(files[i].name+'（'+j.error+'）');
+  }catch(e){bad.push(files[i].name+'（浏览器打不开这张图）');}
+ }
+ $('upMsg').textContent='上传了 '+ok+' 张'+(bad.length?'，失败：'+bad.join('，'):'');
+ $('files').value='';loadAlbum();
+};
+
+route();
+loadSettings().catch(()=>toast('读取设置失败，刷新页面再试'));
+status();
+if(location.hash!=='#album')loadAlbum();
+</script></body></html>
