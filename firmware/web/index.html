@@ -257,10 +257,11 @@ const CARDS=[
  {type:'range',k:'brightness',label:'亮度',min:10,max:255},
  {type:'num',k:'page_sec',label:'自动翻页',sub:'0 表示不自动切换',unit:'秒'}]},
 {t:'display',title:'夜间模式',icon:'moon',sw:'night_on',f:[
- {type:'time',k:'night_start',label:'开始'},
+ {type:'sw',k:'night_sun',label:'日落时开始',sub:'按天气预报里当地的日落时间，每天自动跟着变'},
+ {type:'time',k:'night_start',label:'开始',sub:'关掉「日落时开始」或者还没拿到天气预报时用'},
  {type:'time',k:'night_end',label:'结束'},
  {type:'range',k:'night_bright',label:'夜间亮度（拉到最左边会关闭屏幕）',min:0,max:255}],
- hint:'夜间只显示时钟页，不自动轮播。点一下屏幕或按 BOOT 键，会临时恢复正常亮度 30 秒。'},
+ hint:'夜间只显示时钟页，不自动轮播，小橘睡觉；「夜间时段不响」的提示音和整点报时也从这时开始安静。点一下屏幕或按 BOOT 键，会临时恢复正常亮度 30 秒。'},
 {t:'display',title:'音乐律动',icon:'music',sw:'music_on',f:[],
  hint:'麦克风听到音乐时，小橘页底部出现跳动的频谱条，小橘跟着节拍摇摆；一分钟没碰屏幕时会自动切到小橘页，音乐停了再切回来。声音只在设备上分析，不录音也不上传；AI 聊天用麦克风或喇叭在响时自动暂停。'},
 {t:'display',title:'人体感应',icon:'person',meta:'presence',f:[

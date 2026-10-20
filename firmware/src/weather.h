@@ -14,6 +14,8 @@ struct DayForecast {
   int rain_prob;   // 当天最大降水概率 %
   float rain_mm;   // 当天降水量 mm
   int wday;        // 星期几，周日为 0
+  int sunrise;     // 日出，当天第几分钟（当地时间），没有数据时为 -1
+  int sunset;      // 日落
 };
 
 struct HourRain {

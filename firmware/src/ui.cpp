@@ -5,6 +5,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "astro.h"
 #include "board.h"
 #include "screen_load.h"
 
@@ -53,6 +54,18 @@ static lv_obj_t *lbl_desc;
 static lv_obj_t *lbl_range;
 static lv_obj_t *lbl_humidity;
 static lv_obj_t *lbl_room;
+// 时间下面一行：月相图标、月相名字、日出日落
+static constexpr int kMoonPx = 16;
+static constexpr int kTimeY = 38;
+static constexpr int kRoomY = 94;
+static constexpr int kSunY = 114;        // 有室内温湿度时在它下面
+static constexpr int kSunAloneY = 100;   // 没有 SENSOR 底座时往上挪
+static lv_obj_t *sun_row;
+static lv_obj_t *moon_canvas;
+static lv_color_t moon_buf[kMoonPx * kMoonPx];
+static lv_obj_t *lbl_sun;
+static float moon_now = -1;          // 今天的月相，还没对时为 -1
+static int sun_rise = -1, sun_set = -1;
 
 static lv_obj_t *lbl_gh_login;
 static lv_obj_t *lbl_gh_today;
@@ -239,7 +252,7 @@ static void build_main() {
   // 中间：大号时间
   lbl_time = make_label(scr_main, &lv_font_montserrat_48, COLOR_TEXT);
   lv_label_set_text(lbl_time, "--:--");
-  lv_obj_align(lbl_time, LV_ALIGN_TOP_MID, -14, 46);
+  lv_obj_align(lbl_time, LV_ALIGN_TOP_MID, -14, kTimeY);
 
   lbl_sec = make_label(scr_main, &lv_font_montserrat_20, COLOR_SUBTLE);
   lv_label_set_text(lbl_sec, "--");
@@ -248,12 +261,26 @@ static void build_main() {
   // 时间下面：室内温湿度，插了 SENSOR 底座才显示
   lbl_room = make_label(scr_main, &font_cn_16, COLOR_SUBTLE);
   lv_label_set_recolor(lbl_room, true);
-  lv_obj_align(lbl_room, LV_ALIGN_TOP_MID, 0, 106);
+  lv_obj_align(lbl_room, LV_ALIGN_TOP_MID, 0, kRoomY);
   lv_obj_add_flag(lbl_room, LV_OBJ_FLAG_HIDDEN);
+
+  // 再下面：月相和日出日落，对上时间后才显示
+  sun_row = lv_obj_create(scr_main);
+  lv_obj_remove_style_all(sun_row);
+  lv_obj_set_size(sun_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+  lv_obj_set_flex_flow(sun_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(sun_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(sun_row, 6, 0);
+  lv_obj_clear_flag(sun_row, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_align(sun_row, LV_ALIGN_TOP_MID, 0, kSunAloneY);
+  moon_canvas = lv_canvas_create(sun_row);
+  lv_canvas_set_buffer(moon_canvas, moon_buf, kMoonPx, kMoonPx, LV_IMG_CF_TRUE_COLOR);
+  lbl_sun = make_label(sun_row, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_add_flag(sun_row, LV_OBJ_FLAG_HIDDEN);
 
   // 底部：天气卡片
   lv_obj_t *card = lv_obj_create(scr_main);
-  lv_obj_set_size(card, SCREEN_W - 24, 96);
+  lv_obj_set_size(card, SCREEN_W - 24, 88);
   lv_obj_align(card, LV_ALIGN_BOTTOM_MID, 0, -12);
   lv_obj_set_style_bg_color(card, COLOR_CARD, 0);
   lv_obj_set_style_border_width(card, 0, 0);
@@ -1110,6 +1137,48 @@ void ui_show_page(Page page, bool animate, bool back) {
   screen_load(scr_pages[page], animate, back);
 }
 
+// 画月亮：每个像素取 3x3 个点，按亮面、暗面、背景的比例混色，边缘不会有锯齿
+static void draw_moon(float phase) {
+  const lv_color_t lit = lv_color_hex(0xF2E6B8), dark = lv_color_hex(0x2D333B);
+  const float r = kMoonPx / 2.0f - 0.5f;
+  for (int py = 0; py < kMoonPx; py++) {
+    for (int px = 0; px < kMoonPx; px++) {
+      int n_lit = 0, n_dark = 0;
+      for (int sy = 0; sy < 3; sy++) {
+        for (int sx = 0; sx < 3; sx++) {
+          float x = px + (sx + 0.5f) / 3 - kMoonPx / 2.0f;
+          float y = py + (sy + 0.5f) / 3 - kMoonPx / 2.0f;
+          if (x * x + y * y > r * r) continue;
+          if (moon_lit(phase, x, y, r)) n_lit++;
+          else n_dark++;
+        }
+      }
+      lv_color_t c = lv_color_mix(dark, COLOR_BG, (uint8_t)(n_dark * 255 / 9));
+      c = lv_color_mix(lit, c, (uint8_t)(n_lit * 255 / 9));
+      moon_buf[py * kMoonPx + px] = c;
+    }
+  }
+  lv_obj_invalidate(moon_canvas);
+}
+
+// 「盈凸月 · 日出 06:04 · 日落 17:21」，没有天气预报时只有月相
+static void update_sun_row() {
+  if (moon_now < 0) return;
+  char text[64];
+  int n = snprintf(text, sizeof(text), "%s", moon_phase_name(moon_now));
+  if (sun_rise >= 0 && sun_set >= 0)
+    snprintf(text + n, sizeof(text) - n, " · 日出 %02d:%02d · 日落 %02d:%02d", sun_rise / 60, sun_rise % 60,
+             sun_set / 60, sun_set % 60);
+  lv_label_set_text(lbl_sun, text);
+  lv_obj_clear_flag(sun_row, LV_OBJ_FLAG_HIDDEN);
+}
+
+void ui_set_sun(int sunrise, int sunset) {
+  sun_rise = sunrise;
+  sun_set = sunset;
+  update_sun_row();
+}
+
 void ui_tick_clock() {
   static int last_sec = -1;
   static const char *const weekdays[] = {"周日", "周一", "周二", "周三", "周四", "周五", "周六"};
@@ -1123,6 +1192,14 @@ void ui_tick_clock() {
   lv_label_set_text_fmt(lbl_sec, "%02d", t.tm_sec);
   lv_obj_align_to(lbl_sec, lbl_time, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -6);
   lv_label_set_text_fmt(lbl_date, "%d月%d日 %s", t.tm_mon + 1, t.tm_mday, weekdays[t.tm_wday]);
+
+  static int last_mday = -1;
+  if (t.tm_mday != last_mday) {  // 月相每天算一次
+    last_mday = t.tm_mday;
+    moon_now = moon_phase(t.tm_year + 1900, t.tm_mon + 1, t.tm_mday);
+    draw_moon(moon_now);
+    update_sun_row();
+  }
 }
 
 void ui_set_city(const char *city) {
@@ -1138,8 +1215,9 @@ void ui_set_room(float temp, float humidity, bool hot, bool humid) {
   snprintf(t, sizeof(t), hot ? "#DB6D28 %.1f\xC2\xB0" "C#" : "%.1f\xC2\xB0" "C", temp);
   snprintf(h, sizeof(h), humid ? "#DB6D28 %d%%#" : "%d%%", (int)lroundf(humidity));
   lv_label_set_text_fmt(lbl_room, "室内 %s · 湿度 %s", t, h);
-  lv_obj_align(lbl_room, LV_ALIGN_TOP_MID, 0, 106);
+  lv_obj_align(lbl_room, LV_ALIGN_TOP_MID, 0, kRoomY);
   lv_obj_clear_flag(lbl_room, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_align(sun_row, LV_ALIGN_TOP_MID, 0, kSunY);
 }
 
 // 天气预报页
@@ -1192,6 +1270,7 @@ void ui_set_weather(const WeatherData &w) {
     lv_label_set_text_fmt(lbl_rain_title, "获取失败（%d），稍后自动重试", w.error);
     return;
   }
+  if (w.ndays > 0) ui_set_sun(w.days[0].sunrise, w.days[0].sunset);
   lv_label_set_text_fmt(lbl_temp, "%d\xC2\xB0", (int)lroundf(w.temp));
   lv_label_set_text(lbl_desc, weather_text(w.code));
   lv_obj_set_style_text_color(lbl_desc, lv_color_hex(weather_color(w.code)), 0);

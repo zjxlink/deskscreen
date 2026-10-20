@@ -31,6 +31,9 @@ void ui_set_city(const char *city);
 
 // 时钟页上的室内温湿度（SENSOR 底座），超过阈值的那一项显示成橙色；没调用过就不显示
 void ui_set_room(float temp, float humidity, bool hot, bool humid);
+
+// 时钟页的日出日落（当天第几分钟，-1 表示不知道）。月相按日期自己算，对上时间就显示
+void ui_set_sun(int sunrise, int sunset);
 void ui_set_weather(const WeatherData &w);
 void ui_set_github(const GithubData &g);
 void ui_set_stocks(const StockData &s);

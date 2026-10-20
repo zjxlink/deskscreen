@@ -88,6 +88,7 @@ static void handle_api_settings() {
   doc["page_sec"] = s.page_seconds;
   doc["night_on"] = s.night_on;
   put_time("night_start", s.night_start);
+  doc["night_sun"] = s.night_sun;
   put_time("night_end", s.night_end);
   doc["night_bright"] = s.night_brightness;
   doc["stocks"] = s.stocks;
@@ -249,6 +250,7 @@ static void handle_save() {
 
   // 复选框不勾选时浏览器不会提交这个字段
   s.night_on = server.hasArg("night_on");
+  s.night_sun = server.hasArg("night_sun");
   s.auto_update = server.hasArg("auto_update");
   s.sound_on = server.hasArg("sound_on");
   s.sound_quiet_night = server.hasArg("sound_quiet");

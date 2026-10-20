@@ -18,6 +18,7 @@ void settings_begin() {
   current.page_seconds = prefs.getUChar("page_sec", 15);
   current.night_on = prefs.getBool("night_on", true);
   current.night_start = prefs.getUShort("night_start", 23 * 60);
+  current.night_sun = prefs.getBool("night_sun", true);
   current.night_end = prefs.getUShort("night_end", 7 * 60);
   current.night_brightness = prefs.getUChar("night_bright", 10);
   current.auto_update = prefs.getBool("auto_upd", true);
@@ -78,6 +79,7 @@ void settings_save(const Settings &s) {
   prefs.putUChar("page_sec", s.page_seconds);
   prefs.putBool("night_on", s.night_on);
   prefs.putUShort("night_start", s.night_start);
+  prefs.putBool("night_sun", s.night_sun);
   prefs.putUShort("night_end", s.night_end);
   prefs.putUChar("night_bright", s.night_brightness);
   prefs.putBool("auto_upd", s.auto_update);
