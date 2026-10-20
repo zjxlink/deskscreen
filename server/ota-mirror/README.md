@@ -9,18 +9,19 @@
 
 服务只往外读 GitHub，不需要对外开放上传口，也不需要 GitHub 的任何密码。新版本发布后最多一小时同步到 NAS，板子每天检查一次。
 
-## 在 NAS 上运行
+## 在飞牛 fnOS 上运行
 
-需要 NAS 能跑 Docker（群晖的 Container Manager、威联通的 Container Station、Unraid 等都可以）。
+1. 在「文件管理」里建一个文件夹，比如 `docker/deskscreen-ota`，把这里的 `mirror.py` 和 `docker-compose.yml` 两个文件传进去
+2. 打开「Docker」应用 › Compose › 新增项目：名字填 `deskscreen-ota`，路径选刚才的文件夹，来源选「使用已有的 docker-compose.yml」，勾选「创建项目后立即启动」
+3. 第一次会下载 `python:3.12-alpine` 镜像（约 20 MB）。下载不动的话，在 Docker › 设置 › 镜像仓库里加一个国内加速地址再试
+4. 在容器详情里看日志，应该有「已更新到 vX.Y.Z」。文件夹里会多出 `data/manifest.json` 和 `data/vX.Y.Z/`
+5. 在你现有的反向代理里加一条：`https://ota.你的域名` → `http://NAS的局域网IP:8080`
+6. 手机浏览器打开 `https://ota.你的域名/manifest.json`，能看到版本信息就好了
+7. 在板子的设置网页「系统 › 固件升级 › 自建升级服务器」填 `https://ota.你的域名/manifest.json`，保存后点「检查更新」，状态里会写「来自自建服务器」
 
-1. 把这个文件夹（`mirror.py`、`Dockerfile`、`docker-compose.yml`）拷到 NAS 上，比如 `/volume1/docker/deskscreen-ota/`
-2. 在这个文件夹里执行 `docker compose up -d --build`（群晖可以在 Container Manager 里用「项目」导入 `docker-compose.yml`）
-3. 看日志确认第一次同步成功：`docker logs deskscreen-ota`，应该有「已更新到 vX.Y.Z」
-4. 在 NAS 的反向代理里加一条：`https://ota.你的域名` → `http://localhost:8080`
-5. 用手机浏览器打开 `https://ota.你的域名/manifest.json`，能看到版本信息就好了
-6. 在板子的设置网页「系统 › 固件升级 › 自建升级服务器」填 `https://ota.你的域名/manifest.json`，保存后点「检查更新」，状态里会写「来自自建服务器」
+8080 被占用的话，把 `docker-compose.yml` 里的 `"8080:8080"` 改成 `"别的端口:8080"`，反向代理也跟着改。
 
-不想用 Docker 的话，直接 `python3 mirror.py` 也能跑（需要 Python 3.8 以上），用环境变量 `DATA=./data` 指定存放目录。
+其他 NAS（群晖、威联通、Unraid 等）一样：把这两个文件放进一个文件夹，执行 `docker compose up -d`。不想用 Docker 的话，直接 `DATA=./data python3 mirror.py` 也能跑（需要 Python 3.8 以上）。
 
 ## 设置项（环境变量）
 

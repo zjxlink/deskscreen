@@ -1,12 +1,16 @@
-# 在 NAS 上：把这个文件夹拷过去，执行 docker compose up -d --build
+# 不用编译镜像：直接用官方 Python 镜像运行同目录的 mirror.py
+# 飞牛 fnOS：Docker › Compose › 新增项目，路径选这个文件夹，勾选「创建项目后立即启动」
+# 其他系统：在这个文件夹里执行 docker compose up -d
 services:
   ota-mirror:
-    build: .
+    image: python:3.12-alpine
     container_name: deskscreen-ota
     restart: unless-stopped
+    command: ["python3", "-u", "/app/mirror.py"]
     ports:
       - "8080:8080"
     volumes:
+      - ./mirror.py:/app/mirror.py:ro
       - ./data:/data
     environment:
       REPO: zjxlink/test-repo
