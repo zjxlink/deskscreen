@@ -601,7 +601,7 @@ function seek(v,t){return new Promise((ok,no)=>{const tm=setTimeout(()=>no(err('
 // 视频转成 MJPEG：在手机浏览器里一帧一帧地跳过去，画到 320x240 以内的画布上，存成 JPG
 async function videoToAvi(file,onp){
  const v=document.createElement('video'),u=URL.createObjectURL(file);
- v.muted=true;v.playsInline=true;v.preload='auto';
+ v.muted=true;v.playsInline=true;v.preload='metadata';  // 不预先缓冲整段视频，省手机内存
  // 先挂好事件再设置 src：之前先去申请防锁屏，视频在这期间就读好了，等的事件已经错过，页面就一直卡着
  const ready=new Promise((ok,no)=>{
   const tm=setTimeout(()=>no(err('读视频超时，换个浏览器试试')),20000);
@@ -660,8 +660,13 @@ function upload(blob,name,onp){
   x.send(fd);
  });
 }
+// 记下上传走到哪一步：手机内存不够时 Safari 会把网页整个重新加载，重新打开后能说明在哪一步断的
+const STEP='upStep';
+function mark(step,name){try{if(step)sessionStorage.setItem(STEP,JSON.stringify({step,name:name||'',t:Date.now()}));else sessionStorage.removeItem(STEP);}catch(e){}}
+$('files').onclick=()=>mark('pick');
+$('files').addEventListener('cancel',()=>mark());
 $('files').onchange=async()=>{
- const files=[...$('files').files];if(!files.length)return;
+ const files=[...$('files').files];if(!files.length){mark();return;}
  const show=(t,p)=>{$('upMsg').textContent=t;$('upBar').hidden=p===undefined;if(p!==undefined)$('upBar').firstChild.style.width=Math.round(p*100)+'%';};
  let ok=0;const bad=[],cut=[];
  for(let i=0;i<files.length;i++){
@@ -669,6 +674,7 @@ $('files').onchange=async()=>{
   try{
    let blob,name;
    if(isVideo(f)){
+    mark('video',f.name);
     show('正在读取视频'+tag+'…',0);
     const r=await videoToAvi(f,p=>show('正在转换视频'+tag+' '+Math.round(p*100)+'%，请不要锁屏或离开这个页面…',p));
     blob=r.blob;name=stem+'.avi';if(r.cut)cut.push(f.name);
@@ -678,10 +684,21 @@ $('files').onchange=async()=>{
    if(j.ok)ok++;else bad.push(f.name+'（'+j.error+'）');
   }catch(e){bad.push(f.name+'（'+(e.cn||'浏览器打不开这个文件')+'）');}
  }
+ mark();
  show('上传了 '+ok+' 个'+(cut.length?'，'+cut.join('、')+' 超过 5 分钟，只保留了前 5 分钟':'')+(bad.length?'，失败：'+bad.join('，'):''));
  $('files').value='';loadAlbum();
 };
 
+// 上次上传时网页被重新加载了：回到相册页，说明原因
+(()=>{
+ let s=null;try{s=JSON.parse(sessionStorage.getItem(STEP));}catch(e){}
+ mark();
+ if(!s||Date.now()-s.t>600000)return;
+ location.hash='album';
+ $('upMsg').textContent=s.step==='video'
+  ?'刚才转换「'+s.name+'」时网页被手机重新加载了，多半是视频太大、手机内存不够。可以先在手机相册里把视频剪短（编辑，拖动两头），或者换一段短一点、不是 4K 的视频再试。'
+  :'刚才选完文件后网页被手机重新加载了，多半是手机在准备视频时内存不够（视频太大或者是 4K 的）。可以先在手机相册里把视频剪短（编辑，拖动两头）再选。';
+})();
 route();
 loadSettings().catch(()=>toast('读取设置失败，刷新页面再试'));
 status();
