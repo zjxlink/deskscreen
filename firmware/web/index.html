@@ -598,7 +598,53 @@ async function checkGif(f){
  if(i.naturalWidth*i.naturalHeight>640*480)throw err('动图太大（'+i.naturalWidth+'×'+i.naturalHeight+'，最大 640×480）');
 }
 function seek(v,t){return new Promise((ok,no)=>{const tm=setTimeout(()=>no(err('视频跳转超时')),8000);v.onseeked=()=>{clearTimeout(tm);ok();};v.currentTime=t;});}
-// 视频转成 MJPEG：在手机浏览器里一帧一帧地跳过去，画到 320x240 以内的画布上，存成 JPG
+// 边播放边截图：每画出一帧新画面，就把到这个时间为止该截的帧都截下来。
+// iPhone Safari 一帧一帧地跳几十次以上会崩溃、把网页重新加载，播放就没这个问题，也更快
+function grabPlaying(v,c,x,w,h,n,onp){
+ return new Promise((ok,no)=>{
+  const frames=[],jobs=[];let next=0,done=false,stall;
+  const arm=()=>{clearTimeout(stall);stall=setTimeout(()=>fail(err('视频播放卡住了，请不要锁屏或切到别的 App')),10000);};
+  const fail=e=>{if(done)return;done=true;clearTimeout(stall);v.pause();no(e);};
+  const finish=async()=>{
+   if(done)return;done=true;clearTimeout(stall);v.pause();
+   if(next===0){x.drawImage(v,0,0,w,h);jobs.push(new Promise(r=>c.toBlob(b=>{frames[0]=b;r();},'image/jpeg',.7)));next=1;}
+   await Promise.all(jobs);
+   while(frames.length<n)frames.push(frames[frames.length-1]);  // 视频比算的短一点时，用最后一帧补齐
+   ok(frames);
+  };
+  const grab=(t)=>{
+   let drew=false;
+   while(next<n&&(next+.5)/VFPS<=t+0.001){
+    if(!drew){x.drawImage(v,0,0,w,h);drew=true;}
+    const i=next++;
+    jobs.push(new Promise(r=>c.toBlob(b=>{frames[i]=b;r();},'image/jpeg',.7)));  // toBlob 调用时就取好了画布内容
+   }
+   onp(next/n);
+  };
+  const onFrame=(now,meta)=>{
+   if(done)return;
+   arm();grab(meta.mediaTime);
+   if(next>=n)finish();else v.requestVideoFrameCallback(onFrame);
+  };
+  v.onended=()=>{grab(Infinity);finish();};
+  v.requestVideoFrameCallback(onFrame);
+  arm();
+  v.play().catch(()=>fail(err('浏览器放不了这个视频')));
+ });
+}
+// 旧浏览器没有逐帧回调：一帧一帧地跳过去截图
+async function grabSeeking(v,c,x,w,h,n,onp){
+ try{await v.play();v.pause();}catch(e){}  // iPhone 不播一下不读画面，跳到的帧也画不出来
+ const frames=[];
+ for(let i=0;i<n;i++){
+  await seek(v,(i+.5)/VFPS);
+  x.drawImage(v,0,0,w,h);
+  frames.push(await new Promise(r=>c.toBlob(r,'image/jpeg',.7)));
+  onp((i+1)/n);
+ }
+ return frames;
+}
+// 视频转成 MJPEG：在手机浏览器里每秒截 15 帧，画到 320x240 以内的画布上，存成 JPG
 async function videoToAvi(file,onp){
  const v=document.createElement('video'),u=URL.createObjectURL(file);
  v.muted=true;v.playsInline=true;v.preload='metadata';  // 不预先缓冲整段视频，省手机内存
@@ -613,17 +659,11 @@ async function videoToAvi(file,onp){
  try{
   try{lock=await navigator.wakeLock.request('screen');}catch(e){}  // 转换时别锁屏
   await ready;
-  try{await v.play();v.pause();}catch(e){}  // iPhone 不播一下不读画面，跳到的帧也画不出来
   const W=v.videoWidth,H=v.videoHeight,dur=Math.min(v.duration,VMAX);
   if(!W||!(dur>0))throw err('读不出视频的尺寸或长度');
   const s=Math.min(1,320/W,240/H),w=Math.max(2,Math.round(W*s)),h=Math.max(2,Math.round(H*s));
-  const [c,x]=canvas(w,h),n=Math.max(1,Math.floor(dur*VFPS)),frames=[];
-  for(let i=0;i<n;i++){
-   await seek(v,(i+.5)/VFPS);
-   x.drawImage(v,0,0,w,h);
-   frames.push(await new Promise(r=>c.toBlob(r,'image/jpeg',.7)));
-   onp((i+1)/n);
-  }
+  const [c,x]=canvas(w,h),n=Math.max(1,Math.floor(dur*VFPS));
+  const frames='requestVideoFrameCallback' in v?await grabPlaying(v,c,x,w,h,n,onp):await grabSeeking(v,c,x,w,h,n,onp);
   return {blob:aviBlob(frames,w,h,VFPS),cut:v.duration>VMAX};
  }finally{URL.revokeObjectURL(u);if(lock)lock.release().catch(()=>{});}
 }
