@@ -122,6 +122,9 @@ static void handle_api_settings() {
   doc["album_shuffle"] = s.album_shuffle;
   doc["saver_on"] = s.saver_on;
   doc["saver_min"] = s.saver_min;
+  doc["album_local"] = s.album_local;
+  doc["album_bing"] = s.album_bing;
+  doc["bing_caption"] = s.bing_caption;
   // 这块板子有没有这些硬件
   doc["audio"] = audio_available();
   doc["voice"] = voice_available();
@@ -296,6 +299,9 @@ static void handle_save() {
   if (server.hasArg("album_sec")) {  // 确认是设置表单提交的，再更新复选框
     s.album_shuffle = server.hasArg("album_shuffle");
     s.saver_on = server.hasArg("saver_on");
+    s.album_local = server.hasArg("album_local");
+    s.album_bing = server.hasArg("album_bing");
+    s.bing_caption = server.hasArg("bing_caption");
   }
   int rs = night_parse_hhmm(server.arg("remind_start").c_str());
   int re = night_parse_hhmm(server.arg("remind_end").c_str());
@@ -416,12 +422,17 @@ static void handle_photo_chunk() {
   }
 }
 
+// 网页里 src=bing 表示必应图片，否则是自己的照片
+static PhotoSource source_arg() {
+  return server.arg("src") == "bing" ? PhotoSource::Bing : PhotoSource::Local;
+}
+
 static void handle_photo_file() {
   String name = server.arg("name");
   String lower = name;
   lower.toLowerCase();
   bool png = lower.endsWith(".png");
-  bool ok = photos_read(name, [](void *ctx, const uint8_t *data, size_t len, size_t total) {
+  bool ok = photos_read(source_arg(), name, [](void *ctx, const uint8_t *data, size_t len, size_t total) {
     if (!data) {  // 开头先发一次文件大小
       server.sendHeader("Cache-Control", "max-age=3600");
       server.setContentLength(total);
@@ -473,7 +484,7 @@ void web_config_begin() {
   server.on("/album/upload", HTTP_POST, [] { send_json(photo_ok, photo_error); }, handle_photo_chunk);
   server.on("/album/delete", HTTP_POST, [] {
     photo_name = "";
-    send_json(photos_delete(server.arg("name")), "删除失败");
+    send_json(photos_delete(source_arg(), server.arg("name")), "删除失败");
   });
   const char *headers[] = {"Content-Length"};
   server.collectHeaders(headers, 1);

@@ -113,6 +113,7 @@ textarea.txt{height:76px;padding:10px 12px;resize:none}
 .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;padding:4px 16px 16px}
 .ph{position:relative;aspect-ratio:4/3;border-radius:10px;background:var(--field);overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--sub);text-align:center;word-break:break-all;padding:4px}
 .ph img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.ph .cap{position:absolute;left:0;right:0;bottom:0;padding:10px 6px 4px;background:linear-gradient(transparent,rgba(0,0,0,.6));color:#fff;font-size:10.5px;line-height:1.3;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ph button{position:absolute;top:4px;right:4px;width:28px;height:28px;border:0;border-radius:50%;background:rgba(0,0,0,.5);color:#fff;font-size:16px;cursor:pointer}
 .dock{position:fixed;left:0;right:0;bottom:0;z-index:5}
 .save,.toast{max-width:456px;margin:0 auto 10px;border-radius:14px;box-shadow:0 8px 24px rgba(0,0,0,.18)}
@@ -198,6 +199,11 @@ nav a.on{color:var(--ink);font-weight:600}
 <div class="ch"><h2 id="phCount"></h2><span class="meta">点 × 删除</span></div>
 <div class="grid" id="grid"></div>
 </section>
+<section class="card" id="bingCard" hidden>
+<div class="ch"><h2 id="bingCount"></h2><span class="meta" id="bingMeta"></span></div>
+<p class="hint" id="bingNote"></p>
+<div class="grid" id="bingGrid"></div>
+</section>
 </section>
 
 </main>
@@ -257,11 +263,14 @@ const CARDS=[
  hint:'雷达感应的是动作，人坐着一动不动时可能感应不到，所以离开时间别设太短。熄屏后点屏幕或按 BOOT 键也能亮；有提醒时会自动亮屏。需要 SENSOR 底座。'},
 {t:'display',title:'相册与屏保',icon:'image',f:[
  {type:'html',html:'<a class="album" href="#album"><span class="l"><b id="albumSum">相册</b><small id="albumSub">照片存在 TF 卡的 photos 文件夹里</small></span><span class="go">上传 / 管理 ›</span></a>'},
+ {type:'sw',k:'album_local',label:'放自己的照片',sub:'TF 卡的 photos 文件夹，可以用手机上传'},
+ {type:'sw',k:'album_bing',label:'放必应每日一图',sub:'每天自动下载一张风景壁纸，单独存在 TF 卡的 bing 文件夹'},
+ {type:'sw',k:'bing_caption',label:'必应图片显示标题和地点',sub:'照片底部一行淡淡的小字'},
  {type:'num',k:'album_sec',label:'每张照片显示',unit:'秒'},
  {type:'sw',k:'album_shuffle',label:'随机顺序'},
  {type:'sw',k:'saver_on',label:'空闲时播放相册（屏保）'},
  {type:'num',k:'saver_min',label:'多久没碰屏幕算空闲',unit:'分钟'}],
- hint:'切到屏幕上的「相册」页会一直播放。屏保：碰一下屏幕或按 BOOT 键回到原来的页面；番茄钟进行中、夜间时段和没人熄屏时不会启动。'},
+ hint:'两个来源都打开时交替播放。必应的图片每天一张，卡里最多存 60 张，满了先删最早的；没插 TF 卡时只放当天这一张。图片版权归必应和摄影师，自己看没问题，别拿去分发。<br>切到屏幕上的「相册」页会一直播放。屏保：碰一下屏幕或按 BOOT 键回到原来的页面；番茄钟进行中、夜间时段和没人熄屏时不会启动。'},
 {t:'services',title:'天气',icon:'cloud',meta:'Open-Meteo',f:[
  {type:'html',html:'<div class="fld"><label class="lab" for="f_city">城市（显示在屏幕上）</label><div class="inl"><input class="txt" id="f_city" name="city" maxlength="16"><button type="button" class="btn g" id="geo">查坐标</button></div><div class="res" id="results"></div></div>'},
  {type:'two',f:[{k:'lat',label:'纬度',dec:1},{k:'lon',label:'经度',dec:1}]}],
@@ -509,29 +518,46 @@ for(const el of F.elements._theme){el.checked=el.value===th;el.onchange=()=>them
 
 // ---- 相册 ----
 function fmt(b){return b>=1073741824?(b/1073741824).toFixed(1)+' GB':Math.round(b/1048576)+' MB';}
+// 一格缩略图：src 是 local 或 bing，cap 是必应图片的说明，del 为 false 时不能删
+function thumb(grid,src,p,cap,del){
+ const d=document.createElement('div');d.className='ph';
+ if(p.s===undefined||p.s<=1048576){const i=document.createElement('img');i.loading='lazy';i.src='/album/file?src='+src+'&name='+encodeURIComponent(p.n);i.alt=cap||p.n;if(cap)i.title=cap;d.appendChild(i);}
+ else d.textContent=p.n+'（原图，不显示缩略图）';
+ if(cap){const c=document.createElement('span');c.className='cap';c.textContent=cap;d.appendChild(c);}
+ if(del){
+  const b=document.createElement('button');b.type='button';b.textContent='×';b.setAttribute('aria-label','删除 '+(cap||p.n));
+  b.onclick=async()=>{if(!confirm('删除'+(cap?'「'+cap+'」':' '+p.n)+'？'))return;
+   try{if(!(await post('album/delete',new URLSearchParams({src,name:p.n}))).ok)toast('删除失败');}catch(e){toast('删除失败');}loadAlbum();};
+  d.appendChild(b);
+ }
+ grid.appendChild(d);
+}
 async function loadAlbum(){
  let j;
  try{j=await (await fetch('/album/list')).json();}catch(e){$('cardNote').textContent='读取失败，刷新页面再试';return;}
- const ok=j.card==='ok';
+ const ok=j.card==='ok', bing=j.bing||[], mem=j.bing_mem;
  $('upCard').hidden=$('phCard').hidden=$('cardBar').hidden=!ok;
- $('albumSum').textContent=ok?j.photos.length+' 张照片':j.card==='noslot'?'这块板子没有 TF 卡槽':'没有检测到 TF 卡';
- $('albumSub').textContent=ok?'TF 卡剩余 '+fmt(j.total-j.used):'照片存在 TF 卡的 photos 文件夹里';
+ $('albumSum').textContent=ok?j.photos.length+' 张照片 · 必应 '+bing.length+' 张':j.card==='noslot'?'这块板子没有 TF 卡槽':'没有检测到 TF 卡';
+ $('albumSub').textContent=ok?'TF 卡剩余 '+fmt(j.total-j.used):mem?'只放当天的必应每日一图':'照片存在 TF 卡的 photos 文件夹里';
+ // 必应每日一图单独一组
+ const bg=$('bingGrid');bg.textContent='';
+ $('bingCard').hidden=j.card==='noslot';
+ const onCard=ok&&bing.length>0;
+ $('bingCount').textContent='必应每日一图（'+(onCard?bing.length:mem?1:0)+' 张）';
+ $('bingMeta').textContent=onCard?'点 × 删除':'';
+ $('bingNote').textContent=onCard?'存在卡里的 bing 文件夹，最多 60 张，满了先删最早的。删掉的图不会再下载回来。'
+  :mem?(ok?'正在把最近几天的图存进 TF 卡，先放内存里当天这一张。':'没插 TF 卡，只在内存里放当天这一张，断电就没了。插上卡后会自动存下最近几天的图。')
+  :'还没有下载。打开「显示 › 相册与屏保」里的「放必应每日一图」，连上网后会自动下载'+(ok?'最近几天的图。':'当天这一张（插上 TF 卡能存下更多）。');
+ if(onCard)for(const p of bing.slice().reverse())thumb(bg,'bing',p,p.c,true);  // 最新的在前
+ else if(mem)thumb(bg,'bing',mem,mem.c,false);
  if(j.card==='noslot'){$('cardUse').textContent='';$('cardNote').textContent='这块板子没有 TF 卡槽，用不了相册。';return;}
  if(!ok){$('cardUse').textContent='';$('cardNote').textContent='没有检测到 TF 卡。请插入 FAT32 格式的 TF 卡（32GB 以内的卡出厂就是 FAT32），插好后刷新这个页面。';return;}
  $('cardUse').textContent='已用 '+fmt(j.used)+' / 共 '+fmt(j.total);
  $('cardBar').firstChild.style.width=Math.max(1,Math.round(j.used*100/j.total))+'%';
  $('cardNote').textContent='照片在卡里的 photos 文件夹，支持 JPG 和 PNG，也可以拔下卡用电脑管理。'+(j.failed?'有 '+j.failed+' 张照片读不出来（可能是 HEIC 或渐进式 JPEG），可以删掉后在这里重新上传。':'');
- $('phCount').textContent='已有照片（'+j.photos.length+' 张）';
+ $('phCount').textContent='自己的照片（'+j.photos.length+' 张）';
  const grid=$('grid');grid.textContent='';
- for(const p of j.photos){
-  const d=document.createElement('div');d.className='ph';
-  if(p.s<=1048576){const i=document.createElement('img');i.loading='lazy';i.src='/album/file?name='+encodeURIComponent(p.n);i.alt=p.n;d.appendChild(i);}
-  else d.textContent=p.n+'（原图，不显示缩略图）';
-  const b=document.createElement('button');b.type='button';b.textContent='×';b.setAttribute('aria-label','删除 '+p.n);
-  b.onclick=async()=>{if(!confirm('删除 '+p.n+'？'))return;
-   try{if(!(await post('album/delete',new URLSearchParams({name:p.n}))).ok)toast('删除失败');}catch(e){toast('删除失败');}loadAlbum();};
-  d.appendChild(b);grid.appendChild(d);
- }
+ for(const p of j.photos)thumb(grid,'local',p,'',true);
 }
 function canvas(w,h){const c=document.createElement('canvas');c.width=w;c.height=h;const x=c.getContext('2d');x.imageSmoothingQuality='high';return [c,x];}
 // 缩小到能完整放进 320x240（不放大），转成 JPG；每次缩一半，最后一步缩到目标大小，比一步缩到位清晰

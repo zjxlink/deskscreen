@@ -50,6 +50,9 @@ struct Settings {
   bool album_shuffle;        // 随机顺序，否则按文件名
   bool saver_on;             // 空闲时自动播放相册（屏保）
   uint8_t saver_min;         // 多少分钟没碰屏幕算空闲，默认 5
+  bool album_local;          // 图片来源：自己的照片（TF 卡 photos 文件夹）
+  bool album_bing;           // 图片来源：必应每日一图（TF 卡 bing 文件夹）。两个都开时交替播放
+  bool bing_caption;         // 必应图片底部显示标题和地点
 };
 
 // 时区固定为北京时间，POSIX 格式

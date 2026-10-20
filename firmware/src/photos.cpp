@@ -13,17 +13,28 @@
 #include <vector>
 
 #include "album.h"
+#include "bing.h"
 
-static constexpr const char *kDir = "/photos";
 static constexpr const char *kTmp = "/photos/.upload.tmp";
+static constexpr const char *kBingTmp = "/bing/.download.tmp";
 static constexpr uint32_t kMountRetryMs = 10000;       // 没插卡时多久再试一次
 static constexpr size_t kMaxFileBytes = 8 * 1024 * 1024;  // 再大的照片就不读了，免得 PSRAM 不够
-static constexpr uint64_t kMinFreeBytes = 1024 * 1024;    // 卡快满时不再接收上传
+static constexpr uint64_t kMinFreeBytes = 1024 * 1024;    // 卡快满时不再接收上传和下载
 static constexpr int kMaxTries = 5;  // 一次最多试几张，都读不出来就等下一次
+static constexpr size_t kCaptionMax = 160;
 
 struct PhotoFile {
   String name;
   uint32_t size;
+  String caption;  // 必应图片的说明
+};
+
+// 一个图片来源对应卡上的一个文件夹
+struct Source {
+  const char *dir;
+  std::vector<PhotoFile> files;
+  bool dirty = true;
+  PhotoOrder order;
 };
 
 static SemaphoreHandle_t lock;
@@ -31,29 +42,42 @@ static TaskHandle_t task;
 static bool mounted = false;
 static bool tried = false;
 static uint32_t last_try = 0;
-static std::vector<PhotoFile> files;
-static bool list_dirty = true;
-static PhotoOrder order;
+static Source sources[2];
+static int last_source = -1;
 static bool order_shuffle = true;
 static volatile bool want_shuffle = true;
+static volatile bool use_local = true;
+static volatile bool use_bing = true;
 static volatile bool busy = false;
 static volatile bool frame_ready = false;
 static volatile int failed = 0;
 
+// 没插卡时内存里的当天必应图片
+static uint8_t *mem_data = nullptr;
+static size_t mem_len = 0;
+static char mem_date[9] = "";
+static char mem_caption[kCaptionMax] = "";
+
 // 两帧轮流用：一帧在屏幕上显示，另一帧给后台解码
 static LGFX_Sprite frames[2];
+static char captions[2][kCaptionMax];
 static int frame_shown = -1;
 static int frame_new = 0;
 
 static File upload_file;
 static bool upload_ok = false;
 
+static Source &local_src() { return sources[(int)PhotoSource::Local]; }
+static Source &bing_src() { return sources[(int)PhotoSource::Bing]; }
+
 static void unmount_locked() {
   SD_MMC.end();
   mounted = false;
-  files.clear();
-  order.reset(0, order_shuffle, 1);
-  list_dirty = true;
+  for (Source &s : sources) {
+    s.files.clear();
+    s.order.reset(0, order_shuffle, 1);
+    s.dirty = true;
+  }
 }
 
 static bool mount_locked() {
@@ -74,40 +98,75 @@ static bool mount_locked() {
     return false;
   }
   mounted = true;
-  list_dirty = true;
-  if (!SD_MMC.exists(kDir)) SD_MMC.mkdir(kDir);
+  for (Source &s : sources) {
+    s.dirty = true;
+    if (!SD_MMC.exists(s.dir)) SD_MMC.mkdir(s.dir);
+  }
   log_i("TF card mounted, %llu MB", SD_MMC.cardSize() / (1024 * 1024));
   return true;
 }
 
-// 重新扫描 photos 文件夹；卡被拔掉时卸载
-static bool scan_locked() {
-  File dir = SD_MMC.open(kDir);
+static String path_of(const Source &s, const String &name) {
+  return String(s.dir) + "/" + name;
+}
+
+// 必应图片的说明在同名的 .txt 里
+static String caption_path(const char *date) {
+  return String("/bing/") + date + ".txt";
+}
+
+static String read_caption_locked(const String &jpg_name) {
+  File f = SD_MMC.open(caption_path(jpg_name.substring(0, 8).c_str()));
+  if (!f) return String();
+  char buf[kCaptionMax];
+  int n = f.read((uint8_t *)buf, sizeof(buf) - 1);
+  buf[n > 0 ? n : 0] = '\0';
+  return String(buf);
+}
+
+// 重新扫描一个文件夹；卡被拔掉时卸载
+static bool scan_locked(Source &s) {
+  File dir = SD_MMC.open(s.dir);
   if (!dir || !dir.isDirectory()) {
-    if (!SD_MMC.mkdir(kDir)) {
+    if (!SD_MMC.mkdir(s.dir)) {
       unmount_locked();  // 连文件夹都建不了，多半是卡被拔了
       return false;
     }
-    dir = SD_MMC.open(kDir);
+    dir = SD_MMC.open(s.dir);
     if (!dir) {
       unmount_locked();
       return false;
     }
   }
-  files.clear();
-  for (File f = dir.openNextFile(); f && (int)files.size() < kAlbumMaxPhotos; f = dir.openNextFile()) {
+  bool bing = &s == &bing_src();
+  s.files.clear();
+  for (File f = dir.openNextFile(); f && (int)s.files.size() < kAlbumMaxPhotos; f = dir.openNextFile()) {
     const char *name = f.name();
     const char *slash = strrchr(name, '/');  // 有的版本返回完整路径
     if (slash) name = slash + 1;
-    if (!f.isDirectory() && album_is_photo(name)) files.push_back({String(name), (uint32_t)f.size()});
+    if (f.isDirectory() || !album_is_photo(name)) continue;
+    if (bing && !bing_is_file(name)) continue;
+    s.files.push_back({String(name), (uint32_t)f.size(), String()});
   }
-  std::sort(files.begin(), files.end(), [](const PhotoFile &a, const PhotoFile &b) { return a.name < b.name; });
+  dir.close();
+  std::sort(s.files.begin(), s.files.end(), [](const PhotoFile &a, const PhotoFile &b) { return a.name < b.name; });
+  if (bing) {
+    for (PhotoFile &f : s.files) f.caption = read_caption_locked(f.name);
+  }
   order_shuffle = want_shuffle;
-  order.reset(files.size(), order_shuffle, esp_random());
-  list_dirty = false;
+  s.order.reset(s.files.size(), order_shuffle, esp_random());
+  s.dirty = false;
   failed = 0;
   return true;
 }
+
+// 必应图片用内存里的那一张：没插卡，或者卡上还没下载好
+static bool bing_from_mem() {
+  return mem_data && !(mounted && bing_src().order.count() > 0);
+}
+
+static int local_count() { return mounted ? local_src().order.count() : 0; }
+static int bing_count() { return mounted && bing_src().order.count() > 0 ? bing_src().order.count() : mem_data ? 1 : 0; }
 
 // 把整个文件读进 PSRAM，读完立即放开锁，解码时网页还能用卡
 static uint8_t *read_locked(const String &path, size_t &len) {
@@ -135,39 +194,69 @@ static bool is_png(String name) {
   return name.endsWith(".png");
 }
 
+// 选下一张并读进内存（拿着锁调用）。没有可放的图时返回 nullptr 且 name 为空
+static uint8_t *pick_locked(String &name, String &caption, size_t &len, int &src_out) {
+  name = "";
+  bool card = mount_locked();
+  bool scanned[2] = {false, false};
+  bool reshuffle = order_shuffle != want_shuffle;  // 扫描时会更新 order_shuffle，先记下来
+  if (card) {
+    for (int i = 0; i < 2 && card; i++) {
+      if (sources[i].dirty || reshuffle) {
+        card = scan_locked(sources[i]);
+        scanned[i] = true;
+      }
+    }
+  }
+  bool has_local = use_local && local_count() > 0;
+  bool has_bing = use_bing && bing_count() > 0;
+  if (card && !has_local && !has_bing) {
+    // 还没有图时每次都重新看一眼文件夹，刚拷进去的照片也能跟上
+    for (int i = 0; i < 2 && card; i++) {
+      if (!scanned[i] && (i == 0 ? use_local : use_bing)) {
+        card = scan_locked(sources[i]);
+        scanned[i] = true;
+      }
+    }
+    has_local = use_local && local_count() > 0;
+    has_bing = use_bing && bing_count() > 0;
+  }
+  int src = album_next_source(last_source, has_local, has_bing);
+  if (src < 0) return nullptr;
+  src_out = src;
+
+  if (src == (int)PhotoSource::Bing && bing_from_mem()) {
+    name = String(mem_date) + ".jpg";
+    caption = mem_caption;
+    len = mem_len;
+    auto *buf = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (buf) memcpy(buf, mem_data, len);
+    return buf;
+  }
+  Source &s = sources[src];
+  bool new_round;
+  int k = s.order.next(&new_round);
+  if (new_round && !scanned[src]) {
+    // 每放完一轮重新看一次文件夹，拔卡换照片后也能跟上
+    if (!scan_locked(s)) return nullptr;
+    k = s.order.next();
+  }
+  if (k < 0) return nullptr;
+  name = s.files[k].name;
+  caption = s.files[k].caption;
+  return read_locked(path_of(s, name), len);
+}
+
 static void decode_next() {
   for (int attempt = 0; attempt < kMaxTries; attempt++) {
-    xSemaphoreTake(lock, portMAX_DELAY);
-    if (!mount_locked()) {
-      xSemaphoreGive(lock);
-      return;
-    }
-    bool scanned = false;
-    if (list_dirty || order_shuffle != want_shuffle) {
-      if (!scan_locked()) {
-        xSemaphoreGive(lock);
-        return;
-      }
-      scanned = true;
-    }
-    bool new_round;
-    int k = order.next(&new_round);
-    if ((new_round || k < 0) && !scanned) {
-      // 每放完一轮（或者还没有照片时）重新看一次文件夹，拔卡换照片后也能跟上
-      if (!scan_locked()) {
-        xSemaphoreGive(lock);
-        return;
-      }
-      k = order.next();
-    }
-    if (k < 0) {
-      xSemaphoreGive(lock);
-      return;
-    }
-    String name = files[k].name;
+    String name, caption;
     size_t len = 0;
-    uint8_t *data = read_locked(String(kDir) + "/" + name, len);
+    int src = -1;
+    xSemaphoreTake(lock, portMAX_DELAY);
+    uint8_t *data = pick_locked(name, caption, len, src);
     xSemaphoreGive(lock);
+    if (name.isEmpty()) return;  // 没有可放的图
+    last_source = src;
     if (!data) {
       failed = failed + 1;
       continue;
@@ -189,6 +278,7 @@ static void decode_next() {
     // 精灵里的像素是给 SPI 屏幕用的高低字节对调格式，LVGL 要的是正常字节序
     auto *px = (uint16_t *)spr.getBuffer();
     for (int i = 0; i < SCREEN_W * SCREEN_H; i++) px[i] = __builtin_bswap16(px[i]);
+    strlcpy(captions[back], caption.c_str(), kCaptionMax);
     frame_new = back;
     frame_ready = true;
     return;
@@ -197,7 +287,11 @@ static void decode_next() {
 
 static void photo_task(void *) {
   xSemaphoreTake(lock, portMAX_DELAY);
-  if (mount_locked()) scan_locked();
+  if (mount_locked()) {
+    for (Source &s : sources) {
+      if (!scan_locked(s)) break;
+    }
+  }
   xSemaphoreGive(lock);
   busy = false;
   for (;;) {
@@ -209,6 +303,8 @@ static void photo_task(void *) {
 
 void photos_begin() {
   lock = xSemaphoreCreateMutex();
+  local_src().dir = "/photos";
+  bing_src().dir = "/bing";
   pinMode(PIN_SD_POWER, OUTPUT);
   digitalWrite(PIN_SD_POWER, LOW);
   for (auto &f : frames) {
@@ -231,13 +327,20 @@ bool photos_supported() {
 PhotoStatus photos_status() {
   PhotoStatus s = {};
   s.failed = failed;
+  s.local = local_count();
+  s.bing = bing_count();
+  s.count = (use_local ? s.local : 0) + (use_bing ? s.bing : 0);
   if (!mounted) {
     s.card = PhotoCard::NoCard;
-    return s;
+  } else {
+    s.card = s.local > 0 ? PhotoCard::Ok : PhotoCard::Empty;
   }
-  s.count = order.count();
-  s.card = s.count > 0 ? PhotoCard::Ok : PhotoCard::Empty;
   return s;
+}
+
+void photos_set_sources(bool local, bool bing) {
+  use_local = local;
+  use_bing = bing;
 }
 
 void photos_request_next(bool shuffle) {
@@ -251,30 +354,46 @@ bool photos_busy() {
   return busy;
 }
 
-bool photos_take_frame(const uint16_t *&px) {
+bool photos_take_frame(const uint16_t *&px, const char *&caption) {
   if (!frame_ready) return false;
   frame_shown = frame_new;
   px = (const uint16_t *)frames[frame_shown].getBuffer();
+  caption = captions[frame_shown];
   frame_ready = false;
   return true;
+}
+
+static void list_files(JsonDocument &doc, const char *key, const Source &s, bool with_caption) {
+  JsonArray arr = doc[key].to<JsonArray>();
+  for (const PhotoFile &f : s.files) {
+    JsonObject o = arr.add<JsonObject>();
+    o["n"] = f.name;
+    o["s"] = f.size;
+    if (with_caption) o["c"] = f.caption;
+  }
 }
 
 String photos_list_json() {
   JsonDocument doc;
   xSemaphoreTake(lock, portMAX_DELAY);
   tried = false;  // 打开网页时立即重试挂载，刚插上的卡不用等
-  if (mount_locked() && (!list_dirty || scan_locked())) {
+  bool ok = mount_locked();
+  for (int i = 0; i < 2 && ok; i++) {
+    if (sources[i].dirty) ok = scan_locked(sources[i]);
+  }
+  if (ok) {
     doc["card"] = "ok";
     doc["total"] = (double)SD_MMC.totalBytes();  // 字节数可能超过 32 位
     doc["used"] = (double)SD_MMC.usedBytes();
-    JsonArray arr = doc["photos"].to<JsonArray>();
-    for (const PhotoFile &f : files) {
-      JsonObject o = arr.add<JsonObject>();
-      o["n"] = f.name;
-      o["s"] = f.size;
-    }
+    list_files(doc, "photos", local_src(), false);
+    list_files(doc, "bing", bing_src(), true);
   } else {
     doc["card"] = "none";
+  }
+  if (bing_from_mem()) {  // 没插卡时内存里的那一张
+    JsonObject m = doc["bing_mem"].to<JsonObject>();
+    m["n"] = String(mem_date) + ".jpg";
+    m["c"] = mem_caption;
   }
   xSemaphoreGive(lock);
   doc["failed"] = (int)failed;
@@ -283,7 +402,8 @@ String photos_list_json() {
   return out;
 }
 
-static bool valid_name(const String &name) {
+static bool valid_name(PhotoSource src, const String &name) {
+  if (src == PhotoSource::Bing) return bing_is_file(name.c_str());
   return name.length() > 0 && name.indexOf('/') < 0 && name.indexOf('\\') < 0 && album_is_photo(name.c_str());
 }
 
@@ -292,7 +412,7 @@ bool photos_upload_begin(const String &filename) {
   tried = false;
   upload_ok = mount_locked() && SD_MMC.totalBytes() - SD_MMC.usedBytes() >= kMinFreeBytes;
   if (upload_ok) {
-    if (!SD_MMC.exists(kDir)) SD_MMC.mkdir(kDir);
+    if (!SD_MMC.exists(local_src().dir)) SD_MMC.mkdir(local_src().dir);
     upload_file = SD_MMC.open(kTmp, FILE_WRITE);
     upload_ok = (bool)upload_file;
   }
@@ -320,10 +440,10 @@ bool photos_upload_end(String &saved_name) {
   album_safe_name(saved_name.c_str(), String(millis()).c_str(), base, sizeof(base));
   String stem = String(base).substring(0, strlen(base) - 4);
   String name = base;
-  for (int i = 2; SD_MMC.exists(String(kDir) + "/" + name) && i < 1000; i++) name = stem + "_" + i + ".jpg";
-  bool ok = SD_MMC.rename(kTmp, String(kDir) + "/" + name);
+  for (int i = 2; SD_MMC.exists(path_of(local_src(), name)) && i < 1000; i++) name = stem + "_" + i + ".jpg";
+  bool ok = SD_MMC.rename(kTmp, path_of(local_src(), name));
   if (!ok) SD_MMC.remove(kTmp);
-  list_dirty = true;
+  local_src().dirty = true;
   xSemaphoreGive(lock);
   saved_name = name;
   return ok;
@@ -337,20 +457,43 @@ void photos_upload_abort() {
   xSemaphoreGive(lock);
 }
 
-bool photos_delete(const String &name) {
-  if (!valid_name(name)) return false;
+// 删掉的必应图片留一个 .del 记录，免得下次又下载回来
+static String deleted_path(const char *date) {
+  return String("/bing/") + date + ".del";
+}
+
+bool photos_delete(PhotoSource src, const String &name) {
+  if (!valid_name(src, name)) return false;
+  Source &s = sources[(int)src];
   xSemaphoreTake(lock, portMAX_DELAY);
-  bool ok = mounted && SD_MMC.remove(String(kDir) + "/" + name);
-  list_dirty = true;
+  bool ok = mounted && SD_MMC.remove(path_of(s, name));
+  if (ok && src == PhotoSource::Bing) {
+    String date = name.substring(0, 8);
+    SD_MMC.remove(caption_path(date.c_str()));
+    File f = SD_MMC.open(deleted_path(date.c_str()), FILE_WRITE);
+    f.close();
+  }
+  s.dirty = true;
   xSemaphoreGive(lock);
   return ok;
 }
 
-bool photos_read(const String &name, void (*fn)(void *ctx, const uint8_t *data, size_t len, size_t total), void *ctx) {
-  if (!valid_name(name)) return false;
+bool photos_read(PhotoSource src, const String &name,
+                 void (*fn)(void *ctx, const uint8_t *data, size_t len, size_t total), void *ctx) {
+  if (!valid_name(src, name)) return false;
   static uint8_t buf[4096];
   xSemaphoreTake(lock, portMAX_DELAY);
-  File f = mounted ? SD_MMC.open(String(kDir) + "/" + name) : File();
+  if (src == PhotoSource::Bing && mem_data && name == String(mem_date) + ".jpg" && bing_from_mem()) {
+    fn(ctx, nullptr, 0, mem_len);
+    for (size_t off = 0; off < mem_len; off += sizeof(buf)) {
+      size_t n = std::min(sizeof(buf), mem_len - off);
+      memcpy(buf, mem_data + off, n);  // 发送时不拿着内存里的原图，下载任务换图也不怕
+      fn(ctx, buf, n, mem_len);
+    }
+    xSemaphoreGive(lock);
+    return true;
+  }
+  File f = mounted ? SD_MMC.open(path_of(sources[(int)src], name)) : File();
   bool ok = (bool)f && !f.isDirectory();
   if (ok) {
     size_t total = f.size();
@@ -361,20 +504,118 @@ bool photos_read(const String &name, void (*fn)(void *ctx, const uint8_t *data, 
   return ok;
 }
 
+bool photos_bing_card() {
+  xSemaphoreTake(lock, portMAX_DELAY);
+  bool ok = mount_locked() && SD_MMC.totalBytes() - SD_MMC.usedBytes() >= kMinFreeBytes;
+  if (ok && !SD_MMC.exists(bing_src().dir)) ok = SD_MMC.mkdir(bing_src().dir);
+  xSemaphoreGive(lock);
+  return ok;
+}
+
+bool photos_bing_known(const char *date) {
+  if (!bing_is_date(date)) return false;
+  xSemaphoreTake(lock, portMAX_DELAY);
+  bool known = mounted && (SD_MMC.exists(String("/bing/") + date + ".jpg") || SD_MMC.exists(deleted_path(date)));
+  xSemaphoreGive(lock);
+  return known;
+}
+
+bool photos_bing_save(const char *date, const uint8_t *data, size_t len, const char *caption) {
+  if (!bing_is_date(date)) return false;
+  xSemaphoreTake(lock, portMAX_DELAY);
+  bool ok = mounted;
+  if (ok) {
+    // 先写说明，再把图片改成正式文件名，扫描时看到图片就一定有说明
+    File t = SD_MMC.open(caption_path(date), FILE_WRITE);
+    if (t) {
+      t.print(caption);
+      t.close();
+    }
+    File f = SD_MMC.open(kBingTmp, FILE_WRITE);
+    ok = f && f.write(data, len) == len;
+    f.close();
+    String path = String("/bing/") + date + ".jpg";
+    if (ok) {
+      SD_MMC.remove(path);
+      ok = SD_MMC.rename(kBingTmp, path);
+    }
+    if (!ok) SD_MMC.remove(kBingTmp);
+    bing_src().dirty = true;
+  }
+  xSemaphoreGive(lock);
+  return ok;
+}
+
+void photos_bing_keep(const char *date, uint8_t *data, size_t len, const char *caption) {
+  xSemaphoreTake(lock, portMAX_DELAY);
+  free(mem_data);
+  mem_data = data;
+  mem_len = len;
+  strlcpy(mem_date, date, sizeof(mem_date));
+  strlcpy(mem_caption, caption, sizeof(mem_caption));
+  xSemaphoreGive(lock);
+}
+
+bool photos_bing_kept(const char *date) {
+  xSemaphoreTake(lock, portMAX_DELAY);
+  bool kept = mem_data && strcmp(mem_date, date) == 0;
+  xSemaphoreGive(lock);
+  return kept;
+}
+
+void photos_bing_prune(int keep, const char *oldest) {
+  xSemaphoreTake(lock, portMAX_DELAY);
+  File dir = mounted ? SD_MMC.open(bing_src().dir) : File();
+  if (!dir || !dir.isDirectory()) {
+    xSemaphoreGive(lock);
+    return;
+  }
+  std::vector<String> jpgs, dels;
+  for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
+    const char *name = f.name();
+    const char *slash = strrchr(name, '/');
+    if (slash) name = slash + 1;
+    if (bing_is_file(name)) {
+      jpgs.push_back(name);
+    } else if (strlen(name) == 12 && strcmp(name + 8, ".del") == 0) {
+      dels.push_back(name);
+    }
+  }
+  dir.close();
+  std::sort(jpgs.begin(), jpgs.end());
+  for (int i = 0; i + keep < (int)jpgs.size(); i++) {
+    String date = jpgs[i].substring(0, 8);
+    SD_MMC.remove(path_of(bing_src(), jpgs[i]));
+    SD_MMC.remove(caption_path(date.c_str()));
+    bing_src().dirty = true;
+  }
+  for (const String &d : dels) {
+    if (oldest && strncmp(d.c_str(), oldest, 8) < 0) SD_MMC.remove(path_of(bing_src(), d));
+  }
+  xSemaphoreGive(lock);
+}
+
 #else  // 没有 TF 卡槽的板子
 
 void photos_begin() {}
 bool photos_supported() { return false; }
-PhotoStatus photos_status() { return {PhotoCard::NoSlot, 0, 0}; }
+PhotoStatus photos_status() { return {PhotoCard::NoSlot, 0, 0, 0, 0}; }
+void photos_set_sources(bool, bool) {}
 void photos_request_next(bool) {}
 bool photos_busy() { return false; }
-bool photos_take_frame(const uint16_t *&) { return false; }
+bool photos_take_frame(const uint16_t *&, const char *&) { return false; }
 String photos_list_json() { return "{\"card\":\"noslot\"}"; }
 bool photos_upload_begin(const String &) { return false; }
 bool photos_upload_write(const uint8_t *, size_t) { return false; }
 bool photos_upload_end(String &) { return false; }
 void photos_upload_abort() {}
-bool photos_delete(const String &) { return false; }
-bool photos_read(const String &, void (*)(void *, const uint8_t *, size_t, size_t), void *) { return false; }
+bool photos_delete(PhotoSource, const String &) { return false; }
+bool photos_read(PhotoSource, const String &, void (*)(void *, const uint8_t *, size_t, size_t), void *) { return false; }
+bool photos_bing_card() { return false; }
+bool photos_bing_known(const char *) { return false; }
+bool photos_bing_save(const char *, const uint8_t *, size_t, const char *) { return false; }
+void photos_bing_keep(const char *, uint8_t *data, size_t, const char *) { free(data); }
+bool photos_bing_kept(const char *) { return false; }
+void photos_bing_prune(int, const char *) {}
 
 #endif

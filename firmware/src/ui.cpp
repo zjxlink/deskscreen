@@ -142,6 +142,7 @@ static lv_obj_t *chat_level;
 static lv_obj_t *album_img;
 static lv_img_dsc_t album_dsc;
 static lv_obj_t *lbl_album_msg;
+static lv_obj_t *lbl_album_caption;
 
 static lv_obj_t *make_screen() {
   lv_obj_t *scr = lv_obj_create(nullptr);
@@ -435,6 +436,19 @@ static void build_album() {
   lv_label_set_recolor(lbl_album_msg, true);  // 第一行用亮一点的颜色当标题
   lv_obj_align(lbl_album_msg, LV_ALIGN_CENTER, 0, 0);
   lv_label_set_text(lbl_album_msg, "正在读取 TF 卡…");
+
+  // 必应图片的说明：底部一行淡淡的小字，垫一条半透明的黑底，亮的照片上也看得清
+  lbl_album_caption = make_label(scr, &font_cn_16, lv_color_white());
+  lv_obj_set_size(lbl_album_caption, SCREEN_W, 26);
+  lv_obj_align(lbl_album_caption, LV_ALIGN_BOTTOM_MID, 0, 0);
+  lv_obj_set_style_pad_hor(lbl_album_caption, 12, 0);
+  lv_obj_set_style_pad_top(lbl_album_caption, 3, 0);
+  lv_obj_set_style_bg_color(lbl_album_caption, lv_color_black(), 0);
+  lv_obj_set_style_bg_opa(lbl_album_caption, LV_OPA_40, 0);
+  lv_obj_set_style_text_opa(lbl_album_caption, LV_OPA_80, 0);
+  lv_obj_set_style_text_align(lbl_album_caption, LV_TEXT_ALIGN_CENTER, 0);
+  lv_label_set_long_mode(lbl_album_caption, LV_LABEL_LONG_DOT);
+  lv_obj_add_flag(lbl_album_caption, LV_OBJ_FLAG_HIDDEN);
 }
 
 void ui_set_album_photo(const uint16_t *px) {
@@ -447,6 +461,15 @@ void ui_set_album_photo(const uint16_t *px) {
   lv_img_set_src(album_img, &album_dsc);
   lv_obj_invalidate(album_img);
   lv_obj_clear_flag(album_img, LV_OBJ_FLAG_HIDDEN);
+}
+
+void ui_set_album_caption(const char *text) {
+  if (!text || !*text) {
+    lv_obj_add_flag(lbl_album_caption, LV_OBJ_FLAG_HIDDEN);
+    return;
+  }
+  lv_label_set_text(lbl_album_caption, text);
+  lv_obj_clear_flag(lbl_album_caption, LV_OBJ_FLAG_HIDDEN);
 }
 
 void ui_set_album_arrows(bool show) {

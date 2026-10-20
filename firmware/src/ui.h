@@ -90,6 +90,9 @@ bool ui_chat_button_hit(int x, int y);
 void ui_set_album_photo(const uint16_t *px);
 void ui_set_album_msg(const char *msg);
 
+// 照片底部的说明（必应图片的标题和地点），空字符串或 nullptr 表示不显示
+void ui_set_album_caption(const char *text);
+
 // 相册页左右边缘的 < > 提示，当屏保时不显示
 void ui_set_album_arrows(bool show);
 

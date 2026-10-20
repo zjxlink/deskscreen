@@ -51,6 +51,9 @@ void settings_begin() {
   current.album_shuffle = prefs.getBool("album_shuf", true);
   current.saver_on = prefs.getBool("saver_on", false);
   current.saver_min = prefs.getUChar("saver_min", 5);
+  current.album_local = prefs.getBool("alb_local", true);
+  current.album_bing = prefs.getBool("alb_bing", true);
+  current.bing_caption = prefs.getBool("bing_cap", true);
 }
 
 Settings settings_get() {
@@ -106,6 +109,9 @@ void settings_save(const Settings &s) {
   prefs.putBool("album_shuf", s.album_shuffle);
   prefs.putBool("saver_on", s.saver_on);
   prefs.putUChar("saver_min", s.saver_min);
+  prefs.putBool("alb_local", s.album_local);
+  prefs.putBool("alb_bing", s.album_bing);
+  prefs.putBool("bing_cap", s.bing_caption);
 }
 
 void settings_load_pomo_stats(PomoStatsData &d) {

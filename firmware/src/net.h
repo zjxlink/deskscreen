@@ -20,7 +20,7 @@ class HttpsLock {
 static constexpr unsigned long kTlsHandshakeTimeoutS = 15;
 
 // Stock 是东方财富，StockBackup 是它失败时用的腾讯行情
-enum class NetService : uint8_t { Weather, Github, Stock, StockBackup, Ota, Voice, Count };
+enum class NetService : uint8_t { Weather, Github, Stock, StockBackup, Ota, Voice, Bing, Count };
 
 // 返回内容不是预期的格式（JSON 解析失败等）
 static constexpr int kNetBadData = -100;
