@@ -29,6 +29,10 @@
   #define PIN_I2S_DOUT      15
   #define PIN_AUDIO_PA      46   // 功放使能，高电平打开
   #define ES8311_ADDR       0x18
+  // 麦克风：ES7210 模数转换芯片（I2C 和触摸共用），录音从 I2S 的 DIN 脚进来
+  #define HAS_MIC
+  #define PIN_I2S_DIN       16
+  #define ES7210_ADDR       0x40
   // 六轴姿态传感器 ICM-42607-P，和触摸、解码芯片共用 I2C
   #define HAS_IMU
   #define IMU_ADDR          0x68

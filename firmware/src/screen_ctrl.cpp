@@ -74,7 +74,7 @@ void ScreenCtrl::auto_rotate(uint32_t now_ms) {
   if (cfg_.page_seconds == 0 || (uint32_t)(now_ms - page_shown_at_) < interval) return;
   for (int k = 1; k <= PAGE_COUNT; k++) {
     Page p = (Page)((page_ + k) % PAGE_COUNT);
-    if (cfg_.page_enabled[p]) {
+    if (cfg_.page_enabled[p] && !(cfg_.page_unavailable & (1u << p))) {
       if (p == page_) {
         page_shown_at_ = now_ms;  // 只有当前页可轮播，原地不动
       } else {
@@ -106,7 +106,12 @@ bool ScreenCtrl::on_input(uint32_t now_ms) {
     dimmed_ = false;
     return false;
   }
-  // 手动切换时轮流显示所有页面（没设置的页面也能看到提示）
-  show((Page)((page_ + 1) % PAGE_COUNT), now_ms, true);
+  // 手动切换时轮流显示所有页面（没设置的页面也能看到提示），只跳过板子上没有硬件的页面
+  Page next = page_;
+  for (int k = 1; k <= PAGE_COUNT; k++) {
+    next = (Page)((page_ + k) % PAGE_COUNT);
+    if (!(cfg_.page_unavailable & (1u << next))) break;
+  }
+  show(next, now_ms, true);
   return true;
 }

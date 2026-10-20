@@ -6,6 +6,7 @@
 #include "pomodoro.h"
 #include "runner.h"
 #include "stock.h"
+#include "voice.h"
 #include "weather.h"
 
 void ui_init();
@@ -69,6 +70,20 @@ bool ui_game_close_hit(int x, int y);
 
 // 触摸点是否落在小猫页的小橘身上（点小橘开始跑酷）
 bool ui_pet_hit(int x, int y);
+
+// AI 聊天页：小橘、它说的话、提示和「按住说话」按钮
+struct ChatView {
+  VoiceState state;
+  uint8_t level;       // 录音音量 0~100
+  uint32_t rec_ms;
+  const char *reply;   // 最近一次回答
+  const char *error;
+  bool has_key;        // 设置了百炼 API Key
+  bool blink;
+  int bob;             // 小橘上下跳的像素数
+};
+void ui_set_chat(const ChatView &v);
+bool ui_chat_button_hit(int x, int y);
 
 // 触摸点是否落在番茄钟的圆环上（圆环居中，屏幕上下或左右翻转时判断结果也不变）
 bool ui_pomodoro_hit(int x, int y);

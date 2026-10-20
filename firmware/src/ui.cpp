@@ -126,6 +126,17 @@ static lv_obj_t *lbl_game_score;
 static lv_obj_t *lbl_game_best;
 static lv_obj_t *lbl_game_msg;
 
+// AI 聊天页
+static constexpr int kChatCat = 48;  // 小橘放大 3 倍
+static lv_obj_t *chat_cat;
+static lv_color_t *chat_cat_buf;
+static lv_obj_t *chat_bubble;
+static lv_obj_t *lbl_chat_reply;
+static lv_obj_t *lbl_chat_hint;
+static lv_obj_t *chat_button;
+static lv_obj_t *lbl_chat_button;
+static lv_obj_t *chat_level;
+
 static lv_obj_t *make_screen() {
   lv_obj_t *scr = lv_obj_create(nullptr);
   lv_obj_set_style_bg_color(scr, COLOR_BG, 0);
@@ -679,6 +690,138 @@ bool ui_pet_hit(int x, int y) {
   return x >= a.x1 - 10 && x <= a.x2 + 10 && y >= a.y1 - 10 && y <= a.y2 + 10;
 }
 
+static void build_chat() {
+  lv_obj_t *scr = make_screen();
+  scr_pages[PAGE_CHAT] = scr;
+
+  lv_obj_t *title = make_label(scr, &font_cn_16, COLOR_SUBTLE);
+  lv_label_set_text(title, "和小橘聊天");
+  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 12, 10);
+  dot_wifi[PAGE_CHAT] = make_wifi_dot(scr);
+
+  chat_cat_buf = (lv_color_t *)lv_mem_alloc(LV_CANVAS_BUF_SIZE_TRUE_COLOR(kChatCat, kChatCat));
+  chat_cat = lv_canvas_create(scr);
+  if (chat_cat_buf) lv_canvas_set_buffer(chat_cat, chat_cat_buf, kChatCat, kChatCat, LV_IMG_CF_TRUE_COLOR);
+  lv_obj_set_pos(chat_cat, 12, 60);
+
+  // 气泡：小橘说的话
+  chat_bubble = lv_obj_create(scr);
+  lv_obj_set_size(chat_bubble, SCREEN_W - 84, 112);
+  lv_obj_set_pos(chat_bubble, 72, 36);
+  lv_obj_set_style_radius(chat_bubble, 10, 0);
+  lv_obj_set_style_border_width(chat_bubble, 0, 0);
+  lv_obj_set_style_bg_color(chat_bubble, COLOR_CARD, 0);
+  lv_obj_set_style_pad_all(chat_bubble, 8, 0);
+  lv_obj_clear_flag(chat_bubble, LV_OBJ_FLAG_SCROLLABLE);
+  lbl_chat_reply = make_label(chat_bubble, &font_cn_16, COLOR_TEXT);
+  lv_obj_set_width(lbl_chat_reply, SCREEN_W - 84 - 16);
+  lv_label_set_long_mode(lbl_chat_reply, LV_LABEL_LONG_WRAP);
+  lv_obj_set_style_text_line_space(lbl_chat_reply, 2, 0);
+
+  lbl_chat_hint = make_label(scr, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_set_width(lbl_chat_hint, SCREEN_W - 24);
+  lv_obj_set_style_text_align(lbl_chat_hint, LV_TEXT_ALIGN_CENTER, 0);
+  lv_label_set_long_mode(lbl_chat_hint, LV_LABEL_LONG_DOT);
+  lv_obj_align(lbl_chat_hint, LV_ALIGN_TOP_MID, 0, 154);
+
+  // 按住说话的按钮，录音时下面有一条音量条
+  chat_button = lv_obj_create(scr);
+  lv_obj_set_size(chat_button, 168, 46);
+  lv_obj_align(chat_button, LV_ALIGN_BOTTOM_MID, 0, -14);
+  lv_obj_set_style_radius(chat_button, 23, 0);
+  lv_obj_set_style_border_width(chat_button, 0, 0);
+  lv_obj_set_style_pad_all(chat_button, 0, 0);
+  lv_obj_clear_flag(chat_button, LV_OBJ_FLAG_SCROLLABLE);
+  lbl_chat_button = make_label(chat_button, &font_cn_16, COLOR_TEXT);
+  lv_obj_center(lbl_chat_button);
+
+  chat_level = lv_obj_create(scr);
+  lv_obj_set_height(chat_level, 4);
+  lv_obj_set_style_radius(chat_level, 2, 0);
+  lv_obj_set_style_border_width(chat_level, 0, 0);
+  lv_obj_set_style_bg_color(chat_level, COLOR_ERR, 0);
+  lv_obj_add_flag(chat_level, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void draw_chat_cat(PetMood mood, bool blink) {
+  static int last = -1;
+  int key = (int)mood * 2 + blink;
+  if (!chat_cat_buf || key == last) return;
+  last = key;
+  const int scale = kChatCat / kPetSize;
+  for (int y = 0; y < kChatCat; y++) {
+    for (int x = 0; x < kChatCat; x++) {
+      chat_cat_buf[y * kChatCat + x] = lv_color_hex(kPetPalette[pet_pixel(mood, blink, x / scale, y / scale)]);
+    }
+  }
+  lv_obj_invalidate(chat_cat);
+}
+
+static void set_text(lv_obj_t *label, const char *text) {
+  if (strcmp(lv_label_get_text(label), text) != 0) lv_label_set_text(label, text);
+}
+
+void ui_set_chat(const ChatView &v) {
+  PetMood mood = PetMood::Normal;
+  const char *hint = "";
+  const char *button = "按住说话";
+  lv_color_t button_color = COLOR_ACCENT;
+  const char *reply = v.reply && v.reply[0] ? v.reply : "喵！按住下面的按钮跟我说话，说完松手，我就回答你。";
+  char rec[48];
+  switch (v.state) {
+    case VoiceState::Off:
+      reply = "这块板子没有麦克风，聊不了天喵。";
+      button = "用不了";
+      button_color = COLOR_FLAT;
+      break;
+    case VoiceState::Idle:
+      if (!v.has_key) {
+        reply = "先在设置网页里填上阿里云百炼的 API Key，我就能跟你聊天啦。";
+        hint = "设置网页 →「AI 语音聊天」";
+      }
+      break;
+    case VoiceState::Recording:
+      snprintf(rec, sizeof(rec), "在听呢… %u 秒", (unsigned)(v.rec_ms / 1000));
+      hint = rec;
+      button = "松手发送";
+      button_color = COLOR_ERR;
+      break;
+    case VoiceState::Thinking:
+      mood = PetMood::Bored;
+      hint = "小橘在想……";
+      button = "取消";
+      button_color = COLOR_FLAT;
+      break;
+    case VoiceState::Speaking:
+      mood = PetMood::Happy;
+      hint = "点按钮可以让小橘停下";
+      button = "停下";
+      button_color = COLOR_FLAT;
+      break;
+    case VoiceState::Error:
+      mood = PetMood::Sad;
+      hint = v.error;
+      break;
+  }
+  draw_chat_cat(mood, v.blink);
+  lv_obj_set_y(chat_cat, 60 + v.bob);
+  set_text(lbl_chat_reply, reply);
+  set_text(lbl_chat_hint, hint);
+  lv_obj_set_style_text_color(lbl_chat_hint, v.state == VoiceState::Error ? COLOR_ERR : COLOR_SUBTLE, 0);
+  set_text(lbl_chat_button, button);
+  lv_obj_set_style_bg_color(chat_button, button_color, 0);
+  if (v.state == VoiceState::Recording) {
+    int w = 8 + v.level * 160 / 100;
+    lv_obj_set_width(chat_level, w);
+    lv_obj_align(chat_level, LV_ALIGN_BOTTOM_MID, 0, -6);
+    lv_obj_clear_flag(chat_level, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(chat_level, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+bool ui_chat_button_hit(int x, int y) { return hit(chat_button, x, y); }
+
 static void build_pomodoro() {
   lv_obj_t *scr = make_screen();
   scr_pages[PAGE_POMODORO] = scr;
@@ -731,6 +874,7 @@ void ui_init() {
   build_stocks();
   build_pet();
   build_pomodoro();
+  build_chat();
   build_alert();
   build_quick();
   build_game();

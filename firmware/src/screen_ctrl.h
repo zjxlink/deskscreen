@@ -15,6 +15,7 @@ struct ScreenConfig {
   uint8_t night_brightness = 10;
   uint8_t page_seconds = 15;       // 自动轮播间隔，0 表示不轮播
   bool page_enabled[PAGE_COUNT] = {true};  // 自动轮播只轮到已设置好的页面，默认只有时钟页
+  uint32_t page_unavailable = 0;   // 第 i 位表示这块板子没有第 i 页的硬件（如没麦克风就没有 AI 聊天），手动切换也跳过
   bool away_off = false;           // 有人体感应时：没人一段时间后熄屏，有人回来再亮
   uint8_t away_min = 5;            // 多久没人算离开
 };
@@ -44,6 +45,9 @@ class ScreenCtrl {
 
   // 有人在操作但不切换页面（快捷设置页上的点击）：点亮屏幕，夜间顺延 30 秒
   void activity(uint32_t now_ms);
+
+  // 正在用当前页面（AI 聊天）：自动轮播从现在重新计时，不会切走
+  void stay(uint32_t now_ms) { page_shown_at_ = now_ms; }
 
   // 人体感应的结果，主循环每次调用；从没调用过（没有雷达）就当一直有人。
   // 雷达只对动作敏感，坐着不动也可能一阵子没信号，所以离开要等 away_min 分钟

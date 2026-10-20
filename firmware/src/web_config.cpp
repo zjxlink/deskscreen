@@ -12,6 +12,7 @@
 #include "ota.h"
 #include "settings.h"
 #include "stock.h"
+#include "voice.h"
 #include "weather.h"
 
 static WebServer server(80);
@@ -129,6 +130,17 @@ label.check input{width:auto}
 <div><label>多久没人算离开（分钟）</label><input name="away_min" value="%AWAY_MIN%" inputmode="numeric"></div>
 </div>
 <p class="hint">雷达感应的是动作，人坐着一动不动时可能感应不到，所以离开时间别设太短。熄屏后点屏幕或按 BOOT 键也能亮；有提醒时会自动亮屏。</p>
+<h2>AI 语音聊天</h2>
+<p class="hint">%AI_STATE%在「AI 聊天」页按住麦克风按钮说话，松手后小橘用语音回答。用的是阿里云百炼的 Qwen-Omni 模型，按用量计费，新用户有免费额度。</p>
+<label>百炼 API Key（%AI_KEY_STATE%）</label>
+<input type="password" name="ai_key" placeholder="%AI_KEY_PLACEHOLDER%" autocomplete="off">
+<p class="hint">登录 <a href="https://bailian.console.aliyun.com/" target="_blank">阿里云百炼控制台</a>，在「API Key」里创建一个（北京地域），复制粘贴到这里。Key 只保存在设备上，不会显示出来。</p>
+<label class="check"><input type="checkbox" name="ai_clear"> 清除已保存的 Key</label>
+<div class="row">
+<div><label>模型</label><input name="ai_model" value="%AI_MODEL%"></div>
+<div><label>音色</label><input name="ai_voice" value="%AI_VOICE%"></div>
+</div>
+<p class="hint">模型默认 qwen3-omni-flash；音色默认 Cherry（女声），也可以填 Ethan（男声）等百炼文档里列出的音色名。</p>
 <h2>GitHub 贡献热力图</h2>
 <label>GitHub Token（%GH_STATE%）</label>
 <input type="password" name="gh_token" placeholder="%GH_PLACEHOLDER%" autocomplete="off">
@@ -271,6 +283,12 @@ static void handle_root() {
   page.replace("%GH_STATE%", has_token ? "已设置" : "未设置");
   page.replace("%GH_PLACEHOLDER%", has_token ? "已设置，留空则不修改" : "ghp_...");
   page.replace("%AUTO_UPDATE%", s.auto_update ? "checked" : "");
+  bool has_ai = s.ai_key.length() > 0;
+  page.replace("%AI_STATE%", voice_available() ? "" : "这块板子没有麦克风，用不了语音聊天。");
+  page.replace("%AI_KEY_STATE%", has_ai ? "已设置" : "未设置");
+  page.replace("%AI_KEY_PLACEHOLDER%", has_ai ? "已设置，留空则不修改" : "sk-...");
+  page.replace("%AI_MODEL%", html_escape(s.ai_model));
+  page.replace("%AI_VOICE%", html_escape(s.ai_voice));
   page.replace("%POMO_FOCUS%", String(s.pomo_focus));
   page.replace("%POMO_SHORT%", String(s.pomo_short));
   page.replace("%POMO_LONG%", String(s.pomo_long));
@@ -352,6 +370,20 @@ static void handle_save() {
   } else if (token.length() > 0) {
     s.github_token = token;
   }
+
+  String ai_key = server.arg("ai_key");
+  ai_key.trim();
+  if (server.hasArg("ai_clear")) {
+    s.ai_key = "";
+  } else if (ai_key.length() > 0) {
+    s.ai_key = ai_key;
+  }
+  String ai_model = server.arg("ai_model");
+  ai_model.trim();
+  s.ai_model = ai_model.length() > 0 ? ai_model : String("qwen3-omni-flash");
+  String ai_voice = server.arg("ai_voice");
+  ai_voice.trim();
+  s.ai_voice = ai_voice.length() > 0 ? ai_voice : String("Cherry");
 
   // 复选框不勾选时浏览器不会提交这个字段
   s.night_on = server.hasArg("night_on");

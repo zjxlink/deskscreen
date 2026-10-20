@@ -41,6 +41,10 @@ struct Settings {
   int8_t temp_offset;        // 温度校准，单位 0.1°C，测得的温度加上它再显示
   bool away_off;             // 没人时熄屏，有人回来再亮
   uint8_t away_min;          // 多少分钟没人算离开，默认 5
+  // AI 语音聊天（阿里云百炼）
+  String ai_key;             // 百炼 API Key，空表示不用
+  String ai_model;           // 默认 qwen3-omni-flash
+  String ai_voice;           // 音色，默认 Cherry
 };
 
 // 时区固定为北京时间，POSIX 格式
