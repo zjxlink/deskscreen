@@ -105,3 +105,7 @@ void settings_load_pomo_stats(PomoStatsData &d) {
 void settings_save_pomo_stats(const PomoStatsData &d) {
   prefs.putBytes("pomo_stats", &d, sizeof(d));
 }
+
+int settings_load_game_best() { return prefs.getUShort("run_best", 0); }
+
+void settings_save_game_best(int best) { prefs.putUShort("run_best", best > 65535 ? 65535 : best); }

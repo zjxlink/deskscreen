@@ -4,6 +4,7 @@
 #include "pages.h"
 #include "pet.h"
 #include "pomodoro.h"
+#include "runner.h"
 #include "stock.h"
 #include "weather.h"
 
@@ -60,6 +61,14 @@ void ui_show_quick(const QuickState &q);
 
 // 快捷设置页上点到了什么（按钮周围留了一圈余量，好点中）
 QuickHit ui_quick_hit(int x, int y);
+
+// 小橘跑酷：打开游戏画面；每帧用游戏状态刷新画面，best 为最高分
+void ui_show_game();
+void ui_set_game(const RunnerGame &g, int best);
+bool ui_game_close_hit(int x, int y);
+
+// 触摸点是否落在小猫页的小橘身上（点小橘开始跑酷）
+bool ui_pet_hit(int x, int y);
 
 // 触摸点是否落在番茄钟的圆环上（圆环居中，屏幕上下或左右翻转时判断结果也不变）
 bool ui_pomodoro_hit(int x, int y);

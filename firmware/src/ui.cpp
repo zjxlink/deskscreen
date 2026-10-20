@@ -114,6 +114,18 @@ static lv_obj_t *quick_qr;
 static lv_obj_t *lbl_quick_url;
 static String quick_url;
 
+// 小橘跑酷
+static lv_obj_t *scr_game;
+static lv_obj_t *game_close;
+static lv_obj_t *game_cat;
+static lv_color_t *game_cat_buf;
+static lv_obj_t *game_obs[RunnerGame::kMaxObstacles];
+static constexpr int kPebbles = 8;
+static lv_obj_t *game_pebbles[kPebbles];
+static lv_obj_t *lbl_game_score;
+static lv_obj_t *lbl_game_best;
+static lv_obj_t *lbl_game_msg;
+
 static lv_obj_t *make_screen() {
   lv_obj_t *scr = lv_obj_create(nullptr);
   lv_obj_set_style_bg_color(scr, COLOR_BG, 0);
@@ -544,6 +556,129 @@ QuickHit ui_quick_hit(int x, int y) {
   return QuickHit::None;
 }
 
+static void build_game() {
+  scr_game = make_screen();
+
+  lbl_game_best = make_label(scr_game, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_align(lbl_game_best, LV_ALIGN_TOP_LEFT, 12, 10);
+  lbl_game_score = make_label(scr_game, &lv_font_montserrat_20, COLOR_TEXT);
+  lv_obj_align(lbl_game_score, LV_ALIGN_TOP_MID, 0, 8);
+  game_close = make_button(scr_game, LV_SYMBOL_CLOSE);
+  lv_obj_align(game_close, LV_ALIGN_TOP_RIGHT, -8, 4);
+
+  // 地面和往后跑的小石子
+  lv_obj_t *ground = lv_obj_create(scr_game);
+  lv_obj_set_size(ground, SCREEN_W, 2);
+  lv_obj_set_style_border_width(ground, 0, 0);
+  lv_obj_set_style_radius(ground, 0, 0);
+  lv_obj_set_style_bg_color(ground, COLOR_SUBTLE, 0);
+  lv_obj_set_pos(ground, 0, RunnerGame::kGroundY);
+  for (int i = 0; i < kPebbles; i++) {
+    lv_obj_t *p = lv_obj_create(scr_game);
+    lv_obj_set_size(p, i % 3 ? 3 : 6, 2);
+    lv_obj_set_style_border_width(p, 0, 0);
+    lv_obj_set_style_radius(p, 0, 0);
+    lv_obj_set_style_bg_color(p, COLOR_FLAT, 0);
+    game_pebbles[i] = p;
+  }
+
+  // 黄瓜
+  for (auto &o : game_obs) {
+    o = lv_obj_create(scr_game);
+    lv_obj_set_style_radius(o, 6, 0);
+    lv_obj_set_style_bg_color(o, lv_color_hex(0x3FB950), 0);
+    lv_obj_set_style_border_color(o, lv_color_hex(0x1A7F37), 0);
+    lv_obj_set_style_border_width(o, 2, 0);
+    lv_obj_set_style_pad_all(o, 0, 0);
+    lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+  }
+
+  // 小橘：16x16 像素画放大 2 倍
+  game_cat_buf = (lv_color_t *)lv_mem_alloc(LV_CANVAS_BUF_SIZE_TRUE_COLOR(RunnerGame::kCatSize, RunnerGame::kCatSize));
+  game_cat = lv_canvas_create(scr_game);
+  if (game_cat_buf) {
+    lv_canvas_set_buffer(game_cat, game_cat_buf, RunnerGame::kCatSize, RunnerGame::kCatSize, LV_IMG_CF_TRUE_COLOR);
+  }
+
+  lbl_game_msg = make_label(scr_game, &font_cn_16, COLOR_TEXT);
+  lv_obj_set_style_text_align(lbl_game_msg, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(lbl_game_msg, LV_ALIGN_TOP_MID, 0, 70);
+}
+
+static void draw_game_cat(PetMood mood) {
+  static int last = -1;
+  if (!game_cat_buf || (int)mood == last) return;
+  last = (int)mood;
+  const int scale = RunnerGame::kCatSize / kPetSize;
+  for (int y = 0; y < RunnerGame::kCatSize; y++) {
+    for (int x = 0; x < RunnerGame::kCatSize; x++) {
+      game_cat_buf[y * RunnerGame::kCatSize + x] = lv_color_hex(kPetPalette[pet_pixel(mood, false, x / scale, y / scale)]);
+    }
+  }
+  lv_obj_invalidate(game_cat);
+}
+
+void ui_show_game() {
+  if (lv_scr_act() != scr_game) screen_load(scr_game, false);
+}
+
+void ui_set_game(const RunnerGame &g, int best) {
+  using S = RunnerGame::State;
+  draw_game_cat(g.state() == S::Over ? PetMood::Startled : PetMood::Happy);
+  lv_obj_set_pos(game_cat, RunnerGame::kCatX, (int)g.cat_y());
+
+  for (int i = 0; i < RunnerGame::kMaxObstacles; i++) {
+    const auto &o = g.obstacle(i);
+    if (!o.active) {
+      lv_obj_add_flag(game_obs[i], LV_OBJ_FLAG_HIDDEN);
+      continue;
+    }
+    lv_obj_set_size(game_obs[i], o.w, o.h);
+    lv_obj_set_pos(game_obs[i], (int)o.x, RunnerGame::kGroundY - o.h + 1);
+    lv_obj_clear_flag(game_obs[i], LV_OBJ_FLAG_HIDDEN);
+  }
+
+  // 石子跟着地面往后退，看得出速度
+  int offset = (int)g.distance() % SCREEN_W;
+  for (int i = 0; i < kPebbles; i++) {
+    int x = (i * 47 + SCREEN_W - offset) % SCREEN_W;
+    lv_obj_set_pos(game_pebbles[i], x, RunnerGame::kGroundY + 8 + (i * 7) % 20);
+  }
+
+  lv_label_set_text_fmt(lbl_game_score, "%d", g.score());
+  lv_label_set_text_fmt(lbl_game_best, "最高 %d", best);
+  switch (g.state()) {
+    case S::Ready:
+      lv_label_set_text(lbl_game_msg, "小橘跑酷\n点屏幕起跳，躲开黄瓜！\n点一下开始");
+      lv_obj_clear_flag(lbl_game_msg, LV_OBJ_FLAG_HIDDEN);
+      break;
+    case S::Over:
+      if (g.score() >= best && g.score() > 0) {
+        lv_label_set_text_fmt(lbl_game_msg, "新纪录！%d\n点屏幕再来一局", g.score());
+      } else {
+        lv_label_set_text(lbl_game_msg, "撞到黄瓜了！\n点屏幕再来一局");
+      }
+      lv_obj_clear_flag(lbl_game_msg, LV_OBJ_FLAG_HIDDEN);
+      break;
+    case S::Playing:
+      lv_obj_add_flag(lbl_game_msg, LV_OBJ_FLAG_HIDDEN);
+      break;
+  }
+  lv_obj_align(lbl_game_msg, LV_ALIGN_TOP_MID, 0, 70);
+}
+
+bool ui_game_close_hit(int x, int y) {
+  lv_obj_update_layout(scr_game);
+  return hit(game_close, x, y);
+}
+
+bool ui_pet_hit(int x, int y) {
+  lv_area_t a;
+  lv_obj_get_coords(pet_canvas, &a);
+  return x >= a.x1 - 10 && x <= a.x2 + 10 && y >= a.y1 - 10 && y <= a.y2 + 10;
+}
+
 static void build_pomodoro() {
   lv_obj_t *scr = make_screen();
   scr_pages[PAGE_POMODORO] = scr;
@@ -598,6 +733,7 @@ void ui_init() {
   build_pomodoro();
   build_alert();
   build_quick();
+  build_game();
   Pomodoro idle;
   ui_set_pomodoro(idle, 0, nullptr, 0);
 }
