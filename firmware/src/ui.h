@@ -88,6 +88,8 @@ struct ChatView {
   const char *reply;   // 最近一次回答
   const char *error;
   bool has_key;        // 设置了百炼 API Key
+  bool wake;           // 唤醒词开着
+  bool full_duplex;    // 小橘说话时开口就能打断
   bool blink;
   int bob;             // 小橘上下跳的像素数
 };

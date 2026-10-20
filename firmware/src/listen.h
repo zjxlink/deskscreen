@@ -3,7 +3,7 @@
 #include "music.h"
 
 // 音乐律动的后台任务：一直听麦克风，交给 MusicMeter 分析。
-// 只在板子上分析，不录下来也不上传；AI 聊天录音和喇叭响的时候自动停下
+// 只在板子上分析，不录下来也不上传；喇叭响的时候自动停下
 
 struct MusicView {
   bool playing;               // 正在放音乐

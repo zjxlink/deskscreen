@@ -58,6 +58,11 @@ RtEvent RtParser::feed(std::string &msg) {
   size_t ts, te;
   if (find_string(msg, "type", ts, te) && msg.compare(ts, te - ts, "response.audio.delta") == 0) {
     size_t ds, de;
+    if (find_string(msg, "response_id", ds, de)) {
+      response_id_.assign(msg, ds, de - ds);
+    } else {
+      response_id_.clear();
+    }
     if (!find_string(msg, "delta", ds, de)) return RtEvent::None;
     b64_.reset();
     audio(msg.data() + ds, de - ds);
@@ -67,6 +72,9 @@ RtEvent RtParser::feed(std::string &msg) {
   JsonDocument doc;
   if (deserializeJson(doc, msg)) return RtEvent::None;
   std::string type = doc["type"] | "";
+  const char *rid = doc["response_id"] | (const char *)nullptr;
+  if (!rid) rid = doc["response"]["id"] | "";
+  response_id_ = rid;
   if (type == "session.updated") return RtEvent::Ready;
   if (type == "input_audio_buffer.speech_started") return RtEvent::SpeechStarted;
   if (type == "input_audio_buffer.speech_stopped") return RtEvent::SpeechStopped;

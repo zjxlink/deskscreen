@@ -13,10 +13,10 @@ void audio_play(SoundId) {}
 void audio_stream_begin() {}
 void audio_stream_write(const int16_t *, size_t) {}
 void audio_stream_end() {}
+void audio_stream_flush() {}
+size_t audio_stream_pending() { return 0; }
 bool audio_mic_available() { return false; }
-void audio_mic_begin() {}
-size_t audio_mic_read(int16_t *, size_t) { return 0; }
-void audio_mic_end() {}
+void audio_set_capture_sink(CaptureSink, void *) {}
 size_t audio_mic_listen(int16_t *, size_t) { return 0; }
 
 #else
@@ -26,18 +26,42 @@ size_t audio_mic_listen(int16_t *, size_t) { return 0; }
 #include <driver/i2s.h>
 #include <esp_heap_caps.h>
 
+#include "audio_sync.h"
+
 static constexpr int kRate = 16000;            // 提示音用 16kHz 足够
 static constexpr int kMclk = kRate * 256;      // 4.096MHz，ES8311 从 MCLK 引脚取时钟
 static constexpr i2s_port_t kI2s = I2S_NUM_0;
 static constexpr int kI2cPort = I2C_NUM_0;     // 和触摸芯片共用，走 LovyanGFX 的 I2C 实现，避免两套驱动冲突
+
+static constexpr int kDmaBufs = 6;
+static constexpr int kDmaLen = 256;                       // 每个 DMA 缓冲的采样数（16ms）
+static constexpr uint32_t kTxQueue = kDmaBufs * kDmaLen;  // 喇叭写进去到放出来隔着这么多采样
+static constexpr uint32_t kOutRing = 1 << 19;             // 待播放的声音，32 秒（1MB PSRAM），回答收得比放得快，整段先存着
+static constexpr uint32_t kRefRing = 16384;               // 放过的声音（回声消除的参考信号），1 秒
+static constexpr uint32_t kListenRing = 4096;             // 给音乐律动的麦克风声音
+static constexpr int32_t kRefLead = 320;  // 参考信号比回声早 20ms 给，量偏移的误差不会让回声跑到参考信号前面
 
 static QueueHandle_t queue;
 static SemaphoreHandle_t out_lock;  // 提示音和语音回答轮流用喇叭
 static volatile int volume = 60;
 static bool ready = false;
 static bool mic_ready = false;
-static SemaphoreHandle_t mic_lock;        // AI 聊天录音时一直占着，音乐律动每次读之前试一下
-static volatile bool speaker_on = false;  // 喇叭在响时音乐律动不听，免得听到自己的声音
+static volatile bool speaker_on = false;  // 功放开着（在出声），音乐律动这时不听，免得听到自己的声音
+
+// 喇叭：一个任务一直往 I2S 写（没声音时写静音），这样放出的每个采样都有编号，能和麦克风对齐。
+// 待播放的声音放在 out_ring，放过的存进 ref_ring 当回声消除的参考信号
+static int16_t *out_ring;
+static volatile uint32_t out_w = 0, out_r = 0;
+static volatile bool out_flush = false;
+static int16_t *ref_ring;
+static volatile uint32_t tx_count = 0;  // 已经交给 I2S 的采样数
+
+// 麦克风：一个任务一直读，转给 AI 聊天（回调）和音乐律动（listen_ring）
+static int16_t *listen_ring;
+static volatile uint32_t listen_w = 0;
+static uint32_t listen_r = 0;
+static volatile CaptureSink capture_sink = nullptr;
+static void *volatile capture_ctx = nullptr;
 
 static bool codec_write(uint8_t reg, uint8_t val) {
   return lgfx::i2c::writeRegister8(kI2cPort, ES8311_ADDR, reg, val).has_value();
@@ -94,8 +118,8 @@ static bool i2s_init() {
   cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
   cfg.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
   cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
-  cfg.dma_buf_count = 6;
-  cfg.dma_buf_len = 256;
+  cfg.dma_buf_count = kDmaBufs;
+  cfg.dma_buf_len = kDmaLen;
   cfg.tx_desc_auto_clear = true;  // 没数据时输出静音，不会有杂音
   cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
   cfg.bits_per_chan = I2S_BITS_PER_CHAN_16BIT;
@@ -166,19 +190,67 @@ static bool mic_init() {
 }
 #endif
 
-static void write_stereo(const int16_t *mono, size_t n) {
-  static int16_t buf[256 * 2];
-  size_t pos = 0;
-  while (pos < n) {
-    size_t frames = n - pos < 256 ? n - pos : 256;
-    for (size_t i = 0; i < frames; i++) {
-      int16_t s = mono ? mono[pos + i] : 0;
-      buf[2 * i] = s;
-      buf[2 * i + 1] = s;
+// 放进待播放的缓冲，满了就等着（喇叭任务每 16ms 取走 256 个）
+static void out_write(const int16_t *mono, size_t n) {
+  while (n > 0) {
+    uint32_t space = kOutRing - (out_w - out_r);
+    if (space == 0) {
+      vTaskDelay(pdMS_TO_TICKS(5));
+      continue;
+    }
+    size_t take = n < space ? n : space;
+    uint32_t w = out_w;
+    for (size_t i = 0; i < take; i++) out_ring[(w + i) & (kOutRing - 1)] = mono[i];
+    out_w = w + take;
+    mono += take;
+    n -= take;
+  }
+}
+
+// 等缓冲里的声音全部放完（包括 DMA 里排着的 96ms）
+static void out_drain() {
+  while (out_w != out_r) vTaskDelay(pdMS_TO_TICKS(5));
+  vTaskDelay(pdMS_TO_TICKS(kTxQueue * 1000 / kRate + 20));
+}
+
+static void speaker_task(void *) {
+  static int16_t mono[kDmaLen];
+  static int16_t stereo[kDmaLen * 2];
+  bool pa = false;
+  uint32_t last_sound = 0;
+  for (;;) {
+    if (out_flush) {
+      out_r = out_w;
+      out_flush = false;
+    }
+    uint32_t r = out_r;
+    uint32_t avail = out_w - r;
+    size_t n = avail < (uint32_t)kDmaLen ? avail : kDmaLen;
+    for (size_t i = 0; i < n; i++) mono[i] = out_ring[(r + i) & (kOutRing - 1)];
+    out_r = r + n;
+    for (size_t i = n; i < (size_t)kDmaLen; i++) mono[i] = 0;
+    uint32_t t = tx_count;
+    if (n > 0) {
+      last_sound = t + kDmaLen;
+      // 功放只在出声时打开，平时关着避免底噪。这些采样还要过 96ms 才放出来，够功放稳定
+      if (!pa) {
+        pa = true;
+        speaker_on = true;
+        digitalWrite(PIN_AUDIO_PA, HIGH);
+      }
+    } else if (pa && t - last_sound > kTxQueue + kRate / 5) {
+      pa = false;
+      digitalWrite(PIN_AUDIO_PA, LOW);
+      speaker_on = false;
+    }
+    for (int i = 0; i < kDmaLen; i++) {
+      ref_ring[(t + i) & (kRefRing - 1)] = mono[i];
+      stereo[2 * i] = mono[i];
+      stereo[2 * i + 1] = mono[i];
     }
     size_t written;
-    i2s_write(kI2s, buf, frames * 4, &written, portMAX_DELAY);
-    pos += frames;
+    i2s_write(kI2s, stereo, sizeof(stereo), &written, portMAX_DELAY);
+    tx_count = t + kDmaLen;
   }
 }
 
@@ -193,21 +265,44 @@ static void audio_task(void *) {
     if (!pcm) pcm = (int16_t *)malloc(n * sizeof(int16_t));
     if (!pcm) continue;
     sound_render(notes, count, kRate, volume, pcm, n);
-
-    // 功放只在播放时打开，平时关着，避免底噪
     xSemaphoreTake(out_lock, portMAX_DELAY);
-    speaker_on = true;
-    digitalWrite(PIN_AUDIO_PA, HIGH);
-    delay(20);
-    write_stereo(pcm, n);
-    write_stereo(nullptr, kRate / 10);  // 再送 100ms 静音，确保最后一个音放完
-    delay(50);
-    digitalWrite(PIN_AUDIO_PA, LOW);
-    speaker_on = false;
+    out_write(pcm, n);
     xSemaphoreGive(out_lock);
     free(pcm);
   }
 }
+
+#ifdef HAS_MIC
+static void capture_task(void *) {
+  static int16_t buf[kDmaLen * 2];
+  static int16_t mic[kDmaLen];
+  static int16_t ref[kDmaLen];
+  RefAligner aligner;
+  uint32_t rx_count = 0;
+  for (;;) {
+    size_t got = 0;
+    if (i2s_read(kI2s, buf, sizeof(buf), &got, pdMS_TO_TICKS(100)) != ESP_OK || got == 0) continue;
+    size_t frames = got / 4;
+    uint32_t t = tx_count;
+    rx_count += frames;
+    // 刚读到的最后一个采样录下时，喇叭大约正放到 t - kTxQueue
+    aligner.add((int32_t)(t - kTxQueue - rx_count));
+    int32_t offset = aligner.offset();
+    uint32_t first = rx_count - frames;
+    for (size_t i = 0; i < frames; i++) {
+      mic[i] = (int16_t)(((int32_t)buf[2 * i] + buf[2 * i + 1]) / 2);  // 两个麦克风取平均
+      ref[i] = ring_at(ref_ring, kRefRing, t, first + i + offset + kRefLead);
+    }
+    if (!speaker_on) {
+      uint32_t w = listen_w;
+      for (size_t i = 0; i < frames; i++) listen_ring[(w + i) & (kListenRing - 1)] = mic[i];
+      listen_w = w + frames;
+    }
+    CaptureSink sink = capture_sink;
+    if (sink) sink(mic, ref, frames, capture_ctx);
+  }
+}
+#endif
 
 bool audio_available() { return ready; }
 
@@ -228,10 +323,21 @@ void audio_begin() {
   mic_ready = mic_init();
   if (!mic_ready) log_w("audio: ES7210 not responding, no microphone");
 #endif
+  out_ring = (int16_t *)heap_caps_calloc(kOutRing, sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  ref_ring = (int16_t *)heap_caps_calloc(kRefRing, sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  listen_ring = (int16_t *)heap_caps_calloc(kListenRing, sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!out_ring || !ref_ring || !listen_ring) {
+    log_w("audio: no memory for buffers");
+    return;
+  }
   out_lock = xSemaphoreCreateMutex();
-  mic_lock = xSemaphoreCreateMutex();
   queue = xQueueCreate(4, sizeof(SoundId));
+  // 喇叭任务优先级高一些：断了供数 I2S 会自己放静音，放出的声音和编号就对不上了
+  xTaskCreatePinnedToCore(speaker_task, "speaker", 3072, nullptr, 10, nullptr, 1);
   xTaskCreate(audio_task, "audio", 4096, nullptr, 2, nullptr);
+#ifdef HAS_MIC
+  if (mic_ready) xTaskCreatePinnedToCore(capture_task, "capture", 8192, nullptr, 6, nullptr, 0);
+#endif
   ready = true;
   log_i("audio ready");
 }
@@ -247,9 +353,6 @@ void audio_play(SoundId id) {
 void audio_stream_begin() {
   if (!ready) return;
   xSemaphoreTake(out_lock, portMAX_DELAY);
-  speaker_on = true;
-  digitalWrite(PIN_AUDIO_PA, HIGH);
-  delay(20);
 }
 
 void audio_stream_write(const int16_t *mono, size_t n) {
@@ -264,67 +367,49 @@ void audio_stream_write(const int16_t *mono, size_t n) {
       int v = mono[i] * gain / 256;
       buf[i] = v > 32767 ? 32767 : v < -32768 ? -32768 : v;
     }
-    write_stereo(buf, take);
+    out_write(buf, take);
     mono += take;
     n -= take;
   }
 }
 
+void audio_stream_flush() {
+  if (!ready) return;
+  out_flush = true;
+  while (out_flush) vTaskDelay(1);
+}
+
+size_t audio_stream_pending() { return ready ? out_w - out_r : 0; }
+
 void audio_stream_end() {
   if (!ready) return;
-  write_stereo(nullptr, kRate / 10);
-  delay(50);
-  digitalWrite(PIN_AUDIO_PA, LOW);
-  speaker_on = false;
+  out_drain();
   xSemaphoreGive(out_lock);
 }
 
-bool audio_mic_available() { return mic_ready; }
+bool audio_mic_available() { return mic_ready && ready; }
 
-// 没人读的时候 DMA 缓冲里攒着旧的录音，先读掉
-static void mic_flush() {
-  static int16_t junk[256 * 2];
-  size_t got = 0;
-  for (int i = 0; i < 16; i++) {
-    if (i2s_read(kI2s, junk, sizeof(junk), &got, 0) != ESP_OK || got == 0) break;
-  }
-}
-
-void audio_mic_begin() {
-  if (!mic_ready) return;
-  xSemaphoreTake(mic_lock, portMAX_DELAY);  // 等音乐律动读完手上这一小段
-  mic_flush();
-}
-
-void audio_mic_end() {
-  if (mic_ready) xSemaphoreGive(mic_lock);
-}
-
-static size_t mic_read(int16_t *mono, size_t max) {
-  static int16_t buf[256 * 2];
-  if (max > 256) max = 256;
-  size_t got = 0;
-  if (i2s_read(kI2s, buf, max * 4, &got, pdMS_TO_TICKS(100)) != ESP_OK) return 0;
-  size_t frames = got / 4;
-  for (size_t i = 0; i < frames; i++) mono[i] = (int16_t)(((int32_t)buf[2 * i] + buf[2 * i + 1]) / 2);
-  return frames;
-}
-
-size_t audio_mic_read(int16_t *mono, size_t max) {
-  return mic_ready ? mic_read(mono, max) : 0;
+void audio_set_capture_sink(CaptureSink sink, void *ctx) {
+  capture_ctx = ctx;
+  capture_sink = sink;
 }
 
 size_t audio_mic_listen(int16_t *mono, size_t max) {
   static bool paused = true;
-  if (!mic_ready) return 0;
-  if (speaker_on || xSemaphoreTake(mic_lock, 0) != pdTRUE) {
+  if (!mic_ready || !ready) return 0;
+  // 最多等 100ms 攒够声音
+  for (int i = 0; i < 20 && listen_w - listen_r < max && !speaker_on; i++) vTaskDelay(pdMS_TO_TICKS(5));
+  if (speaker_on) {
     paused = true;
     return 0;
   }
-  if (paused) mic_flush();  // 停过一阵，缓冲里是喇叭的声音或者旧的录音
+  uint32_t w = listen_w;
+  if (paused || w - listen_r > kListenRing) listen_r = w - max;  // 停过一阵，旧的声音不要了
   paused = false;
-  size_t n = mic_read(mono, max);
-  xSemaphoreGive(mic_lock);
+  uint32_t avail = w - listen_r;
+  size_t n = avail < max ? avail : max;
+  for (size_t i = 0; i < n; i++) mono[i] = listen_ring[(listen_r + i) & (kListenRing - 1)];
+  listen_r += n;
   return n;
 }
 

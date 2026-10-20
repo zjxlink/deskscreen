@@ -210,6 +210,7 @@ static void apply_settings() {
   if (rain_on != s.rain_on) rain_alert.reset();
   rain_on = s.rain_on;
   listen_set_enabled(s.music_on);
+  voice_set_options(s.wake_on, s.barge_on);
 
   ClimateConfig cc;
   cc.on = s.climate_on;
@@ -712,11 +713,29 @@ static void update_quick() {
   if (quick_on && millis() - quick_last >= kQuickIdleMs) close_quick();
 }
 
+static void close_game();
+
+// 有人喊了「喵喵同学」：在哪一页都切到聊天页，熄屏、夜间也点亮；升级时不聊
+static void on_wake_word(uint32_t now) {
+  if (ota_screen || !screen.started()) {
+    voice_cancel();
+    return;
+  }
+  if (alert_on) close_alert();
+  if (quick_on) close_quick();
+  if (game_on) close_game();
+  screen.wake(now);
+  screen.activity(now);
+  screen.go_to(PAGE_CHAT, now);
+  chat_busy_at = now;
+}
+
 static void update_chat() {
   static uint32_t last = 0;
   uint32_t now = millis();
   if (now - last < 50) return;
   last = now;
+  if (voice_take_wake()) on_wake_word(now);
   VoiceStatus st = voice_status();
   bool busy = st.state == VoiceState::Connecting || st.state == VoiceState::Listening ||
               st.state == VoiceState::Hearing || st.state == VoiceState::Thinking || st.state == VoiceState::Speaking;
@@ -744,6 +763,8 @@ static void update_chat() {
   v.reply = st.reply;
   v.error = st.error;
   v.has_key = chat_has_key;
+  v.wake = st.wake_word;
+  v.full_duplex = st.full_duplex;
   v.blink = st.state != VoiceState::Thinking && now % 4000 < 150;
   v.bob = st.state == VoiceState::Speaking ? (now / 250) % 2 * -4 : 0;
   ui_set_chat(v);

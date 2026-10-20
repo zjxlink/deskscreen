@@ -53,6 +53,8 @@ class RtParser {
   const std::string &heard() const { return heard_; }   // 主人最近说的话
   const std::string &error() const { return error_; }   // 最近一次错误（开始新的回答时清空）
   const std::string &error_code() const { return error_code_; }
+  // 刚喂的这条消息属于哪次回答（response.created、各种 delta、response.done 都带），没有时为空
+  const std::string &response_id() const { return response_id_; }
 
  private:
   void audio(const char *b64, size_t n);
@@ -64,6 +66,7 @@ class RtParser {
   std::string heard_;
   std::string error_;
   std::string error_code_;
+  std::string response_id_;
   B64Decoder b64_;
   uint8_t carry_ = 0;
   bool has_carry_ = false;

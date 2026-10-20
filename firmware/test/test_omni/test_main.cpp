@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "audio_sync.h"
 #include "omni.h"
 #include "realtime.h"
 #include "ws.h"
@@ -221,12 +222,15 @@ static void test_rt_conversation() {
   TEST_ASSERT_EQUAL((int)RtEvent::SpeechStopped, (int)feed(p, "{\"type\":\"input_audio_buffer.speech_stopped\",\"audio_end_ms\":980}"));
   TEST_ASSERT_EQUAL((int)RtEvent::None, (int)feed(p, "{\"type\":\"input_audio_buffer.committed\"}"));
   TEST_ASSERT_EQUAL((int)RtEvent::Response, (int)feed(p, "{\"type\":\"response.created\",\"response\":{\"id\":\"r1\",\"status\":\"in_progress\"}}"));
+  TEST_ASSERT_EQUAL_STRING("r1", p.response_id().c_str());
   TEST_ASSERT_EQUAL((int)RtEvent::Heard, (int)feed(p, "{\"type\":\"conversation.item.input_audio_transcription.completed\",\"item_id\":\"i\",\"transcript\":\"今天天气怎么样\"}"));
   TEST_ASSERT_EQUAL_STRING("今天天气怎么样", p.heard().c_str());
   TEST_ASSERT_EQUAL((int)RtEvent::Text, (int)feed(p, "{\"type\":\"response.audio_transcript.delta\",\"response_id\":\"r1\",\"delta\":\"晴天\"}"));
   // 一个采样被拆在两块里
   TEST_ASSERT_EQUAL((int)RtEvent::Audio, (int)feed(p, "{\"event_id\":\"e9\",\"type\":\"response.audio.delta\",\"response_id\":\"r1\",\"item_id\":\"i2\",\"output_index\":0,\"content_index\":0,\"delta\":\"" + enc(std::string("\x01\x00\x02", 3)) + "\"}"));
+  TEST_ASSERT_EQUAL_STRING("r1", p.response_id().c_str());
   TEST_ASSERT_EQUAL((int)RtEvent::Audio, (int)feed(p, "{\"type\":\"response.audio.delta\",\"delta\":\"" + enc(std::string("\x00\xff\xff", 3)) + "\"}"));
+  TEST_ASSERT_TRUE(p.response_id().empty());
   TEST_ASSERT_EQUAL((int)RtEvent::Text, (int)feed(p, "{\"type\":\"response.audio_transcript.delta\",\"delta\":\"，出门不用带伞\"}"));
   TEST_ASSERT_EQUAL_STRING("晴天，出门不用带伞", p.text().c_str());
   TEST_ASSERT_EQUAL((int)RtEvent::Done, (int)feed(p, "{\"type\":\"response.done\",\"response\":{\"id\":\"r1\",\"status\":\"completed\",\"output\":[{\"type\":\"message\"}]}}"));
@@ -238,6 +242,41 @@ static void test_rt_conversation() {
   // 下一次回答的文字重新开始
   feed(p, "{\"type\":\"response.created\",\"response\":{\"id\":\"r2\"}}");
   TEST_ASSERT_TRUE(p.text().empty());
+  TEST_ASSERT_EQUAL_STRING("r2", p.response_id().c_str());
+  // 被打断的旧回答还在陆续送来的数据，靠 response_id 认出来扔掉
+  feed(p, "{\"type\":\"response.audio_transcript.delta\",\"response_id\":\"r1\",\"delta\":\"x\"}");
+  TEST_ASSERT_EQUAL_STRING("r1", p.response_id().c_str());
+}
+
+static void test_ref_aligner() {
+  RefAligner a;
+  TEST_ASSERT_FALSE(a.ready());
+  TEST_ASSERT_EQUAL(0, a.offset());
+  // 每次量到的偏移在 1000 上下抖动一个 DMA 缓冲，平均下来接近 1000
+  for (int i = 0; i < 200; i++) a.add(1000 + (i % 2 ? 128 : -128));
+  TEST_ASSERT_TRUE(a.ready());
+  TEST_ASSERT_INT_WITHIN(2, 1000, a.offset());
+  // 只看最近 64 次
+  for (int i = 0; i < 64; i++) a.add(-500);
+  TEST_ASSERT_EQUAL(-500, a.offset());
+}
+
+static void test_ring_at() {
+  int16_t ring[8] = {};
+  uint32_t written = 0;
+  for (int i = 0; i < 11; i++) ring[written++ & 7] = (int16_t)(100 + i);  // 写了 11 个，前 3 个已被覆盖
+  TEST_ASSERT_EQUAL(0, ring_at(ring, 8, written, 2));
+  TEST_ASSERT_EQUAL(103, ring_at(ring, 8, written, 3));
+  TEST_ASSERT_EQUAL(110, ring_at(ring, 8, written, 10));
+  TEST_ASSERT_EQUAL(0, ring_at(ring, 8, written, 11));  // 还没写到
+  TEST_ASSERT_EQUAL(0, ring_at(ring, 8, written, 500));
+  // 计数溢出回绕
+  written = 2;
+  ring[0xFFFFFFFFu & 7] = 7;
+  ring[0] = 8;
+  ring[1] = 9;
+  TEST_ASSERT_EQUAL(7, ring_at(ring, 8, written, 0xFFFFFFFFu));
+  TEST_ASSERT_EQUAL(9, ring_at(ring, 8, written, 1));
 }
 
 static void test_rt_errors() {
@@ -292,6 +331,8 @@ int main() {
   RUN_TEST(test_rt_conversation);
   RUN_TEST(test_rt_errors);
   RUN_TEST(test_agc);
+  RUN_TEST(test_ref_aligner);
+  RUN_TEST(test_ring_at);
   RUN_TEST(test_error_message);
   return UNITY_END();
 }

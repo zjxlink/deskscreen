@@ -980,7 +980,9 @@ void ui_set_chat(const ChatView &v) {
   const char *button = "挂断";
   lv_color_t button_color = COLOR_ERR;
   bool has_reply = v.reply && v.reply[0];
-  const char *reply = has_reply ? v.reply : "喵！点下面的按钮接通，然后直接跟我说话就行，不用一直按着。";
+  const char *reply = has_reply ? v.reply
+                                 : v.wake ? "喵！喊「喵喵同学」或点下面的按钮，然后直接跟我说话就行。"
+                                          : "喵！点下面的按钮接通，然后直接跟我说话就行，不用一直按着。";
   bool level = false;
   char buf[192];
   switch (v.state) {
@@ -993,6 +995,7 @@ void ui_set_chat(const ChatView &v) {
       button = "开始聊天";
       button_color = COLOR_ACCENT;
       hint = v.error;
+      if (v.wake && v.has_key && !(hint && hint[0])) hint = "也可以喊「喵喵同学」叫醒我";
       if (!v.has_key) {
         reply = "先在设置网页里填上阿里云百炼的 API Key，我就能跟你聊天啦。";
         hint = "设置网页 →「AI 语音聊天」";
@@ -1028,7 +1031,7 @@ void ui_set_chat(const ChatView &v) {
       break;
     case VoiceState::Speaking:
       mood = PetMood::Happy;
-      hint = "点「打断」可以插话";
+      hint = v.full_duplex ? "直接说话就能打断我" : "点「打断」可以插话";
       button = "打断";
       button_color = COLOR_FLAT;
       break;
