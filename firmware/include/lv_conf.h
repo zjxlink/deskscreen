@@ -30,5 +30,8 @@
 #define LV_FONT_MONTSERRAT_20 1
 #define LV_FONT_MONTSERRAT_48 1
 
+// 快捷设置页上的二维码（扫码打开网页设置）
+#define LV_USE_QRCODE 1
+
 #endif
 #endif

@@ -34,6 +34,8 @@ static constexpr uint32_t kPomoMsgMs = 60000;     // 阶段结束的提示显示
 static constexpr uint32_t kReminderShowMs = 5 * 60000;  // 久坐、喝水提醒没人理会时多久自动关掉
 static constexpr uint32_t kAlarmRingMs = 5 * 60000;     // 闹钟没人关时响多久
 static constexpr uint32_t kAlarmRepeatMs = 2500;        // 闹钟铃声的间隔
+static constexpr uint32_t kQuickHoldMs = 2000;          // 长按屏幕打开快捷设置
+static constexpr uint32_t kQuickIdleMs = 30000;         // 快捷设置页没人操作多久自动关掉
 
 static WiFiManager wm;
 static String ap_name;
@@ -74,6 +76,10 @@ static StockData stock_data;
 static bool alert_on = false;
 static bool alert_timed = false;  // 久坐、喝水提醒到时自动关掉；留言一直显示到有人关掉
 static uint32_t alert_until = 0;
+
+// 快捷设置页：长按屏幕打开，点右上角、按 BOOT 键或 30 秒不操作关掉
+static bool quick_on = false;
+static uint32_t quick_last = 0;
 
 static void apply_settings() {
   Settings s = settings_get();
@@ -159,6 +165,7 @@ static void show_alert(AlertIcon icon, const char *title, const char *body, cons
                        uint32_t show_ms) {
   uint32_t now = millis();
   alert_on = true;
+  quick_on = false;  // 提醒盖掉快捷设置页，关掉提醒后回到原来的页面
   alert_timed = show_ms > 0;
   alert_until = now + show_ms;
   if (screen.started()) screen.wake(now);
@@ -335,7 +342,7 @@ static String room_text() {
 static void update_pet() {
   static uint32_t last = 0;
   uint32_t now = millis();
-  if (screen.page() != PAGE_PET || alert_on || ota_screen || now - last < 100) return;
+  if (screen.page() != PAGE_PET || alert_on || quick_on || ota_screen || now - last < 100) return;
   last = now;
 
   PetInputs in;
@@ -394,7 +401,7 @@ static void update_screen() {
   Page p;
   bool animate;
   // 升级进度和全屏提醒期间页面照常计算，只是先不显示
-  if (screen.take_page_change(p, animate) && !ota_screen && !alert_on) ui_show_page(p, animate);
+  if (screen.take_page_change(p, animate) && !ota_screen && !alert_on && !quick_on) ui_show_page(p, animate);
 }
 
 // 在线升级或网页上传固件时显示进度；成功后重启，失败时提示几秒再回到原来的页面
@@ -404,6 +411,7 @@ static void update_ota_screen() {
   if (s.state == OtaState::Downloading) {
     if (!ota_screen || s.progress != last_progress) {
       ota_screen = true;
+      quick_on = false;  // 升级完回到原来的页面
       last_progress = s.progress;
       char detail[48];
       snprintf(detail, sizeof(detail), "请不要断电（%d%%）", s.progress);
@@ -451,8 +459,67 @@ static void connect_wifi() {
   }
 }
 
+static void show_quick() {
+  Settings s = settings_get();
+  String url = WiFi.isConnected() ? "http://" + WiFi.localIP().toString() : "";
+  QuickState q;
+  q.brightness = s.brightness;
+  q.sound_on = s.sound_on;
+  q.has_dock = sensors_dock();
+  q.away_off = s.away_off;
+  q.url = url.c_str();
+  ui_show_quick(q);
+}
+
+static void open_quick(uint32_t now) {
+  quick_on = true;
+  quick_last = now;
+  screen.activity(now);
+  show_quick();
+}
+
+static void close_quick() {
+  quick_on = false;
+  ui_show_page(screen.page(), false);
+}
+
+// 快捷设置页上点了一下：改完立即保存，和在网页上改一样
+static void quick_tap(int x, int y, uint32_t now) {
+  quick_last = now;
+  bool was_dimmed = screen.dimmed();
+  screen.activity(now);
+  if (was_dimmed) return;  // 屏幕调暗时第一下只点亮
+  QuickHit h = ui_quick_hit(x, y);
+  if (h == QuickHit::Close) {
+    close_quick();
+    return;
+  }
+  Settings s = settings_get();
+  switch (h) {
+    case QuickHit::BrightDown: s.brightness = s.brightness > 35 ? s.brightness - 25 : 10; break;
+    case QuickHit::BrightUp: s.brightness = s.brightness < 230 ? s.brightness + 25 : 255; break;
+    case QuickHit::Sound: s.sound_on = !s.sound_on; break;
+    case QuickHit::Away:
+      if (!sensors_dock()) return;
+      s.away_off = !s.away_off;
+      break;
+    default: return;
+  }
+  settings_save(s);
+  apply_settings();
+  show_quick();
+}
+
+static void update_quick() {
+  if (quick_on && millis() - quick_last >= kQuickIdleMs) close_quick();
+}
+
 // 点屏幕或短按 BOOT 键：有全屏提醒时先关掉提醒（屏幕调暗时第一下只点亮），否则切换页面
 static void on_tap(uint32_t now) {
+  if (quick_on) {
+    close_quick();
+    return;
+  }
   if (alert_on && !ota_screen && !screen.dimmed()) {
     close_alert();
     return;
@@ -478,13 +545,14 @@ static void check_button() {
   }
 }
 
-// 点一下屏幕切换页面（按下的瞬间触发）。
+// 点一下屏幕切换页面（松手时触发），按住 2 秒打开快捷设置。
 // 番茄钟页的圆环例外：松手时开始/暂停，按住 1.5 秒重置
 static void check_touch() {
   static bool was_touched = false;
   static bool on_ring = false;
   static bool long_done = false;
   static uint32_t down_at = 0;
+  static int down_x = 0, down_y = 0;
   static uint32_t last_poll = 0;
   static uint32_t last_seen = 0;
   uint32_t now = millis();
@@ -498,16 +566,29 @@ static void check_touch() {
   bool touched = raw || (was_touched && now - last_seen < kTouchReleaseMs);
   if (touched && !was_touched) {
     down_at = now;
+    down_x = x;
+    down_y = y;
     long_done = false;
     // 屏幕调暗时第一下只点亮，交给 ScreenCtrl 处理
-    on_ring = screen.started() && !screen.dimmed() && !ota_screen && !alert_on &&
+    on_ring = screen.started() && !screen.dimmed() && !ota_screen && !alert_on && !quick_on &&
               screen.page() == PAGE_POMODORO && ui_pomodoro_hit(x, y);
-    if (!on_ring) on_tap(now);
-  } else if (touched && on_ring && !long_done && now - down_at >= kPomoResetMs) {
-    long_done = true;
-    pomo_command(PomoCmd::Reset);
-  } else if (!touched && was_touched && on_ring && !long_done) {
-    pomo_command(PomoCmd::Toggle);
+  } else if (touched && !long_done && now - down_at >= (on_ring ? kPomoResetMs : kQuickHoldMs)) {
+    // 有提醒或在快捷设置页时长按不算数，松手时照常当成点一下
+    if (on_ring) {
+      long_done = true;
+      pomo_command(PomoCmd::Reset);
+    } else if (screen.started() && !ota_screen && !alert_on && !quick_on) {
+      long_done = true;
+      open_quick(now);
+    }
+  } else if (!touched && was_touched && !long_done) {
+    if (on_ring) {
+      pomo_command(PomoCmd::Toggle);
+    } else if (quick_on) {
+      quick_tap(down_x, down_y, now);
+    } else {
+      on_tap(now);
+    }
   }
   was_touched = touched;
 }
@@ -575,6 +656,7 @@ void loop() {
   sensors_loop();
   update_room();
   update_pet();
+  update_quick();
   update_screen();
   update_ota_screen();
 

@@ -42,6 +42,9 @@ class ScreenCtrl {
   }
   void unpin() { pinned_ = false; }
 
+  // 有人在操作但不切换页面（快捷设置页上的点击）：点亮屏幕，夜间顺延 30 秒
+  void activity(uint32_t now_ms);
+
   // 人体感应的结果，主循环每次调用；从没调用过（没有雷达）就当一直有人。
   // 雷达只对动作敏感，坐着不动也可能一阵子没信号，所以离开要等 away_min 分钟
   void set_presence(bool present, uint32_t now_ms);

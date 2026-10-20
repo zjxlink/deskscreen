@@ -402,6 +402,25 @@ static void test_away_disabled_or_no_radar() {
   TEST_ASSERT_EQUAL(180, no_radar.ctrl.brightness());
 }
 
+// 快捷设置页上的点击：点亮屏幕但不切换页面
+static void test_activity_wakes_without_page_change() {
+  Sim s(away_cfg());
+  s.ctrl.set_presence(false, s.now);
+  s.run(6 * 60000);
+  s.settle();
+  s.take_page();
+  TEST_ASSERT_EQUAL(0, s.ctrl.brightness());
+  Page before = s.ctrl.page();
+  s.ctrl.activity(s.now);
+  TEST_ASSERT_FALSE(s.ctrl.dimmed());
+  s.settle();
+  TEST_ASSERT_EQUAL(180, s.ctrl.brightness());
+  Page p;
+  bool animate;
+  TEST_ASSERT_FALSE(s.ctrl.take_page_change(p, animate));
+  TEST_ASSERT_EQUAL(before, s.ctrl.page());
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_boot_uses_day_brightness_without_fade);
@@ -426,5 +445,6 @@ int main() {
   RUN_TEST(test_away_at_night_returns_to_night_brightness);
   RUN_TEST(test_wake_overrides_away);
   RUN_TEST(test_away_disabled_or_no_radar);
+  RUN_TEST(test_activity_wakes_without_page_change);
   return UNITY_END();
 }

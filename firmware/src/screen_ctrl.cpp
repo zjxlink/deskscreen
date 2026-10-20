@@ -90,13 +90,18 @@ void ScreenCtrl::set_presence(bool present, uint32_t now_ms) {
   has_presence_ = true;
 }
 
-bool ScreenCtrl::on_input(uint32_t now_ms) {
-  if (!started_) return false;
-  bool was_dimmed = dimmed_;
+void ScreenCtrl::activity(uint32_t now_ms) {
   last_present_ = now_ms;  // 有人在操作，当然有人
   away_ = false;
   // 点亮期间每次操作都顺延 30 秒
   if (night_now_) woken_until_ = now_ms + kWakeMs;
+  dimmed_ = false;
+}
+
+bool ScreenCtrl::on_input(uint32_t now_ms) {
+  if (!started_) return false;
+  bool was_dimmed = dimmed_;
+  activity(now_ms);
   if (was_dimmed) {
     dimmed_ = false;
     return false;
