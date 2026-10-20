@@ -23,7 +23,11 @@ void audio_stream_end();
 
 // 麦克风（BOX-3 的 ES7210），采样率 16kHz。没有麦克风的板子上 available 返回 false
 bool audio_mic_available();
-// 开始录音前调用，丢掉缓冲区里的旧数据
+// AI 聊天开始录音前调用：占住麦克风（音乐律动先停下），丢掉缓冲区里的旧数据
 void audio_mic_begin();
 // 读最多 max 个单声道采样（两个麦克风取平均），最多等 100ms，返回读到的个数
 size_t audio_mic_read(int16_t *mono, size_t max);
+// 录完了，放开麦克风
+void audio_mic_end();
+// 音乐律动用：麦克风没被 AI 聊天占着、喇叭也没在响时读最多 max 个采样，否则马上返回 0
+size_t audio_mic_listen(int16_t *mono, size_t max);

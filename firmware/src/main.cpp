@@ -12,6 +12,7 @@
 #include "display.h"
 #include "github.h"
 #include "imu.h"
+#include "listen.h"
 #include "motion.h"
 #include "night.h"
 #include "ota.h"
@@ -82,6 +83,15 @@ static float room_humidity = 0;
 // 板载加速度计：摇一摇、急刹急转、倒过来时小猫有反应
 static bool imu_ok = false;
 static MotionDetector motion;
+
+// 音乐律动：听到音乐时频谱和小橘的摇摆
+static constexpr uint32_t kMusicIdleMs = 60000;  // 一分钟没碰屏幕才自动切到小橘页
+static MusicView music = {};
+static bool music_switched = false;  // 是听到音乐自动切过来的，音乐停了切回去
+static Page music_return = PAGE_CLOCK;
+static uint32_t music_start = 0;
+static int sway_dir = 1;          // 小橘往哪边摆，每个节拍换一次
+static uint32_t last_beat_at = 0;
 static PetMood reaction = PetMood::Normal;  // Normal 表示没有反应
 static uint32_t reaction_start = 0;
 static uint32_t reaction_until = 0;
@@ -190,6 +200,7 @@ static void apply_settings() {
   chime.set_on(s.chime_on);
   if (rain_on != s.rain_on) rain_alert.reset();
   rain_on = s.rain_on;
+  listen_set_enabled(s.music_on);
 
   ClimateConfig cc;
   cc.on = s.climate_on;
@@ -446,11 +457,41 @@ static void update_motion() {
   }
 }
 
-// 像素小猫：只在小猫页显示时更新，每 100ms 一帧
+// 音乐律动：听到音乐、又一分钟没人碰屏幕时切到小橘页；音乐停了，如果是自动切过来的就切回去。
+// 番茄钟、提醒、聊天、相册、夜间和熄屏时不切
+static void update_music() {
+  uint32_t now = millis();
+  bool was = music.playing;
+  bool beat_pending = music.beat;
+  listen_get(music);
+  music.beat = music.beat || beat_pending;  // 留给小猫页用（它每 50ms 才更新一次）
+  if (music.playing && !was) {
+    music_start = now;
+    Page p = screen.page();
+    if (screen.started() && p != PAGE_PET && p != PAGE_POMODORO && p != PAGE_CHAT && p != PAGE_ALBUM &&
+        now - last_input >= kMusicIdleMs && !screen.night() && !screen.dimmed() && !alert_on && !quick_on &&
+        !game_on && !ota_screen && !pomo.running()) {
+      music_return = p;
+      music_switched = true;
+      screen.go_to(PAGE_PET, now);
+    }
+  } else if (!music.playing && was) {
+    if (music_switched && screen.page() == PAGE_PET && last_input < music_start && !alert_on && !quick_on &&
+        !game_on && !ota_screen)
+      screen.go_to(music_return, now);
+    music_switched = false;
+  }
+  if (music.playing && screen.page() == PAGE_PET) screen.stay(now);  // 放音乐时不轮播走
+}
+
+// 像素小猫：只在小猫页显示时更新，每 100ms 一帧（放音乐时 50ms，跟得上节拍）
 static void update_pet() {
   static uint32_t last = 0;
+  static bool showing_music = false;
   uint32_t now = millis();
-  if (screen.page() != PAGE_PET || alert_on || quick_on || game_on || ota_screen || now - last < 100) return;
+  if (screen.page() != PAGE_PET || alert_on || quick_on || game_on || ota_screen ||
+      now - last < (music.playing ? 50u : 100u))
+    return;
   last = now;
 
   PetInputs in;
@@ -472,9 +513,11 @@ static void update_pet() {
   int day = local_day();
   in.pomo_today = day >= 0 ? pomo_stats.count(day) : pomo.done_today();
 
-  PetMood mood = reaction != PetMood::Normal ? reaction : pet_mood(in);
+  bool dancing = music.playing && reaction == PetMood::Normal && !in.night;
+  PetMood mood = reaction != PetMood::Normal ? reaction : dancing ? PetMood::Happy : pet_mood(in);
   char line[96];
-  pet_line(mood, in, line, sizeof(line));
+  if (dancing) snprintf(line, sizeof(line), "听到音乐啦，跟着节拍摇起来");
+  else pet_line(mood, in, line, sizeof(line));
 
   // 底部一行：今天的提交、番茄和自选股
   char status[96] = "";
@@ -487,9 +530,28 @@ static void update_pet() {
   bool blink = !sleeping && now % 4000 < 150;  // 每 4 秒眨一次眼
   ui_set_pet(mood, blink, line, status);
 
+  if (music.playing) {
+    ui_set_pet_music(music.bands);
+    showing_music = true;
+  } else if (showing_music) {
+    ui_set_pet_music(nullptr);
+    showing_music = false;
+  }
+
   int bob, dx = 0;
   uint32_t since = now - reaction_start;
-  if (mood == PetMood::Dizzy) {
+  if (dancing) {
+    // 每个节拍往另一边摆，摆过去的路上跳一下
+    if (music.beat) {
+      sway_dir = -sway_dir;
+      last_beat_at = now;
+      music.beat = false;
+    }
+    uint32_t t = now - last_beat_at;
+    int reach = t < 150 ? (int)(t * 8 / 150) : 8;
+    dx = sway_dir * reach;
+    bob = t < 120 ? -6 : 0;
+  } else if (mood == PetMood::Dizzy) {
     dx = (now / 120) % 2 ? 6 : -6;  // 晃来晃去
     bob = (now / 240) % 2 * 3;
   } else if (mood == PetMood::Startled) {
@@ -952,6 +1014,7 @@ void setup() {
   display_init();
   audio_begin();  // 解码芯片和触摸共用 I2C，要在屏幕初始化之后
   voice_begin();
+  listen_begin();
   sensors_begin();
   imu_ok = imu_begin();
   photos_begin();
@@ -1009,6 +1072,7 @@ void loop() {
   sensors_loop();
   update_room();
   update_motion();
+  update_music();
   update_pet();
   update_quick();
   update_game();

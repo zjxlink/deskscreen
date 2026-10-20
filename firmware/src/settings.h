@@ -31,6 +31,7 @@ struct Settings {
   uint16_t remind_start;     // 提醒时段，当天第几分钟，默认 9:00
   uint16_t remind_end;       // 默认 21:00
   bool rain_on;              // 快下雨时弹出提醒（夜间时段不提醒）
+  bool music_on;             // 音乐律动：麦克风听到音乐时小橘页显示频谱、跟着节拍摇
   bool chime_on;             // 整点报时（夜间时段跟提示音一样默认不响）
   bool alarm_on;             // 闹钟
   uint16_t alarm_time;       // 当天第几分钟，默认 7:30
