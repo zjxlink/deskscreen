@@ -174,8 +174,21 @@ static void fetch_task(void *) {
 }
 
 static bool afe_begin() {
-  afe_config_t cfg = AFE_CONFIG_DEFAULT();
+  // AFE_CONFIG_DEFAULT() 用了 C 的嵌套指定初始化，C++ 编不过，这里逐项填
+  afe_config_t cfg = {};
   cfg.aec_init = true;
+  cfg.voice_communication_init = false;
+  cfg.voice_communication_agc_init = false;
+  cfg.voice_communication_agc_gain = 15;
+  cfg.vad_mode = VAD_MODE_3;
+  cfg.wakenet_model_name_2 = nullptr;
+  cfg.afe_ringbuf_size = 50;
+  cfg.afe_linear_gain = 1.0f;
+  cfg.debug_init = false;
+  cfg.debug_hook[0] = {AFE_DEBUG_HOOK_MASE_TASK_IN, nullptr};
+  cfg.debug_hook[1] = {AFE_DEBUG_HOOK_FETCH_TASK_IN, nullptr};
+  cfg.afe_ns_mode = NS_MODE_SSP;
+  cfg.afe_ns_model_name = nullptr;
   cfg.se_init = false;   // 两个麦克风已经取了平均，不做波束分离，省 CPU 和内存
   cfg.vad_init = false;  // 断句交给服务器
   cfg.wakenet_init = true;
