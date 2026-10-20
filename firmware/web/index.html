@@ -601,11 +601,19 @@ function seek(v,t){return new Promise((ok,no)=>{const tm=setTimeout(()=>no(err('
 // 视频转成 MJPEG：在手机浏览器里一帧一帧地跳过去，画到 320x240 以内的画布上，存成 JPG
 async function videoToAvi(file,onp){
  const v=document.createElement('video'),u=URL.createObjectURL(file);
- v.muted=true;v.playsInline=true;v.preload='auto';v.src=u;
- let lock=null;try{lock=await navigator.wakeLock.request('screen');}catch(e){}  // 转换时别锁屏
+ v.muted=true;v.playsInline=true;v.preload='auto';
+ // 先挂好事件再设置 src：之前先去申请防锁屏，视频在这期间就读好了，等的事件已经错过，页面就一直卡着
+ const ready=new Promise((ok,no)=>{
+  const tm=setTimeout(()=>no(err('读视频超时，换个浏览器试试')),20000);
+  v.onloadedmetadata=()=>{clearTimeout(tm);ok();};
+  v.onerror=()=>{clearTimeout(tm);no(err('浏览器打不开这个视频'));};
+ });
+ v.src=u;v.load();
+ let lock=null;
  try{
-  await new Promise((ok,no)=>{v.onloadeddata=ok;v.onerror=()=>no(err('浏览器打不开这个视频'));});
-  try{await v.play();v.pause();}catch(e){}  // iPhone 要先播一下，跳到的帧才画得出来
+  try{lock=await navigator.wakeLock.request('screen');}catch(e){}  // 转换时别锁屏
+  await ready;
+  try{await v.play();v.pause();}catch(e){}  // iPhone 不播一下不读画面，跳到的帧也画不出来
   const W=v.videoWidth,H=v.videoHeight,dur=Math.min(v.duration,VMAX);
   if(!W||!(dur>0))throw err('读不出视频的尺寸或长度');
   const s=Math.min(1,320/W,240/H),w=Math.max(2,Math.round(W*s)),h=Math.max(2,Math.round(H*s));
@@ -661,6 +669,7 @@ $('files').onchange=async()=>{
   try{
    let blob,name;
    if(isVideo(f)){
+    show('正在读取视频'+tag+'…',0);
     const r=await videoToAvi(f,p=>show('正在转换视频'+tag+' '+Math.round(p*100)+'%，请不要锁屏或离开这个页面…',p));
     blob=r.blob;name=stem+'.avi';if(r.cut)cut.push(f.name);
    }else if(isGif(f)){await checkGif(f);blob=f;name=stem+'.gif';}
