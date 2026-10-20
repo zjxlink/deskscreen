@@ -105,6 +105,7 @@ textarea.txt{height:76px;padding:10px 12px;resize:none}
 .go{color:var(--ink);text-decoration:none;font-size:14px;font-weight:500;white-space:nowrap}
 .bar{height:8px;border-radius:999px;background:var(--field);border:1px solid var(--line);overflow:hidden;margin:2px 16px 14px}
 .bar i{display:block;height:100%;width:0;background:var(--accent);border-radius:999px}
+#upGo:not([hidden]){display:block;width:calc(100% - 32px);margin:0 16px 12px}
 .drop{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;margin:4px 16px 12px;height:128px;border:1.5px dashed var(--line);border-radius:14px;background:var(--field);color:var(--sub);font-size:14px}
 .drop b{color:var(--ink);font-size:15px}
 .drop svg{width:28px;height:28px;color:var(--ink)}
@@ -196,6 +197,7 @@ nav a.on{color:var(--ink);font-weight:600}
 <div class="ch"><h2>上传照片、动图和视频</h2></div>
 <label class="drop"><span data-ic="image"></span><b>从手机相册选择</b><span>照片、GIF 动图和视频都可以，一次能选多个</span><input type="file" id="files" accept="image/*,video/*" multiple></label>
 <div class="bar" id="upBar" hidden><i></i></div>
+<button type="button" class="btn" id="upGo" hidden>开始转换</button>
 <p class="hint" id="upMsg">照片会先在手机上缩小到 320×240 再上传，每张只有几十 KB；iPhone 的 HEIC 照片也会自动转成 JPG。<br>视频会在手机上转成板子能放的格式（320×240、每秒 15 帧、没有声音），最长 5 分钟，1 分钟大约 10 MB。GIF 动图原样上传，最大 640×480。</p>
 </section>
 <section class="card" id="phCard" hidden>
@@ -602,9 +604,9 @@ function seek(v,t){return new Promise((ok,no)=>{const tm=setTimeout(()=>no(err('
 // iPhone Safari 一帧一帧地跳几十次以上会崩溃、把网页重新加载，播放就没这个问题，也更快
 function grabPlaying(v,c,x,w,h,n,onp){
  return new Promise((ok,no)=>{
-  const frames=[],jobs=[];let next=0,done=false,stall;
+  const frames=[],jobs=[];let next=0,done=false,started=false,stall;
   const arm=()=>{clearTimeout(stall);stall=setTimeout(()=>fail(err('视频播放卡住了，请不要锁屏或切到别的 App')),10000);};
-  const fail=e=>{if(done)return;done=true;clearTimeout(stall);v.pause();no(e);};
+  const fail=e=>{if(done)return;done=true;clearTimeout(stall);v.pause();$('upGo').hidden=true;no(e);};
   const finish=async()=>{
    if(done)return;done=true;clearTimeout(stall);v.pause();
    if(next===0){x.drawImage(v,0,0,w,h);jobs.push(new Promise(r=>c.toBlob(b=>{frames[0]=b;r();},'image/jpeg',.7)));next=1;}
@@ -623,14 +625,24 @@ function grabPlaying(v,c,x,w,h,n,onp){
   };
   const onFrame=(now,meta)=>{
    if(done)return;
+   if(!started){v.requestVideoFrameCallback(onFrame);return;}  // 视频放进页面时会先画出第一帧，那时还没开始播放
    arm();grab(meta.mediaTime);
    if(next>=n)finish();else v.requestVideoFrameCallback(onFrame);
   };
   v.onended=()=>{grab(Infinity);finish();};
   v.requestVideoFrameCallback(onFrame);
-  arm();
-  v.play().catch(()=>fail(err('浏览器放不了这个视频')));
+  startPlay(v).then(()=>{started=true;arm();},e=>fail(err('浏览器放不了这个视频（'+(e&&e.name||e)+'）')));  // 开始播放后才计卡住的时间
  });
+}
+// 开始播放。Safari 在低电量模式下、或者不是点一下直接开始的播放会拦下来（NotAllowedError），
+// 这时显示「开始转换」按钮，在点击里播放就不会被拦
+async function startPlay(v){
+ try{await v.play();return;}catch(e){if(e.name!=='NotAllowedError')throw e;}
+ const go=$('upGo'),msg=$('upMsg'),old=msg.textContent;
+ go.hidden=false;msg.textContent='Safari 没让网页自己开始播放视频（比如开着低电量模式），点下面的「开始转换」继续';
+ try{
+  await new Promise((ok,no)=>{go.onclick=()=>{v.play().then(ok,no);};});
+ }finally{go.hidden=true;go.onclick=null;msg.textContent=old;}
 }
 // 旧浏览器没有逐帧回调：一帧一帧地跳过去截图
 async function grabSeeking(v,c,x,w,h,n,onp){
@@ -648,6 +660,10 @@ async function grabSeeking(v,c,x,w,h,n,onp){
 async function videoToAvi(file,onp){
  const v=document.createElement('video'),u=URL.createObjectURL(file);
  v.muted=true;v.playsInline=true;v.preload='metadata';  // 不预先缓冲整段视频，省手机内存
+ v.setAttribute('muted','');v.setAttribute('playsinline','');
+ // 放进页面里（看不见）：iPhone 上不在页面里的视频有时不肯播放
+ v.style.cssText='position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
+ document.body.appendChild(v);
  // 先挂好事件再设置 src：之前先去申请防锁屏，视频在这期间就读好了，等的事件已经错过，页面就一直卡着
  const ready=new Promise((ok,no)=>{
   const tm=setTimeout(()=>no(err('读视频超时，换个浏览器试试')),20000);
@@ -665,7 +681,7 @@ async function videoToAvi(file,onp){
   const [c,x]=canvas(w,h),n=Math.max(1,Math.floor(dur*VFPS));
   const frames='requestVideoFrameCallback' in v?await grabPlaying(v,c,x,w,h,n,onp):await grabSeeking(v,c,x,w,h,n,onp);
   return {blob:aviBlob(frames,w,h,VFPS),cut:v.duration>VMAX};
- }finally{URL.revokeObjectURL(u);if(lock)lock.release().catch(()=>{});}
+ }finally{v.pause();v.remove();URL.revokeObjectURL(u);if(lock)lock.release().catch(()=>{});}
 }
 // 写 AVI 文件：文件头 + 每帧一个 00dc 块 + idx1 索引，电脑上的播放器也能放
 function aviBlob(frames,w,h,fps){
