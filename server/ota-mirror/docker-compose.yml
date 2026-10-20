@@ -8,11 +8,12 @@ services:
     restart: unless-stopped
     command: ["python3", "-u", "/app/mirror.py"]
     ports:
-      - "8080:8080"
+      - "18266:18266"   # 左边是 NAS 上的端口，被占用时只改左边
     volumes:
       - ./mirror.py:/app/mirror.py:ro
       - ./data:/data
     environment:
       REPO: zjxlink/test-repo
       INTERVAL: "3600"
+      PORT: "18266"
       # GH_PREFIX: https://你的加速地址/   # 家里连 GitHub 也慢时再填

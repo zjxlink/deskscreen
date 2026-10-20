@@ -84,7 +84,7 @@ Release 里每个板子有两个文件：
 | `firmware-box3-merged.bin` | 第一次烧录，用网页工具写到 `0x0` |
 | `firmware-box3.bin` | 已经装过的设备，在设置页面上传升级（OTA 也下载这个） |
 
-国内访问 GitHub 慢、或者所在网络连不上 GitHub 的下载地址时，可以在自己的服务器（比如家里的 NAS）上跑 [`server/ota-mirror`](server/ota-mirror/README.md)，它会自动同步 Release 里的固件；然后在设置网页「系统 › 固件升级 › 自建升级服务器」填上它的 manifest.json 地址。板子先试自建服务器，连不上再用 GitHub。
+国内访问 GitHub 慢、或者所在网络连不上 GitHub 的下载地址时，可以在自己的服务器（比如家里的 NAS）上跑 [`server/ota-mirror`](server/ota-mirror/README.md)（飞牛 fnOS 部署见 [docs/ota-server-fnos.md](docs/ota-server-fnos.md)），它会自动同步 Release 里的固件；然后在设置网页「系统 › 固件升级 › 自建升级服务器」填上它的 manifest.json 地址。板子先试自建服务器，连不上再用 GitHub。
 
 ## 硬件
 

@@ -10,7 +10,7 @@
 只用 Python 标准库。环境变量：
   REPO      GitHub 仓库，默认 zjxlink/test-repo
   INTERVAL  检查间隔（秒），默认 3600
-  PORT      HTTP 端口，默认 8080
+  PORT      HTTP 端口，默认 18266
   DATA      存放目录，默认 /data
   KEEP      保留最近几个版本，默认 3
   GH_PREFIX 下载 GitHub 文件时加在地址前面的加速前缀（可选，如 https://ghproxy.example.com/），默认不加
@@ -28,7 +28,7 @@ import urllib.request
 
 REPO = os.environ.get("REPO", "zjxlink/test-repo")
 INTERVAL = int(os.environ.get("INTERVAL", "3600"))
-PORT = int(os.environ.get("PORT", "8080"))
+PORT = int(os.environ.get("PORT", "18266"))
 DATA = os.environ.get("DATA", "/data")
 KEEP = int(os.environ.get("KEEP", "3"))
 GH_PREFIX = os.environ.get("GH_PREFIX", "")
