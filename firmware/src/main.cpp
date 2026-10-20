@@ -718,7 +718,7 @@ static const char *album_message(const PhotoStatus &st, bool has_photo) {
   if (st.count > 0) {
     if (has_photo) return nullptr;
     if (photos_busy() || st.failed < st.count) return "正在读取照片…";
-    return "#E6EDF3 照片都读不出来#\n\n只支持 JPG 和 PNG，HEIC 和渐进式 JPEG 读不了。用网页设置上传的照片会自动转换好";
+    return "#E6EDF3 照片都读不出来#\n\n支持 JPG、PNG、GIF 和 MJPEG 视频（.avi），HEIC、MP4 和渐进式 JPEG 读不了。用网页设置上传会自动转换好";
   }
   if (!album_local && !album_bing)
     return "#E6EDF3 图片来源都关掉了#\n\n在网页设置的「显示 › 相册与屏保」里打开自己的照片或必应每日一图";
@@ -737,12 +737,13 @@ static const char *album_message(const PhotoStatus &st, bool has_photo) {
       break;
   }
   return album_bing ? "#E6EDF3 TF 卡里还没有照片#\n\n把照片放进卡里的 photos 文件夹，或者在网页设置里用手机上传。必应每日一图下载好后也会在这里播放"
-                    : "#E6EDF3 TF 卡里还没有照片#\n\n把 JPG 或 PNG 照片放进卡里的 photos 文件夹，或者在网页设置里用手机上传";
+                    : "#E6EDF3 TF 卡里还没有照片#\n\n把照片、动图或视频放进卡里的 photos 文件夹，或者在网页设置里用手机上传";
 }
 
-// 相册页：按间隔请后台解码下一张，解码好了就换上
+// 相册页：按间隔请后台解码下一张，解码好了就换上。动图和视频一帧一帧地换，放完马上请下一张
 static void update_album() {
   static bool has_photo = false;
+  static bool last_anim = false;
   static uint32_t shown_at = 0;
   static uint32_t last_req = 0;
   static const char *last_msg = "";
@@ -757,8 +758,10 @@ static void update_album() {
 
   const uint16_t *px;
   const char *caption;
-  if (photos_take_frame(px, caption)) {
+  bool anim;
+  if (photos_take_frame(px, caption, anim)) {
     ui_set_album_photo(px);
+    last_anim = anim;
     album_caption = caption;
     ui_set_album_caption(show_caption ? caption : "");
     has_photo = true;
@@ -778,11 +781,14 @@ static void update_album() {
   }
 
   bool on_page = screen.page() == PAGE_ALBUM && !alert_on && !quick_on && !game_on && !ota_screen;
-  if (!on_page) return;
+  if (!on_page) {
+    photos_stop();  // 不在相册页时不放动图和视频，回来时换下一个
+    return;
+  }
   if (has_photo) screen.stay(now);  // 有照片时一直放，不轮播到别的页面
-  uint32_t wait = has_photo ? album_sec * 1000UL : last_req ? kAlbumRetryMs : 0;
+  uint32_t wait = has_photo ? (last_anim ? 0 : album_sec * 1000UL) : last_req ? kAlbumRetryMs : 0;
   if (!photos_busy() && now - (has_photo ? shown_at : last_req) >= wait) {
-    photos_request_next(album_shuffle);
+    photos_request_next(album_shuffle, album_sec * 1000UL);
     last_req = now;
   }
 }

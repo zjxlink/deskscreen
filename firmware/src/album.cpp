@@ -13,9 +13,12 @@ static bool ends_with_ci(const char *s, const char *suffix) {
   return true;
 }
 
-bool album_is_photo(const char *name) {
-  if (!name || name[0] == '.' || name[0] == '\0') return false;
-  return ends_with_ci(name, ".jpg") || ends_with_ci(name, ".jpeg") || ends_with_ci(name, ".png");
+MediaKind album_media_kind(const char *name) {
+  if (!name || name[0] == '.' || name[0] == '\0') return MediaKind::None;
+  if (ends_with_ci(name, ".jpg") || ends_with_ci(name, ".jpeg") || ends_with_ci(name, ".png")) return MediaKind::Still;
+  if (ends_with_ci(name, ".gif")) return MediaKind::Gif;
+  if (ends_with_ci(name, ".avi")) return MediaKind::Video;
+  return MediaKind::None;
 }
 
 size_t album_safe_name(const char *in, const char *fallback, char *out, size_t out_size) {
@@ -23,10 +26,12 @@ size_t album_safe_name(const char *in, const char *fallback, char *out, size_t o
     if (out_size) out[0] = '\0';
     return 0;
   }
-  // 扩展名不要，统一存成 .jpg（网页上传前已经转成 JPEG）
   const char *dot = in ? strrchr(in, '.') : nullptr;
+  const char *ext = ".jpg";
+  if (dot && ends_with_ci(dot, ".gif")) ext = ".gif";
+  if (dot && ends_with_ci(dot, ".avi")) ext = ".avi";
   size_t end = in ? (dot ? (size_t)(dot - in) : strlen(in)) : 0;
-  size_t max = out_size - 5;  // 留出 ".jpg" 和结尾的 0
+  size_t max = out_size - 5;  // 留出扩展名和结尾的 0
   if (max > 40) max = 40;
   size_t len = 0;
   for (size_t i = 0; i < end && len < max; i++) {
@@ -38,7 +43,7 @@ size_t album_safe_name(const char *in, const char *fallback, char *out, size_t o
     for (const char *p = fallback; *p && len < max; p++) out[len++] = *p;
   }
   if (len == 0) out[len++] = 'p';
-  memcpy(out + len, ".jpg", 5);
+  memcpy(out + len, ext, 5);
   return len + 4;
 }
 

@@ -7,10 +7,21 @@
 
 static constexpr int kAlbumMaxPhotos = 1000;  // photos 文件夹里最多认这么多张
 
-// 文件名是不是能显示的照片：.jpg、.jpeg、.png（不分大小写）；跳过隐藏文件和 macOS 生成的 ._ 文件
-bool album_is_photo(const char *name);
+enum class MediaKind : uint8_t {
+  None,   // 不认识的文件
+  Still,  // 照片：.jpg、.jpeg、.png
+  Gif,    // 动图：.gif
+  Video,  // MJPEG 视频：.avi
+};
 
-// 网页上传的文件名：只保留字母、数字、- 和 _（汉字等去掉），最长 40 个字符，加上 .jpg。
+// 按扩展名（不分大小写）判断文件类型；隐藏文件和 macOS 生成的 ._ 文件算 None
+MediaKind album_media_kind(const char *name);
+
+// 相册能放的文件：照片、动图或视频
+inline bool album_is_photo(const char *name) { return album_media_kind(name) != MediaKind::None; }
+
+// 网页上传的文件名：只保留字母、数字、- 和 _（汉字等去掉），最长 40 个字符。
+// 扩展名是 .gif 或 .avi 时保留（小写），其它都存成 .jpg（网页上传前已经把照片转成 JPEG）。
 // 去掉后什么都不剩时用 fallback（如时间戳）。返回写入 out 的长度
 size_t album_safe_name(const char *in, const char *fallback, char *out, size_t out_size);
 
