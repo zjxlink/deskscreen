@@ -20,8 +20,8 @@ void ui_show_progress(const char *title, const char *detail, int percent);
 // 首次配网提示页
 void ui_show_provision(const char *ap_name);
 
-// 切换到某个页面，animate 为 true 时有左滑动画
-void ui_show_page(Page page, bool animate);
+// 切换到某个页面，animate 为 true 时有滑动动画：默认向左滑，back 为 true 时向右滑（往回翻）
+void ui_show_page(Page page, bool animate, bool back = false);
 
 // 每次主循环调用，秒数变化时才真正刷新
 void ui_tick_clock();
@@ -84,6 +84,11 @@ struct ChatView {
 };
 void ui_set_chat(const ChatView &v);
 bool ui_chat_button_hit(int x, int y);
+
+// 电子相册页：px 为 320x240 的 RGB565 像素（photos_take_frame 给的），nullptr 表示不显示照片；
+// msg 是盖在中间的提示（没插卡、没有照片），nullptr 表示不显示
+void ui_set_album_photo(const uint16_t *px);
+void ui_set_album_msg(const char *msg);
 
 // 触摸点是否落在番茄钟的圆环上（圆环居中，屏幕上下或左右翻转时判断结果也不变）
 bool ui_pomodoro_hit(int x, int y);

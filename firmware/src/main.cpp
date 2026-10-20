@@ -15,6 +15,7 @@
 #include "motion.h"
 #include "ota.h"
 #include "pet.h"
+#include "photos.h"
 #include "pomo_stats.h"
 #include "pomodoro.h"
 #include "reminder.h"
@@ -107,6 +108,16 @@ static bool chat_has_key = false;
 static bool chat_holding = false;
 static uint32_t chat_busy_at = 0;
 
+// 电子相册：照片在 TF 卡上，后台解码。在相册页时不自动轮播走；打开屏保后，空闲一段时间自动进相册，碰一下回到原来的页面
+static constexpr uint32_t kAlbumRetryMs = 5000;  // 没插卡、没照片时多久再看一次
+static uint8_t album_sec = 10;
+static bool album_shuffle = true;
+static bool saver_on = false;
+static uint8_t saver_min = 5;
+static uint32_t last_input = 0;  // 最近一次碰屏幕或按 BOOT 键
+static bool saver_active = false;
+static Page saver_return = PAGE_CLOCK;
+
 static void apply_settings() {
   Settings s = settings_get();
   ui_set_city(s.city.c_str());
@@ -125,8 +136,13 @@ static void apply_settings() {
   c.away_off = s.away_off;
   c.away_min = s.away_min;
   if (!voice_available()) c.page_unavailable |= 1u << PAGE_CHAT;  // 没有麦克风
+  if (!photos_supported()) c.page_unavailable |= 1u << PAGE_ALBUM;  // 没有 TF 卡槽
   chat_has_key = s.ai_key.length() > 0;
-  screen.configure(c);  // 番茄钟页和 AI 聊天页不参与轮播，番茄钟进行中时固定显示
+  screen.configure(c);  // 番茄钟页、AI 聊天页和相册页不参与轮播，番茄钟进行中时固定显示
+  album_sec = s.album_sec;
+  album_shuffle = s.album_shuffle;
+  saver_on = s.saver_on && photos_supported();
+  saver_min = s.saver_min;
 
   PomoConfig pc;
   pc.focus_min = s.pomo_focus;
@@ -471,10 +487,10 @@ static void update_screen() {
     display_set_brightness(last_brightness);
   }
   Page p;
-  bool animate;
+  bool animate, back;
   // 升级进度和全屏提醒期间页面照常计算，只是先不显示
-  if (screen.take_page_change(p, animate) && !ota_screen && !alert_on && !quick_on && !game_on)
-    ui_show_page(p, animate);
+  if (screen.take_page_change(p, animate, &back) && !ota_screen && !alert_on && !quick_on && !game_on)
+    ui_show_page(p, animate, back);
 }
 
 // 在线升级或网页上传固件时显示进度；成功后重启，失败时提示几秒再回到原来的页面
@@ -677,8 +693,80 @@ static void update_game() {
   }
 }
 
-// 点屏幕或短按 BOOT 键：有全屏提醒时先关掉提醒（屏幕调暗时第一下只点亮），否则切换页面
-static void on_tap(uint32_t now) {
+// 空闲够久就进相册当屏保。番茄钟、聊天、提醒、夜间和熄屏时都不打扰
+static void update_saver(uint32_t now) {
+  if (!saver_on || saver_active || !screen.started() || now - last_input < saver_min * 60000UL) return;
+  if (screen.page() == PAGE_ALBUM || screen.night() || screen.dimmed() || alert_on || quick_on || game_on ||
+      ota_screen || pomo.running() || pomo_msg || (chat_busy_at && now - chat_busy_at < kChatStayMs))
+    return;
+  if (photos_status().card != PhotoCard::Ok) return;
+  saver_return = screen.page();
+  saver_active = true;
+  screen.go_to(PAGE_ALBUM, now);
+}
+
+static const char *album_message(const PhotoStatus &st, bool has_photo) {
+  switch (st.card) {
+    case PhotoCard::NoSlot:
+    case PhotoCard::NoCard:
+      return photos_busy() ? "正在读取 TF 卡…"
+                           : "#E6EDF3 没有检测到 TF 卡#\n\n插入 FAT32 格式的 TF 卡，照片放在卡里的 photos 文件夹，也可以在网页设置里用手机上传";
+    case PhotoCard::Empty:
+      return "#E6EDF3 TF 卡里还没有照片#\n\n把 JPG 或 PNG 照片放进卡里的 photos 文件夹，或者在网页设置里用手机上传";
+    case PhotoCard::Ok:
+      if (has_photo) return nullptr;
+      if (photos_busy() || st.failed < st.count) return "正在读取照片…";
+      return "#E6EDF3 照片都读不出来#\n\n只支持 JPG 和 PNG，HEIC 和渐进式 JPEG 读不了。用网页设置上传的照片会自动转换好";
+  }
+  return nullptr;
+}
+
+// 相册页：按间隔请后台解码下一张，解码好了就换上
+static void update_album() {
+  static bool has_photo = false;
+  static uint32_t shown_at = 0;
+  static uint32_t last_req = 0;
+  static const char *last_msg = "";
+  uint32_t now = millis();
+  if (saver_active && screen.page() != PAGE_ALBUM) saver_active = false;  // 被番茄钟、提醒、夜间模式等切走了
+  update_saver(now);
+
+  const uint16_t *px;
+  if (photos_take_frame(px)) {
+    ui_set_album_photo(px);
+    has_photo = true;
+    shown_at = now;
+  }
+  PhotoStatus st = photos_status();
+  if (st.card != PhotoCard::Ok && has_photo) {
+    has_photo = false;  // 卡被拔了，或者照片都删了
+    ui_set_album_photo(nullptr);
+  }
+  const char *msg = album_message(st, has_photo);
+  if (msg != last_msg) {
+    last_msg = msg;
+    ui_set_album_msg(msg);
+  }
+
+  bool on_page = screen.page() == PAGE_ALBUM && !alert_on && !quick_on && !game_on && !ota_screen;
+  if (!on_page) return;
+  if (has_photo) screen.stay(now);  // 有照片时一直放，不轮播到别的页面
+  uint32_t wait = has_photo ? album_sec * 1000UL : last_req ? kAlbumRetryMs : 0;
+  if (!photos_busy() && now - (has_photo ? shown_at : last_req) >= wait) {
+    photos_request_next(album_shuffle);
+    last_req = now;
+  }
+}
+
+// 点屏幕或短按 BOOT 键：有全屏提醒时先关掉提醒（屏幕调暗时第一下只点亮），否则切换页面。
+// back 为 true 时切到上一页（点屏幕左半边）；BOOT 键总是下一页
+static void on_tap(uint32_t now, bool back = false) {
+  if (saver_active && !alert_on && !quick_on && !ota_screen) {
+    saver_active = false;  // 屏保：碰一下回到原来的页面
+    screen.activity(now);
+    screen.go_to(saver_return, now);
+    return;
+  }
   if (quick_on) {
     close_quick();
     return;
@@ -691,7 +779,7 @@ static void on_tap(uint32_t now) {
     close_alert();
     return;
   }
-  screen.on_input(now);
+  screen.on_input(now, back);
 }
 
 // 短按切换页面，长按 3 秒清除 WiFi
@@ -699,6 +787,7 @@ static void check_button() {
   static uint32_t pressed_at = 0;
   if (digitalRead(PIN_BUTTON) == LOW) {
     if (pressed_at == 0) pressed_at = millis();
+    last_input = millis();
     if (millis() - pressed_at > kResetHoldMs) {
       ui_show_status("重新配置 WiFi", "已清除 WiFi 信息，正在重启…");
       ui_refresh_now();
@@ -712,7 +801,7 @@ static void check_button() {
   }
 }
 
-// 点一下屏幕切换页面（松手时触发），按住 2 秒打开快捷设置。
+// 点一下屏幕切换页面（松手时触发）：点左半边回到上一页，点右半边到下一页；按住 2 秒打开快捷设置。
 // 番茄钟页的圆环例外：松手时开始/暂停，按住 1.5 秒重置。小猫页点小橘打开小游戏
 static void check_touch() {
   static bool was_touched = false;
@@ -731,6 +820,7 @@ static void check_touch() {
   if (raw) last_seen = now;
   // 按住时漏报一次不当成松手再按下，否则一下会被算成两下，番茄钟也会开始又暂停
   bool touched = raw || (was_touched && now - last_seen < kTouchReleaseMs);
+  if (touched) last_input = now;
   if (touched && !was_touched) {
     down_at = now;
     down_x = x;
@@ -776,7 +866,7 @@ static void check_touch() {
                ui_pet_hit(down_x, down_y)) {
       open_game(now);
     } else {
-      on_tap(now);
+      on_tap(now, down_x < SCREEN_W / 2);
     }
   }
   was_touched = touched;
@@ -796,6 +886,7 @@ void setup() {
   voice_begin();
   sensors_begin();
   imu_ok = imu_begin();
+  photos_begin();
   ui_init();
   apply_settings();
   update_screen();  // 还没对时，先用白天亮度
@@ -840,6 +931,7 @@ void loop() {
   if (welcome_until && (int32_t)(millis() - welcome_until) >= 0) {
     welcome_until = 0;
     screen.start(millis());
+    last_input = millis();
   }
   if (web_config_take_changed()) apply_settings();
   update_pomodoro();
@@ -852,6 +944,7 @@ void loop() {
   update_quick();
   update_game();
   update_chat();
+  update_album();
   update_screen();
   update_ota_screen();
 

@@ -137,6 +137,11 @@ static lv_obj_t *chat_button;
 static lv_obj_t *lbl_chat_button;
 static lv_obj_t *chat_level;
 
+// 电子相册：一张铺满屏幕的图，像素在 PSRAM 里（photos.cpp 解码好的帧）；没有照片时显示提示
+static lv_obj_t *album_img;
+static lv_img_dsc_t album_dsc;
+static lv_obj_t *lbl_album_msg;
+
 static lv_obj_t *make_screen() {
   lv_obj_t *scr = lv_obj_create(nullptr);
   lv_obj_set_style_bg_color(scr, COLOR_BG, 0);
@@ -404,6 +409,52 @@ static void build_pet() {
   lv_obj_set_width(lbl_pet_status, SCREEN_W - 32);
   lv_obj_set_style_text_align(lbl_pet_status, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_align(lbl_pet_status, LV_ALIGN_BOTTOM_MID, 0, -12);
+}
+
+static void build_album() {
+  lv_obj_t *scr = make_screen();
+  lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
+  scr_pages[PAGE_ALBUM] = scr;
+  dot_wifi[PAGE_ALBUM] = make_wifi_dot(scr);
+  lv_obj_add_flag(dot_wifi[PAGE_ALBUM], LV_OBJ_FLAG_HIDDEN);  // 照片上不放 WiFi 小圆点
+
+  album_dsc.header.always_zero = 0;
+  album_dsc.header.cf = LV_IMG_CF_TRUE_COLOR;
+  album_dsc.header.w = SCREEN_W;
+  album_dsc.header.h = SCREEN_H;
+  album_dsc.data_size = SCREEN_W * SCREEN_H * LV_COLOR_SIZE / 8;
+  album_img = lv_img_create(scr);
+  lv_obj_set_pos(album_img, 0, 0);
+  lv_obj_add_flag(album_img, LV_OBJ_FLAG_HIDDEN);
+
+  lbl_album_msg = make_label(scr, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_set_width(lbl_album_msg, SCREEN_W - 40);
+  lv_obj_set_style_text_align(lbl_album_msg, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_line_space(lbl_album_msg, 6, 0);
+  lv_label_set_recolor(lbl_album_msg, true);  // 第一行用亮一点的颜色当标题
+  lv_obj_align(lbl_album_msg, LV_ALIGN_CENTER, 0, 0);
+  lv_label_set_text(lbl_album_msg, "正在读取 TF 卡…");
+}
+
+void ui_set_album_photo(const uint16_t *px) {
+  if (!px) {
+    lv_obj_add_flag(album_img, LV_OBJ_FLAG_HIDDEN);
+    return;
+  }
+  album_dsc.data = (const uint8_t *)px;
+  lv_img_cache_invalidate_src(&album_dsc);  // 两帧轮流用同一个描述，换了像素要清掉缓存
+  lv_img_set_src(album_img, &album_dsc);
+  lv_obj_invalidate(album_img);
+  lv_obj_clear_flag(album_img, LV_OBJ_FLAG_HIDDEN);
+}
+
+void ui_set_album_msg(const char *msg) {
+  if (!msg) {
+    lv_obj_add_flag(lbl_album_msg, LV_OBJ_FLAG_HIDDEN);
+    return;
+  }
+  lv_label_set_text(lbl_album_msg, msg);
+  lv_obj_clear_flag(lbl_album_msg, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void build_alert() {
@@ -875,6 +926,7 @@ void ui_init() {
   build_pet();
   build_pomodoro();
   build_chat();
+  build_album();
   build_alert();
   build_quick();
   build_game();
@@ -906,8 +958,8 @@ void ui_show_provision(const char *ap_name) {
   ui_show_status("首次使用：配置 WiFi", detail);
 }
 
-void ui_show_page(Page page, bool animate) {
-  screen_load(scr_pages[page], animate);
+void ui_show_page(Page page, bool animate, bool back) {
+  screen_load(scr_pages[page], animate, back);
 }
 
 void ui_tick_clock() {

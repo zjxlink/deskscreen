@@ -10,6 +10,7 @@
 #include "net.h"
 #include "night.h"
 #include "ota.h"
+#include "photos.h"
 #include "settings.h"
 #include "stock.h"
 #include "voice.h"
@@ -141,6 +142,17 @@ label.check input{width:auto}
 <div><label>音色</label><input name="ai_voice" value="%AI_VOICE%"></div>
 </div>
 <p class="hint">模型默认 qwen3-omni-flash；音色默认 Cherry（女声），也可以填 Ethan（男声）等百炼文档里列出的音色名。</p>
+<h2>电子相册</h2>
+<p class="hint">%ALBUM_STATE%</p>
+<div class="row">
+<div><label>每张照片显示（秒）</label><input name="album_sec" value="%ALBUM_SEC%" inputmode="numeric"></div>
+<div><label class="check" style="margin-top:38px"><input type="checkbox" name="album_shuffle" %ALBUM_SHUFFLE%> 随机顺序</label></div>
+</div>
+<div class="row">
+<div><label class="check"><input type="checkbox" name="saver_on" %SAVER_ON%> 空闲时自动播放相册（屏保）</label></div>
+<div><label>多久没碰屏幕算空闲（分钟）</label><input name="saver_min" value="%SAVER_MIN%" inputmode="numeric"></div>
+</div>
+<p class="hint">点屏幕切到「相册」页就开始播放，会一直放下去不自动切走。屏保：碰一下屏幕或按 BOOT 键回到原来的页面；番茄钟进行中、夜间时段和没人熄屏时不会启动。</p>
 <h2>GitHub 贡献热力图</h2>
 <label>GitHub Token（%GH_STATE%）</label>
 <input type="password" name="gh_token" placeholder="%GH_PLACEHOLDER%" autocomplete="off">
@@ -205,6 +217,95 @@ async function poll(){
   catch(e){setTimeout(poll,3000);}
 }
 if(document.getElementById('ota').dataset.busy==='1')poll();
+</script></body></html>)html";
+
+static const char ALBUM_PAGE[] PROGMEM = R"html(<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>电子相册</title>
+<style>
+body{font-family:-apple-system,system-ui,sans-serif;background:#0d1117;color:#e6edf3;margin:0;padding:16px}
+main{max-width:420px;margin:0 auto}
+h1{font-size:20px}
+h2{font-size:17px;margin-top:28px}
+a{color:#58a6ff}
+label{display:block;margin:16px 0 6px;color:#8b949e;font-size:14px}
+input{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #30363d;background:#161b22;color:#e6edf3;font-size:16px}
+button{padding:10px 16px;border:0;border-radius:8px;background:#238636;color:#fff;font-size:16px}
+button:disabled{opacity:.6}
+.hint{color:#8b949e;font-size:13px;line-height:1.6}
+.tip{color:#3fb950;margin:8px 0}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.ph{position:relative;background:#161b22;border-radius:6px;aspect-ratio:4/3;overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:11px;color:#8b949e;word-break:break-all;text-align:center}
+.ph img{width:100%;height:100%;object-fit:contain}
+.ph button{position:absolute;top:4px;right:4px;padding:2px 8px;font-size:14px;background:#da3633cc;border-radius:12px}
+</style></head><body><main>
+<p><a href="/">← 返回设置</a></p>
+<h1>电子相册</h1>
+<p class="hint" id="state">正在读取 TF 卡…</p>
+<div id="up" hidden>
+<label>选择照片（可以一次选多张）</label>
+<input type="file" id="files" accept="image/*" multiple>
+<p class="hint">照片会先在手机上缩小到屏幕大小（320x240）再上传，每张只有几十 KB，很快；iPhone 的 HEIC 照片也会自动转成 JPG。</p>
+<p><button id="go" onclick="upload()">上传到相框</button></p>
+<p class="tip" id="msg"></p>
+</div>
+<h2 id="count"></h2>
+<div class="grid" id="grid"></div>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+function fmt(b){return b>=1073741824?(b/1073741824).toFixed(1)+' GB':Math.round(b/1048576)+' MB';}
+async function load(){
+  let j;
+  try{j=await (await fetch('/album/list')).json();}catch(e){$('state').textContent='读取失败，刷新页面再试';return;}
+  const grid=$('grid');grid.textContent='';$('count').textContent='';
+  if(j.card==='noslot'){$('state').textContent='这块板子没有 TF 卡槽，用不了相册。';return;}
+  if(j.card!=='ok'){$('state').textContent='没有检测到 TF 卡。请插入 FAT32 格式的 TF 卡（32GB 以内的卡出厂就是 FAT32），插好后刷新这个页面。';$('up').hidden=true;return;}
+  $('up').hidden=false;
+  $('state').textContent='TF 卡已用 '+fmt(j.used)+'，共 '+fmt(j.total)+'。照片在卡里的 photos 文件夹，也可以拔下卡用电脑管理。'+
+    (j.failed?'有 '+j.failed+' 张照片读不出来（可能是 HEIC 或渐进式 JPEG），可以删掉后在这里重新上传。':'');
+  $('count').textContent='照片（'+j.photos.length+' 张）';
+  for(const p of j.photos){
+    const d=document.createElement('div');d.className='ph';
+    if(p.s<=1048576){const i=document.createElement('img');i.loading='lazy';i.src='/album/file?name='+encodeURIComponent(p.n);i.alt=p.n;d.appendChild(i);}
+    else d.textContent=p.n+'（原图，不显示缩略图）';
+    const b=document.createElement('button');b.textContent='×';b.title='删除';
+    b.onclick=async()=>{if(!confirm('删除 '+p.n+'？'))return;
+      const r=await fetch('/album/delete',{method:'POST',body:new URLSearchParams({name:p.n})});
+      if(!(await r.json()).ok)alert('删除失败');load();};
+    d.appendChild(b);grid.appendChild(d);
+  }
+}
+function canvas(w,h){const c=document.createElement('canvas');c.width=w;c.height=h;const x=c.getContext('2d');x.imageSmoothingQuality='high';return [c,x];}
+// 缩小到能完整放进 320x240（不放大），转成 JPG；每次缩一半，最后一步缩到目标大小，比一步缩到位清晰
+async function shrink(file){
+  let src;
+  try{src=await createImageBitmap(file,{imageOrientation:'from-image'});}
+  catch(e){src=await new Promise((ok,no)=>{const i=new Image();i.onload=()=>ok(i);i.onerror=no;i.src=URL.createObjectURL(file);});}
+  let w=src.width,h=src.height;const s=Math.min(1,320/w,240/h);
+  const tw=Math.max(1,Math.round(w*s)),th=Math.max(1,Math.round(h*s));
+  let cur=src;
+  while(w>tw*2){const [c,x]=canvas(Math.round(w/2),Math.round(h/2));x.drawImage(cur,0,0,c.width,c.height);cur=c;w=c.width;h=c.height;}
+  const [c,x]=canvas(tw,th);x.fillStyle='#000';x.fillRect(0,0,tw,th);x.drawImage(cur,0,0,tw,th);
+  return await new Promise(r=>c.toBlob(r,'image/jpeg',0.88));
+}
+async function upload(){
+  const files=[...$('files').files];if(!files.length){$('msg').textContent='先选择照片';return;}
+  const go=$('go');go.disabled=true;let ok=0;const bad=[];
+  for(let i=0;i<files.length;i++){
+    $('msg').textContent='正在上传 '+(i+1)+' / '+files.length+'…';
+    try{
+      const blob=await shrink(files[i]);
+      const fd=new FormData();fd.append('photo',blob,files[i].name.replace(/\.[^.]*$/,'')+'.jpg');
+      const j=await (await fetch('/album/upload',{method:'POST',body:fd})).json();
+      if(j.ok)ok++;else bad.push(files[i].name+'（'+j.error+'）');
+    }catch(e){bad.push(files[i].name+'（浏览器打不开这张图）');}
+  }
+  $('msg').textContent='上传了 '+ok+' 张'+(bad.length?'，失败：'+bad.join('，'):'');
+  go.disabled=false;$('files').value='';load();
+}
+load();
 </script></body></html>)html";
 
 static String html_escape(const String &s) {
@@ -289,6 +390,13 @@ static void handle_root() {
   page.replace("%AI_KEY_PLACEHOLDER%", has_ai ? "已设置，留空则不修改" : "sk-...");
   page.replace("%AI_MODEL%", html_escape(s.ai_model));
   page.replace("%AI_VOICE%", html_escape(s.ai_voice));
+  page.replace("%ALBUM_STATE%", photos_supported()
+                                    ? "照片放在 TF 卡的 photos 文件夹里，支持 JPG 和 PNG。<a href=\"/album\">用手机上传和管理照片 →</a>"
+                                    : "这块板子没有 TF 卡槽，用不了相册。");
+  page.replace("%ALBUM_SEC%", String(s.album_sec));
+  page.replace("%ALBUM_SHUFFLE%", s.album_shuffle ? "checked" : "");
+  page.replace("%SAVER_ON%", s.saver_on ? "checked" : "");
+  page.replace("%SAVER_MIN%", String(s.saver_min));
   page.replace("%POMO_FOCUS%", String(s.pomo_focus));
   page.replace("%POMO_SHORT%", String(s.pomo_short));
   page.replace("%POMO_LONG%", String(s.pomo_long));
@@ -435,6 +543,12 @@ static void handle_save() {
     float o = ofs.toFloat();
     if (ofs.length() > 0 && o >= -10 && o <= 10) s.temp_offset = (int8_t)lroundf(o * 10);
   }
+  minutes_arg("album_sec", s.album_sec, 3, 255);
+  minutes_arg("saver_min", s.saver_min, 1, 120);
+  if (server.hasArg("album_sec")) {  // 确认是设置表单提交的，再更新复选框
+    s.album_shuffle = server.hasArg("album_shuffle");
+    s.saver_on = server.hasArg("saver_on");
+  }
   int rs = night_parse_hhmm(server.arg("remind_start").c_str());
   int re = night_parse_hhmm(server.arg("remind_end").c_str());
   if (rs >= 0) s.remind_start = rs;
@@ -531,6 +645,65 @@ static void handle_upload_done() {
               "<p>" + msg + "</p><p><a href='/'>返回设置页面</a></p>");
 }
 
+// 电子相册：照片列表、上传、删除、缩略图
+static constexpr size_t kPhotoMaxBytes = 4 * 1024 * 1024;  // 网页会先缩小，正常每张几十 KB
+static bool photo_ok = false;
+static const char *photo_error = "";
+static String photo_name;
+
+static void send_json(bool ok, const char *error) {
+  JsonDocument doc;
+  doc["ok"] = ok;
+  if (!ok) doc["error"] = error;
+  if (ok && photo_name.length()) doc["name"] = photo_name;
+  String out;
+  serializeJson(doc, out);
+  server.send(200, "application/json", out);
+}
+
+static void handle_photo_chunk() {
+  HTTPUpload &up = server.upload();
+  if (up.status == UPLOAD_FILE_START) {
+    photo_name = up.filename;
+    photo_ok = photos_upload_begin(photo_name);
+    photo_error = photo_ok ? "" : "没有 TF 卡或者卡满了";
+  } else if (up.status == UPLOAD_FILE_WRITE && photo_ok) {
+    if (up.totalSize > kPhotoMaxBytes) {
+      photo_ok = false;
+      photo_error = "照片太大";
+      photos_upload_abort();
+    } else if (!photos_upload_write(up.buf, up.currentSize)) {
+      photo_ok = false;
+      photo_error = "写入 TF 卡失败";
+      photos_upload_abort();
+    }
+  } else if (up.status == UPLOAD_FILE_END && photo_ok) {
+    photo_ok = photos_upload_end(photo_name);
+    if (!photo_ok) photo_error = "写入 TF 卡失败";
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    if (photo_ok) photos_upload_abort();
+    photo_ok = false;
+    photo_error = "上传中断了";
+  }
+}
+
+static void handle_photo_file() {
+  String name = server.arg("name");
+  String lower = name;
+  lower.toLowerCase();
+  bool png = lower.endsWith(".png");
+  bool ok = photos_read(name, [](void *ctx, const uint8_t *data, size_t len, size_t total) {
+    if (!data) {  // 开头先发一次文件大小
+      server.sendHeader("Cache-Control", "max-age=3600");
+      server.setContentLength(total);
+      server.send(200, *(bool *)ctx ? "image/png" : "image/jpeg", "");
+      return;
+    }
+    server.sendContent((const char *)data, len);
+  }, &png);
+  if (!ok) server.send(404, "text/plain", "Not found");
+}
+
 static void handle_reset_wifi() {
   server.send(200, "text/html; charset=utf-8",
               "<meta charset=utf-8><p>已清除 WiFi，设备正在重启进入配网模式。</p>");
@@ -563,6 +736,14 @@ void web_config_begin() {
     redirect_to_ota();
   });
   server.on("/ota/upload", HTTP_POST, handle_upload_done, handle_upload_chunk);
+  server.on("/album", HTTP_GET, [] { server.send_P(200, "text/html; charset=utf-8", ALBUM_PAGE); });
+  server.on("/album/list", HTTP_GET, [] { server.send(200, "application/json", photos_list_json()); });
+  server.on("/album/file", HTTP_GET, handle_photo_file);
+  server.on("/album/upload", HTTP_POST, [] { send_json(photo_ok, photo_error); }, handle_photo_chunk);
+  server.on("/album/delete", HTTP_POST, [] {
+    photo_name = "";
+    send_json(photos_delete(server.arg("name")), "删除失败");
+  });
   const char *headers[] = {"Content-Length"};
   server.collectHeaders(headers, 1);
   server.onNotFound([] { server.send(404, "text/plain", "Not found"); });

@@ -22,12 +22,12 @@ static void finish_pending_load(lv_disp_t *d) {
   }
 }
 
-void screen_load(lv_obj_t *scr, bool animate) {
+void screen_load(lv_obj_t *scr, bool animate, bool back) {
   lv_disp_t *d = lv_obj_get_disp(scr);
   finish_pending_load(d);
   if (lv_scr_act() == scr) return;
   if (animate) {
-    lv_scr_load_anim(scr, LV_SCR_LOAD_ANIM_MOVE_LEFT, kSlideMs, 0, false);
+    lv_scr_load_anim(scr, back ? LV_SCR_LOAD_ANIM_MOVE_RIGHT : LV_SCR_LOAD_ANIM_MOVE_LEFT, kSlideMs, 0, false);
   } else {
     lv_scr_load(scr);
   }

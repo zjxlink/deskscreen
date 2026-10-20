@@ -175,7 +175,7 @@ static void test_day_rotation_skips_unconfigured_pages() {
 static void test_unavailable_page_skipped() {
   ScreenConfig c = night_cfg();
   c.page_enabled[PAGE_CHAT] = true;
-  c.page_unavailable = 1u << PAGE_CHAT;  // 没有麦克风
+  c.page_unavailable = 1u << PAGE_CHAT | 1u << PAGE_ALBUM;  // 没有麦克风、没有 TF 卡槽
   Sim s(c);
   s.ctrl.go_to(PAGE_POMODORO, s.now);
   s.take_page();
@@ -185,6 +185,26 @@ static void test_unavailable_page_skipped() {
   s.take_page();
   s.run(15500);
   TEST_ASSERT_EQUAL(PAGE_CLOCK, s.take_page());  // 自动轮播也跳过
+}
+
+static void test_back_goes_to_previous_page() {
+  ScreenConfig c = night_cfg();
+  c.page_unavailable = 1u << PAGE_ALBUM;  // 没有 TF 卡槽
+  Sim s(c);
+  Page p;
+  bool animate, back = false;
+  s.ctrl.on_input(s.now, true);  // 时钟页往回翻：跳过没有的相册页，到 AI 聊天页
+  TEST_ASSERT_TRUE(s.ctrl.take_page_change(p, animate, &back));
+  TEST_ASSERT_EQUAL(PAGE_CHAT, p);
+  TEST_ASSERT_TRUE(animate);
+  TEST_ASSERT_TRUE(back);
+  s.ctrl.on_input(s.now, true);
+  TEST_ASSERT_TRUE(s.ctrl.take_page_change(p, animate, &back));
+  TEST_ASSERT_EQUAL(PAGE_POMODORO, p);
+  s.ctrl.on_input(s.now);  // 再往前翻回来，动画方向也跟着变
+  TEST_ASSERT_TRUE(s.ctrl.take_page_change(p, animate, &back));
+  TEST_ASSERT_EQUAL(PAGE_CHAT, p);
+  TEST_ASSERT_FALSE(back);
 }
 
 static void test_stay_delays_rotation() {
@@ -462,6 +482,7 @@ int main() {
   RUN_TEST(test_morning_restores_day);
   RUN_TEST(test_day_rotation_skips_unconfigured_pages);
   RUN_TEST(test_unavailable_page_skipped);
+  RUN_TEST(test_back_goes_to_previous_page);
   RUN_TEST(test_stay_delays_rotation);
   RUN_TEST(test_rotation_off_and_single_page);
   RUN_TEST(test_night_brightness_zero_turns_off);
