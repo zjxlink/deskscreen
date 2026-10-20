@@ -13,20 +13,22 @@ bool ScreenCtrl::woken(uint32_t now_ms) const {
   return woken_until_ && (int32_t)(now_ms - woken_until_) < 0;
 }
 
-void ScreenCtrl::show(Page p, uint32_t now_ms, bool animate, bool force) {
+void ScreenCtrl::show(Page p, uint32_t now_ms, bool animate, bool force, bool back) {
   if (p != page_ || force) {
     page_dirty_ = true;
     page_animate_ = animate;
+    page_back_ = back;
   }
   page_ = p;
   page_shown_at_ = now_ms;
 }
 
-bool ScreenCtrl::take_page_change(Page &page, bool &animate) {
+bool ScreenCtrl::take_page_change(Page &page, bool &animate, bool *back) {
   if (!page_dirty_) return false;
   page_dirty_ = false;
   page = page_;
   animate = page_animate_;
+  if (back) *back = page_back_;
   return true;
 }
 
@@ -98,7 +100,7 @@ void ScreenCtrl::activity(uint32_t now_ms) {
   dimmed_ = false;
 }
 
-bool ScreenCtrl::on_input(uint32_t now_ms) {
+bool ScreenCtrl::on_input(uint32_t now_ms, bool back) {
   if (!started_) return false;
   bool was_dimmed = dimmed_;
   activity(now_ms);
@@ -109,9 +111,9 @@ bool ScreenCtrl::on_input(uint32_t now_ms) {
   // 手动切换时轮流显示所有页面（没设置的页面也能看到提示），只跳过板子上没有硬件的页面
   Page next = page_;
   for (int k = 1; k <= PAGE_COUNT; k++) {
-    next = (Page)((page_ + k) % PAGE_COUNT);
+    next = (Page)((page_ + (back ? PAGE_COUNT - k : k)) % PAGE_COUNT);
     if (!(cfg_.page_unavailable & (1u << next))) break;
   }
-  show(next, now_ms, true);
+  show(next, now_ms, true, false, back);
   return true;
 }

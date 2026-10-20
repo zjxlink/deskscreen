@@ -33,8 +33,9 @@ class ScreenCtrl {
   // 主循环每次调用。minutes 为当天第几分钟，还没对时传 -1
   void tick(uint32_t now_ms, int minutes);
 
-  // 用户点屏幕或短按按键。夜间调暗时第一下只点亮屏幕；返回 true 表示切换了页面
-  bool on_input(uint32_t now_ms);
+  // 用户点屏幕或短按按键。夜间调暗时第一下只点亮屏幕；返回 true 表示切换了页面。
+  // back 为 true 时切到上一页（点屏幕左半边），否则切到下一页
+  bool on_input(uint32_t now_ms, bool back = false);
 
   // 固定在某个页面（番茄钟进行中）：自动轮播不再切走；手动切走后，过一个轮播间隔再回来。夜间也一样
   void pin(Page p) {
@@ -66,12 +67,12 @@ class ScreenCtrl {
   bool dimmed() const { return dimmed_; }
   bool away() const { return away_; }  // 没人，屏幕已熄灭
 
-  // 页面有变化时返回 true，并给出是否需要切换动画
-  bool take_page_change(Page &page, bool &animate);
+  // 页面有变化时返回 true，并给出是否需要切换动画；back 为 true 表示是往回翻（动画从左往右滑）
+  bool take_page_change(Page &page, bool &animate, bool *back = nullptr);
 
  private:
   bool woken(uint32_t now_ms) const;
-  void show(Page p, uint32_t now_ms, bool animate, bool force = false);
+  void show(Page p, uint32_t now_ms, bool animate, bool force = false, bool back = false);
   void fade(uint32_t now_ms);
   void auto_rotate(uint32_t now_ms);
 
@@ -80,6 +81,7 @@ class ScreenCtrl {
   Page page_ = PAGE_CLOCK;
   bool page_dirty_ = false;
   bool page_animate_ = false;
+  bool page_back_ = false;
   uint32_t page_shown_at_ = 0;
   uint32_t woken_until_ = 0;
   bool night_now_ = false;

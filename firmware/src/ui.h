@@ -20,8 +20,8 @@ void ui_show_progress(const char *title, const char *detail, int percent);
 // 首次配网提示页
 void ui_show_provision(const char *ap_name);
 
-// 切换到某个页面，animate 为 true 时有左滑动画
-void ui_show_page(Page page, bool animate);
+// 切换到某个页面，animate 为 true 时有滑动动画：默认向左滑，back 为 true 时向右滑（往回翻）
+void ui_show_page(Page page, bool animate, bool back = false);
 
 // 每次主循环调用，秒数变化时才真正刷新
 void ui_tick_clock();

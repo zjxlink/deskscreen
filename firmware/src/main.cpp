@@ -487,10 +487,10 @@ static void update_screen() {
     display_set_brightness(last_brightness);
   }
   Page p;
-  bool animate;
+  bool animate, back;
   // 升级进度和全屏提醒期间页面照常计算，只是先不显示
-  if (screen.take_page_change(p, animate) && !ota_screen && !alert_on && !quick_on && !game_on)
-    ui_show_page(p, animate);
+  if (screen.take_page_change(p, animate, &back) && !ota_screen && !alert_on && !quick_on && !game_on)
+    ui_show_page(p, animate, back);
 }
 
 // 在线升级或网页上传固件时显示进度；成功后重启，失败时提示几秒再回到原来的页面
@@ -758,8 +758,9 @@ static void update_album() {
   }
 }
 
-// 点屏幕或短按 BOOT 键：有全屏提醒时先关掉提醒（屏幕调暗时第一下只点亮），否则切换页面
-static void on_tap(uint32_t now) {
+// 点屏幕或短按 BOOT 键：有全屏提醒时先关掉提醒（屏幕调暗时第一下只点亮），否则切换页面。
+// back 为 true 时切到上一页（点屏幕左半边）；BOOT 键总是下一页
+static void on_tap(uint32_t now, bool back = false) {
   if (saver_active && !alert_on && !quick_on && !ota_screen) {
     saver_active = false;  // 屏保：碰一下回到原来的页面
     screen.activity(now);
@@ -778,7 +779,7 @@ static void on_tap(uint32_t now) {
     close_alert();
     return;
   }
-  screen.on_input(now);
+  screen.on_input(now, back);
 }
 
 // 短按切换页面，长按 3 秒清除 WiFi
@@ -800,7 +801,7 @@ static void check_button() {
   }
 }
 
-// 点一下屏幕切换页面（松手时触发），按住 2 秒打开快捷设置。
+// 点一下屏幕切换页面（松手时触发）：点左半边回到上一页，点右半边到下一页；按住 2 秒打开快捷设置。
 // 番茄钟页的圆环例外：松手时开始/暂停，按住 1.5 秒重置。小猫页点小橘打开小游戏
 static void check_touch() {
   static bool was_touched = false;
@@ -865,7 +866,7 @@ static void check_touch() {
                ui_pet_hit(down_x, down_y)) {
       open_game(now);
     } else {
-      on_tap(now);
+      on_tap(now, down_x < SCREEN_W / 2);
     }
   }
   was_touched = touched;

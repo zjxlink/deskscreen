@@ -958,8 +958,8 @@ void ui_show_provision(const char *ap_name) {
   ui_show_status("首次使用：配置 WiFi", detail);
 }
 
-void ui_show_page(Page page, bool animate) {
-  screen_load(scr_pages[page], animate);
+void ui_show_page(Page page, bool animate, bool back) {
+  screen_load(scr_pages[page], animate, back);
 }
 
 void ui_tick_clock() {
