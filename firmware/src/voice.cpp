@@ -405,7 +405,7 @@ static bool send_chunk(Session &s, Agc &agc) {
   xSemaphoreGive(lock);
   size_t n = b64_encode((const uint8_t *)pcm, kChunk * 2, b64);
   const char *parts[] = {kRtAppendHead, b64, kRtAppendTail};
-  size_t sizes[] = {sizeof(kRtAppendHead) - 1, n, sizeof(kRtAppendTail) - 1};
+  size_t sizes[] = {strlen(kRtAppendHead), n, strlen(kRtAppendTail)};
   return ws_send(s.client, kWsText, parts, sizes, 3);
 }
 
