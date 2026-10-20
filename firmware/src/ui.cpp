@@ -138,6 +138,20 @@ static lv_obj_t *chat_button;
 static lv_obj_t *lbl_chat_button;
 static lv_obj_t *chat_level;
 
+// 天气预报页：未来 12 小时降水柱状图 + 未来 3 天
+static constexpr int kRainBarW = 18;
+static constexpr int kRainBarGap = 6;
+static constexpr int kRainBarMaxH = 34;
+static constexpr int kRainBase = 30 + kRainBarMaxH;  // 柱子底边在卡片里的 y
+static lv_obj_t *lbl_fc_city;
+static lv_obj_t *lbl_rain_title;
+static lv_obj_t *rain_bars[kRainHours];
+static lv_obj_t *lbl_rain_hours[kRainHours / 3];
+static lv_obj_t *lbl_fc_name[kForecastDays - 1];
+static lv_obj_t *lbl_fc_desc[kForecastDays - 1];
+static lv_obj_t *lbl_fc_range[kForecastDays - 1];
+static lv_obj_t *lbl_fc_rain[kForecastDays - 1];
+
 // 电子相册：一张铺满屏幕的图，像素在 PSRAM 里（photos.cpp 解码好的帧）；没有照片时显示提示
 static lv_obj_t *album_img;
 static lv_img_dsc_t album_dsc;
@@ -254,7 +268,72 @@ static void build_main() {
   lv_obj_align(lbl_range, LV_ALIGN_LEFT_MID, 140, 2);
 
   lbl_humidity = make_label(card, &font_cn_16, COLOR_SUBTLE);
+  lv_label_set_recolor(lbl_humidity, true);  // 有雨时用蓝色
   lv_obj_align(lbl_humidity, LV_ALIGN_BOTTOM_LEFT, 140, 0);
+}
+
+static lv_obj_t *make_card(lv_obj_t *parent, int x, int y, int w, int h) {
+  lv_obj_t *card = lv_obj_create(parent);
+  lv_obj_set_pos(card, x, y);
+  lv_obj_set_size(card, w, h);
+  lv_obj_set_style_bg_color(card, COLOR_CARD, 0);
+  lv_obj_set_style_border_width(card, 0, 0);
+  lv_obj_set_style_radius(card, 12, 0);
+  lv_obj_set_style_pad_all(card, 0, 0);
+  lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+  return card;
+}
+
+static void build_weather() {
+  lv_obj_t *scr = make_screen();
+  scr_pages[PAGE_WEATHER] = scr;
+
+  lbl_fc_city = make_label(scr, &font_cn_16, COLOR_SUBTLE);
+  lv_label_set_text(lbl_fc_city, "天气预报");
+  lv_obj_align(lbl_fc_city, LV_ALIGN_TOP_LEFT, 12, 10);
+  dot_wifi[PAGE_WEATHER] = make_wifi_dot(scr);
+
+  // 上面：一句话 + 12 根柱子，柱高是降水概率，会下雨的小时是蓝色
+  lv_obj_t *rain = make_card(scr, 12, 34, SCREEN_W - 24, 88);
+  lbl_rain_title = make_label(rain, &font_cn_16, COLOR_TEXT);
+  lv_obj_set_width(lbl_rain_title, SCREEN_W - 48);
+  lv_label_set_long_mode(lbl_rain_title, LV_LABEL_LONG_DOT);
+  lv_obj_set_pos(lbl_rain_title, 12, 8);
+  lv_label_set_text(lbl_rain_title, "获取中…");
+  int chart_w = kRainHours * (kRainBarW + kRainBarGap) - kRainBarGap;
+  int x0 = (SCREEN_W - 24 - chart_w) / 2;
+  for (int i = 0; i < kRainHours; i++) {
+    lv_obj_t *b = lv_obj_create(rain);
+    lv_obj_set_style_border_width(b, 0, 0);
+    lv_obj_set_style_radius(b, 3, 0);
+    lv_obj_set_style_pad_all(b, 0, 0);
+    lv_obj_set_style_bg_color(b, COLOR_FLAT, 0);
+    lv_obj_set_size(b, kRainBarW, 2);
+    lv_obj_set_pos(b, x0 + i * (kRainBarW + kRainBarGap), kRainBase - 2);
+    lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+    rain_bars[i] = b;
+    if (i % 3 == 0) {
+      lv_obj_t *l = make_label(rain, &lv_font_montserrat_14, COLOR_SUBTLE);
+      lv_obj_set_width(l, kRainBarW + 12);
+      lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+      lv_obj_set_pos(l, x0 + i * (kRainBarW + kRainBarGap) - 6, kRainBase + 2);
+      lbl_rain_hours[i / 3] = l;
+    }
+  }
+
+  // 下面：明天、后天、大后天三张小卡片
+  int gap = 8, w = (SCREEN_W - 24 - 2 * gap) / 3;
+  for (int i = 0; i < kForecastDays - 1; i++) {
+    lv_obj_t *c = make_card(scr, 12 + i * (w + gap), 130, w, 102);
+    lbl_fc_name[i] = make_label(c, &font_cn_16, COLOR_SUBTLE);
+    lv_obj_align(lbl_fc_name[i], LV_ALIGN_TOP_MID, 0, 6);
+    lbl_fc_desc[i] = make_label(c, &font_cn_24, COLOR_TEXT);
+    lv_obj_align(lbl_fc_desc[i], LV_ALIGN_TOP_MID, 0, 27);
+    lbl_fc_range[i] = make_label(c, &lv_font_montserrat_14, COLOR_TEXT);
+    lv_obj_align(lbl_fc_range[i], LV_ALIGN_TOP_MID, 0, 59);
+    lbl_fc_rain[i] = make_label(c, &font_cn_16, COLOR_SUBTLE);
+    lv_obj_align(lbl_fc_rain[i], LV_ALIGN_TOP_MID, 0, 77);
+  }
 }
 
 // 统计数字 + 下方的小标签，三列均分
@@ -955,6 +1034,7 @@ void ui_init() {
   build_status();
   build_main();
   scr_pages[PAGE_CLOCK] = scr_main;
+  build_weather();
   build_github();
   build_stocks();
   build_pet();
@@ -1026,6 +1106,8 @@ void ui_tick_clock() {
 void ui_set_city(const char *city) {
   lv_label_set_text(lbl_city, city);
   lv_obj_align_to(lbl_city, dot_wifi[PAGE_CLOCK], LV_ALIGN_OUT_LEFT_MID, -8, 0);
+  if (city && city[0]) lv_label_set_text_fmt(lbl_fc_city, "%s · 天气预报", city);
+  else lv_label_set_text(lbl_fc_city, "天气预报");
 }
 
 void ui_set_room(float temp, float humidity, bool hot, bool humid) {
@@ -1038,10 +1120,54 @@ void ui_set_room(float temp, float humidity, bool hot, bool humid) {
   lv_obj_clear_flag(lbl_room, LV_OBJ_FLAG_HIDDEN);
 }
 
+// 天气预报页
+static void set_forecast(const WeatherData &w) {
+  char text[96];
+  weather_rain_summary(w, text, sizeof(text));
+  bool wet = weather_rain_index(w) >= 0;
+  lv_label_set_text(lbl_rain_title, text[0] ? text : "没有逐小时预报");
+  lv_obj_set_style_text_color(lbl_rain_title, wet ? lv_color_hex(0x4FC3F7) : COLOR_TEXT, 0);
+  for (int i = 0; i < kRainHours; i++) {
+    lv_obj_t *b = rain_bars[i];
+    if (i >= w.nhours) {
+      lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
+      continue;
+    }
+    const HourRain &h = w.hours[i];
+    int ht = 2 + h.prob * (kRainBarMaxH - 2) / 100;
+    lv_obj_set_height(b, ht);
+    lv_obj_set_y(b, kRainBase - ht);
+    lv_obj_set_style_bg_color(b, weather_hour_wet(h) ? lv_color_hex(0x4FC3F7) : h.prob >= 30 ? lv_color_hex(0x3B5368) : COLOR_FLAT, 0);
+    lv_obj_clear_flag(b, LV_OBJ_FLAG_HIDDEN);
+  }
+  for (int i = 0; i < kRainHours / 3; i++) {
+    if (i * 3 < w.nhours) lv_label_set_text_fmt(lbl_rain_hours[i], "%d", w.hours[i * 3].hour);
+    else lv_label_set_text(lbl_rain_hours[i], "");
+  }
+  for (int i = 0; i < kForecastDays - 1; i++) {
+    if (i + 1 >= w.ndays) {
+      lv_label_set_text(lbl_fc_name[i], "");
+      lv_label_set_text(lbl_fc_desc[i], "--");
+      lv_label_set_text(lbl_fc_range[i], "");
+      lv_label_set_text(lbl_fc_rain[i], "");
+      continue;
+    }
+    const DayForecast &d = w.days[i + 1];
+    lv_label_set_text(lbl_fc_name[i], weather_day_name(d, i + 1));
+    lv_label_set_text(lbl_fc_desc[i], weather_text(d.code));
+    lv_obj_set_style_text_color(lbl_fc_desc[i], lv_color_hex(weather_color(d.code)), 0);
+    lv_label_set_text_fmt(lbl_fc_range[i], "%d\xC2\xB0 / %d\xC2\xB0", (int)lroundf(d.temp_min), (int)lroundf(d.temp_max));
+    if (d.rain_prob > 0) lv_label_set_text_fmt(lbl_fc_rain[i], "降水 %d%%", d.rain_prob);
+    else lv_label_set_text(lbl_fc_rain[i], "不下雨");
+    lv_obj_set_style_text_color(lbl_fc_rain[i], d.rain_prob >= 50 ? lv_color_hex(0x4FC3F7) : COLOR_SUBTLE, 0);
+  }
+}
+
 void ui_set_weather(const WeatherData &w) {
   if (w.error) {
     // 只有开机后一次都没成功过才会收到错误，天气描述那行保持「获取中…」
     lv_label_set_text_fmt(lbl_humidity, "获取失败（%d）", w.error);
+    lv_label_set_text_fmt(lbl_rain_title, "获取失败（%d），稍后自动重试", w.error);
     return;
   }
   lv_label_set_text_fmt(lbl_temp, "%d\xC2\xB0", (int)lroundf(w.temp));
@@ -1049,7 +1175,11 @@ void ui_set_weather(const WeatherData &w) {
   lv_obj_set_style_text_color(lbl_desc, lv_color_hex(weather_color(w.code)), 0);
   lv_label_set_text_fmt(lbl_range, "%d\xC2\xB0 / %d\xC2\xB0", (int)lroundf(w.temp_min),
                         (int)lroundf(w.temp_max));
-  lv_label_set_text_fmt(lbl_humidity, "湿度 %d%%", w.humidity);
+  char rain[48];
+  weather_rain_short(w, rain, sizeof(rain));
+  if (rain[0]) lv_label_set_text_fmt(lbl_humidity, "#4FC3F7 %s#", rain);  // 卡片上放不下两句，有雨时先说雨
+  else lv_label_set_text_fmt(lbl_humidity, "湿度 %d%%", w.humidity);
+  set_forecast(w);
 }
 
 void ui_set_github(const GithubData &g) {
@@ -1226,6 +1356,10 @@ void ui_show_alert(AlertIcon icon, const char *title, const char *body, const ch
     case AlertIcon::Climate:
       lv_label_set_text(alert_icon, LV_SYMBOL_WARNING);
       lv_obj_set_style_bg_color(alert_badge, lv_color_hex(0xDB6D28), 0);
+      break;
+    case AlertIcon::Rain:
+      lv_label_set_text(alert_icon, LV_SYMBOL_TINT);
+      lv_obj_set_style_bg_color(alert_badge, lv_color_hex(0x0E7490), 0);
       break;
   }
   lv_obj_center(alert_icon);

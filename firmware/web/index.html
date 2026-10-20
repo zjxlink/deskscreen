@@ -302,6 +302,8 @@ const CARDS=[
  {type:'num',k:'water_min',sw:'water_on',label:'喝水提醒',unit:'分钟'},
  {type:'span',a:'remind_start',b:'remind_end',label:'提醒时段'}],
  hint:'只在提醒时段内提醒，屏幕会弹出全屏提示并响一声。番茄钟专注时先不打扰，等休息时再提醒；开始休息时久坐提醒重新计时。'},
+{t:'remind',title:'下雨提醒',icon:'cloud',sw:'rain_on',f:[],
+ hint:'根据未来几小时的天气预报，快下雨或者正在下雨时弹出提醒「出门记得带伞」，同一场雨只提醒一次，夜间时段不提醒（早上雨还在下会补一次）。在时钟页往右翻一页能看到未来 12 小时的降水和未来 3 天的天气。'},
 {t:'remind',title:'闹钟',icon:'bell',sw:'alarm_on',f:[
  {type:'time',k:'alarm_time',label:'时间'},
  {type:'days'},

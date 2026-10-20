@@ -44,7 +44,7 @@ void ui_set_pet(PetMood mood, bool blink, const char *line, const char *status);
 void ui_pet_anim(int dx, int bob, int zzz);
 
 // 全屏提醒（留言、久坐、喝水、闹钟），盖在当前页面上，关掉后用 ui_show_page 回到原来的页面
-enum class AlertIcon { Message, Sit, Water, Alarm, Climate };
+enum class AlertIcon { Message, Sit, Water, Alarm, Climate, Rain };
 void ui_show_alert(AlertIcon icon, const char *title, const char *body, const char *foot);
 
 // 快捷设置页（长按屏幕打开）：亮度、提示音、没人熄屏，以及打开网页设置的二维码
