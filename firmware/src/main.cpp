@@ -13,6 +13,7 @@
 #include "github.h"
 #include "imu.h"
 #include "motion.h"
+#include "night.h"
 #include "ota.h"
 #include "pet.h"
 #include "bing.h"
@@ -71,6 +72,8 @@ static uint32_t alarm_next_ring = 0;
 
 // 室内温湿度（SENSOR 底座），已经加上校准值
 static ClimateAlert climate_alert;
+static RainAlert rain_alert;
+static bool rain_on = true;
 static int8_t temp_offset = 0;
 static bool room_valid = false;
 static float room_temp = 0;
@@ -137,6 +140,7 @@ static void apply_settings() {
   c.night_brightness = s.night_brightness;
   c.page_seconds = s.page_seconds;
   c.page_enabled[PAGE_CLOCK] = true;
+  c.page_enabled[PAGE_WEATHER] = true;
   c.page_enabled[PAGE_GITHUB] = s.github_token.length() > 0;
   c.page_enabled[PAGE_STOCKS] = s.stocks.length() > 0;
   c.page_enabled[PAGE_PET] = true;
@@ -184,6 +188,8 @@ static void apply_settings() {
   ac.days = s.alarm_days;
   alarm_clock.configure(ac);
   chime.set_on(s.chime_on);
+  if (rain_on != s.rain_on) rain_alert.reset();
+  rain_on = s.rain_on;
 
   ClimateConfig cc;
   cc.on = s.climate_on;
@@ -329,6 +335,20 @@ static void update_reminders() {
     play(SoundId::Reminder);
   }
   if (alert_on && alert_timed && (int32_t)(now - alert_until) >= 0) close_alert();
+}
+
+// 新的天气预报到了：快下雨时提醒一次。夜间时段、留言没看、闹钟在响时先不提醒，下次拿到预报时再看
+static void on_weather(const WeatherData &w) {
+  Settings s = settings_get();
+  int minutes = local_minutes();
+  bool quiet = !rain_on || minutes < 0 || night_is_active(minutes, s.night_start, s.night_end) ||
+               (alert_on && !alert_timed) || alarm_ringing;
+  if (!rain_alert.update(w, quiet)) return;
+  char body[96];
+  weather_rain_alert_text(w, body, sizeof(body));
+  show_alert(AlertIcon::Rain, weather_rain_index(w) == 0 ? "外面在下雨" : "快下雨了", body, "点屏幕或按 BOOT 键关闭",
+             kReminderShowMs);
+  play(SoundId::Reminder);
 }
 
 // 整点报时和闹钟。闹钟夜里也响，不受提示音开关影响；响铃期间每隔几秒响一次，关掉提醒就停
@@ -998,7 +1018,10 @@ void loop() {
   update_ota_screen();
 
   WeatherData w;
-  if (weather_take_update(w)) ui_set_weather(w);
+  if (weather_take_update(w)) {
+    ui_set_weather(w);
+    on_weather(w);
+  }
 
   if (github_take_update(github_data)) ui_set_github(github_data);
   if (stock_take_update(stock_data)) ui_set_stocks(stock_data);

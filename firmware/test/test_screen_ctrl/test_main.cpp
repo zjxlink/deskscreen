@@ -112,7 +112,7 @@ static void test_tap_at_night_only_wakes() {
 
   // 点亮期间：正常切页
   TEST_ASSERT_TRUE(s.ctrl.on_input(s.now));
-  TEST_ASSERT_EQUAL(PAGE_GITHUB, s.take_page());
+  TEST_ASSERT_EQUAL(PAGE_WEATHER, s.take_page());
 }
 
 static void test_wake_expires_and_returns_to_clock() {
@@ -121,13 +121,13 @@ static void test_wake_expires_and_returns_to_clock() {
   s.settle();
   s.ctrl.on_input(s.now);  // 点亮
   s.run(1000);
-  s.ctrl.on_input(s.now);  // 切到 GitHub 页，并顺延 30 秒
-  TEST_ASSERT_EQUAL(PAGE_GITHUB, s.take_page());
+  s.ctrl.on_input(s.now);  // 切到天气页，并顺延 30 秒
+  TEST_ASSERT_EQUAL(PAGE_WEATHER, s.take_page());
 
   // 29 秒后仍是正常亮度，也不会被拉回时钟页
   s.run(29000);
   TEST_ASSERT_EQUAL(180, s.ctrl.brightness());
-  TEST_ASSERT_EQUAL(PAGE_GITHUB, s.ctrl.page());
+  TEST_ASSERT_EQUAL(PAGE_WEATHER, s.ctrl.page());
 
   // 超过 30 秒：回到时钟页并重新变暗
   s.run(2000);
@@ -168,6 +168,9 @@ static void test_day_rotation_skips_unconfigured_pages() {
   TEST_ASSERT_EQUAL(PAGE_CLOCK, s.take_page());
 
   // 手动切换仍然经过 GitHub 页（能看到"请填写 Token"的提示）
+  s.ctrl.on_input(s.now);
+  TEST_ASSERT_EQUAL(PAGE_WEATHER, s.take_page());
+  s.run(1000);
   s.ctrl.on_input(s.now);
   TEST_ASSERT_EQUAL(PAGE_GITHUB, s.take_page());
 }

@@ -39,6 +39,7 @@ void settings_begin() {
   current.alarm_time = prefs.getUShort("alarm_time", 7 * 60 + 30);
   current.alarm_days = prefs.getUChar("alarm_days", 0x3E);
   current.climate_on = prefs.getBool("climate_on", true);
+  current.rain_on = prefs.getBool("rain_on", true);
   current.hot_c = prefs.getUChar("hot_c", 30);
   current.humid_pct = prefs.getUChar("humid_pct", 80);
   current.temp_offset = prefs.getChar("temp_ofs", 0);
@@ -97,6 +98,7 @@ void settings_save(const Settings &s) {
   prefs.putUShort("alarm_time", s.alarm_time);
   prefs.putUChar("alarm_days", s.alarm_days);
   prefs.putBool("climate_on", s.climate_on);
+  prefs.putBool("rain_on", s.rain_on);
   prefs.putUChar("hot_c", s.hot_c);
   prefs.putUChar("humid_pct", s.humid_pct);
   prefs.putChar("temp_ofs", s.temp_offset);

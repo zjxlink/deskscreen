@@ -1,5 +1,6 @@
 #include "weather.h"
 
+#include <Arduino.h>
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <WiFi.h>
@@ -20,10 +21,7 @@ static bool fresh = false;
 static int fetch(WeatherData &out) {
   Settings s = settings_get();
   String url = "https://api.open-meteo.com/v1/forecast?latitude=" + String(s.lat, 4) +
-               "&longitude=" + String(s.lon, 4) +
-               "&current=temperature_2m,relative_humidity_2m,weather_code"
-               "&daily=temperature_2m_max,temperature_2m_min"
-               "&timezone=auto&forecast_days=1";
+               "&longitude=" + String(s.lon, 4) + kWeatherQuery;
 
   HttpsLock https;
   // 天气数据不敏感，先跳过证书校验；以后可换成内置根证书
@@ -49,19 +47,10 @@ static int fetch(WeatherData &out) {
     net_report(NetService::Weather, kNetBadData, client, (String("JSON: ") + err.c_str()).c_str());
     return kNetBadData;
   }
-  JsonObject cur = doc["current"];
-  JsonObject daily = doc["daily"];
-  if (cur.isNull() || daily.isNull()) {
+  if (!weather_parse(doc, out)) {
     net_report(NetService::Weather, kNetBadData, client, "missing current/daily");
     return kNetBadData;
   }
-
-  out.temp = cur["temperature_2m"] | 0.0f;
-  out.humidity = cur["relative_humidity_2m"] | 0;
-  out.code = cur["weather_code"] | 0;
-  out.temp_max = daily["temperature_2m_max"][0] | 0.0f;
-  out.temp_min = daily["temperature_2m_min"][0] | 0.0f;
-  out.error = 0;
   net_report(NetService::Weather, HTTP_CODE_OK, client);
   return 0;
 }
