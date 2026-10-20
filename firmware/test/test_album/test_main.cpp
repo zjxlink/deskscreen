@@ -17,6 +17,20 @@ static void test_is_photo() {
   TEST_ASSERT_FALSE(album_is_photo(".upload.jpg"));
   TEST_ASSERT_FALSE(album_is_photo("jpg"));
   TEST_ASSERT_FALSE(album_is_photo(""));
+  TEST_ASSERT_TRUE(album_is_photo("cat.GIF"));
+  TEST_ASSERT_TRUE(album_is_photo("trip.avi"));
+  TEST_ASSERT_FALSE(album_is_photo("trip.mp4"));  // 要先转成 MJPEG
+  TEST_ASSERT_FALSE(album_is_photo("._trip.avi"));
+}
+
+static void test_media_kind() {
+  TEST_ASSERT_EQUAL(MediaKind::Still, album_media_kind("a.JPG"));
+  TEST_ASSERT_EQUAL(MediaKind::Still, album_media_kind("a.png"));
+  TEST_ASSERT_EQUAL(MediaKind::Gif, album_media_kind("a.gif"));
+  TEST_ASSERT_EQUAL(MediaKind::Video, album_media_kind("a.AVI"));
+  TEST_ASSERT_EQUAL(MediaKind::None, album_media_kind("a.mov"));
+  TEST_ASSERT_EQUAL(MediaKind::None, album_media_kind(nullptr));
+  TEST_ASSERT_EQUAL(MediaKind::None, album_media_kind(".upload.tmp"));
 }
 
 static void test_safe_name() {
@@ -31,6 +45,13 @@ static void test_safe_name() {
   TEST_ASSERT_EQUAL_STRING("p.jpg", out);
   album_safe_name("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg", "x", out, sizeof(out));
   TEST_ASSERT_EQUAL(44, strlen(out));
+  // 动图和视频保留扩展名（小写），其它都存成 .jpg
+  album_safe_name("Funny Cat.GIF", "x", out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("FunnyCat.gif", out);
+  album_safe_name("旅行.avi", "20261020_121314", out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("20261020_121314.avi", out);
+  album_safe_name("clip.mp4", "x", out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("clip.jpg", out);
   char small[10];
   album_safe_name("abcdefgh.jpg", "x", small, sizeof(small));
   TEST_ASSERT_EQUAL_STRING("abcde.jpg", small);
@@ -97,6 +118,7 @@ static void test_order_shrink_after_delete() {
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_is_photo);
+  RUN_TEST(test_media_kind);
   RUN_TEST(test_safe_name);
   RUN_TEST(test_order_sequential);
   RUN_TEST(test_order_empty);

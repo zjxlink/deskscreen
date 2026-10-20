@@ -6,6 +6,7 @@
 //   自己的照片：TF 卡（BOX-3 的 SENSOR 底座上）photos 文件夹
 //   必应每日一图：TF 卡 bing 文件夹，由 bing.cpp 下载；没插卡时只有当天这一张，放在 PSRAM
 // 解码在后台任务里做，手机原图也不会卡住界面；解码好的一帧是 320x240 的 RGB565，放在 PSRAM。
+// 自己的照片里也可以放 GIF 动图和 MJPEG 视频（.avi），轮到时后台一帧一帧地解码，播放完再换下一张。
 // 网页上传、删除照片和必应下载也走这里，和后台任务用同一把锁，不会同时读写卡
 
 enum class PhotoCard {
@@ -34,15 +35,20 @@ PhotoStatus photos_status();
 // 设置里打开了哪些来源
 void photos_set_sources(bool local, bool bing);
 
-// 请后台解码下一张（随机或按文件名顺序）。还在解码上一张、或者上一张还没取走时忽略
-void photos_request_next(bool shuffle);
+// 请后台解码下一张（随机或按文件名顺序）。还在解码上一张、或者上一张还没取走时忽略。
+// 轮到动图时至少放 gif_ms 毫秒（不够一遍时放完这一遍），视频从头放到尾
+void photos_request_next(bool shuffle, uint32_t gif_ms);
 
-// 后台正在读卡、解码
+// 后台正在读卡、解码，或者正在放动图、视频
 bool photos_busy();
 
+// 停止正在放的动图或视频（离开相册页时调用），屏幕上留着最后一帧
+void photos_stop();
+
 // 有新解码好的一帧时返回 true。px 一直有效，直到下一次返回 true 后又过了一帧；
-// caption 是必应图片的说明（自己的照片为空字符串），和 px 一样有效
-bool photos_take_frame(const uint16_t *&px, const char *&caption);
+// caption 是必应图片的说明（自己的照片为空字符串），和 px 一样有效。
+// animated 为 true 表示这一帧是动图或视频里的，放完后不用再停留，可以直接请下一张
+bool photos_take_frame(const uint16_t *&px, const char *&caption, bool &animated);
 
 // 网页设置用：照片列表（JSON：卡的状态、空间，自己的照片和必应图片各自的文件名、大小）
 String photos_list_json();

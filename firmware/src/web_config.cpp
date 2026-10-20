@@ -4,6 +4,7 @@
 #include <WebServer.h>
 #include <WiFi.h>
 
+#include "album.h"
 #include "audio.h"
 #include "display.h"
 #include "github.h"
@@ -382,6 +383,9 @@ static void handle_upload_done() {
 
 // 电子相册：照片列表、上传、删除、缩略图
 static constexpr size_t kPhotoMaxBytes = 4 * 1024 * 1024;  // 网页会先缩小，正常每张几十 KB
+static constexpr size_t kGifMaxBytes = 8 * 1024 * 1024;     // 和 photos.cpp 能读进内存的上限一样
+static constexpr size_t kVideoMaxBytes = 200 * 1024 * 1024;  // 网页转好的视频每分钟十几 MB
+static size_t photo_max = kPhotoMaxBytes;
 static bool photo_ok = false;
 static const char *photo_error = "";
 static String photo_name;
@@ -400,12 +404,14 @@ static void handle_photo_chunk() {
   HTTPUpload &up = server.upload();
   if (up.status == UPLOAD_FILE_START) {
     photo_name = up.filename;
+    MediaKind kind = album_media_kind(photo_name.c_str());
+    photo_max = kind == MediaKind::Video ? kVideoMaxBytes : kind == MediaKind::Gif ? kGifMaxBytes : kPhotoMaxBytes;
     photo_ok = photos_upload_begin(photo_name);
     photo_error = photo_ok ? "" : "没有 TF 卡或者卡满了";
   } else if (up.status == UPLOAD_FILE_WRITE && photo_ok) {
-    if (up.totalSize > kPhotoMaxBytes) {
+    if (up.totalSize > photo_max) {
       photo_ok = false;
-      photo_error = "照片太大";
+      photo_error = "文件太大";
       photos_upload_abort();
     } else if (!photos_upload_write(up.buf, up.currentSize)) {
       photo_ok = false;
@@ -431,16 +437,19 @@ static void handle_photo_file() {
   String name = server.arg("name");
   String lower = name;
   lower.toLowerCase();
-  bool png = lower.endsWith(".png");
+  const char *type = lower.endsWith(".png")   ? "image/png"
+                     : lower.endsWith(".gif") ? "image/gif"
+                     : lower.endsWith(".avi") ? "video/x-msvideo"
+                                              : "image/jpeg";
   bool ok = photos_read(source_arg(), name, [](void *ctx, const uint8_t *data, size_t len, size_t total) {
     if (!data) {  // 开头先发一次文件大小
       server.sendHeader("Cache-Control", "max-age=3600");
       server.setContentLength(total);
-      server.send(200, *(bool *)ctx ? "image/png" : "image/jpeg", "");
+      server.send(200, (const char *)ctx, "");
       return;
     }
     server.sendContent((const char *)data, len);
-  }, &png);
+  }, (void *)type);
   if (!ok) server.send(404, "text/plain", "Not found");
 }
 

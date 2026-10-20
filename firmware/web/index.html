@@ -114,6 +114,8 @@ textarea.txt{height:76px;padding:10px 12px;resize:none}
 .ph{position:relative;aspect-ratio:4/3;border-radius:10px;background:var(--field);overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--sub);text-align:center;word-break:break-all;padding:4px}
 .ph img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .ph .cap{position:absolute;left:0;right:0;bottom:0;padding:10px 6px 4px;background:linear-gradient(transparent,rgba(0,0,0,.6));color:#fff;font-size:10.5px;line-height:1.3;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ph.v{white-space:pre-line;padding:30px 8px 6px;line-height:1.4}
+.ph .tag{position:absolute;left:5px;top:5px;padding:1px 6px;border-radius:6px;background:rgba(0,0,0,.55);color:#fff;font-size:10.5px;line-height:1.5}
 .ph button{position:absolute;top:4px;right:4px;width:28px;height:28px;border:0;border-radius:50%;background:rgba(0,0,0,.5);color:#fff;font-size:16px;cursor:pointer}
 .dock{position:fixed;left:0;right:0;bottom:0;z-index:5}
 .save,.toast{max-width:456px;margin:0 auto 10px;border-radius:14px;box-shadow:0 8px 24px rgba(0,0,0,.18)}
@@ -191,9 +193,10 @@ nav a.on{color:var(--ink);font-weight:600}
 <p class="hint" id="cardNote"></p>
 </section>
 <section class="card" id="upCard" hidden>
-<div class="ch"><h2>上传照片</h2></div>
-<label class="drop"><span data-ic="image"></span><b>从手机相册选择</b><span>可以一次选多张</span><input type="file" id="files" accept="image/*" multiple></label>
-<p class="hint" id="upMsg">照片会先在手机上缩小到 320×240 再上传，每张只有几十 KB；iPhone 的 HEIC 照片也会自动转成 JPG。</p>
+<div class="ch"><h2>上传照片、动图和视频</h2></div>
+<label class="drop"><span data-ic="image"></span><b>从手机相册选择</b><span>照片、GIF 动图和视频都可以，一次能选多个</span><input type="file" id="files" accept="image/*,video/*" multiple></label>
+<div class="bar" id="upBar" hidden><i></i></div>
+<p class="hint" id="upMsg">照片会先在手机上缩小到 320×240 再上传，每张只有几十 KB；iPhone 的 HEIC 照片也会自动转成 JPG。<br>视频会在手机上转成板子能放的格式（320×240、每秒 15 帧、没有声音），最长 5 分钟，1 分钟大约 10 MB。GIF 动图原样上传，最大 640×480。</p>
 </section>
 <section class="card" id="phCard" hidden>
 <div class="ch"><h2 id="phCount"></h2><span class="meta">点 × 删除</span></div>
@@ -521,8 +524,11 @@ function fmt(b){return b>=1073741824?(b/1073741824).toFixed(1)+' GB':Math.round(
 // 一格缩略图：src 是 local 或 bing，cap 是必应图片的说明，del 为 false 时不能删
 function thumb(grid,src,p,cap,del){
  const d=document.createElement('div');d.className='ph';
- if(p.s===undefined||p.s<=1048576){const i=document.createElement('img');i.loading='lazy';i.src='/album/file?src='+src+'&name='+encodeURIComponent(p.n);i.alt=cap||p.n;if(cap)i.title=cap;d.appendChild(i);}
+ const video=/\.avi$/i.test(p.n), gif=/\.gif$/i.test(p.n);
+ if(video){d.classList.add('v');d.textContent='▶\n'+p.n+(p.s?'\n'+(p.s/1048576).toFixed(1)+' MB':'');}  // 浏览器放不了 MJPEG，只显示名字
+ else if(p.s===undefined||p.s<=1048576){const i=document.createElement('img');i.loading='lazy';i.src='/album/file?src='+src+'&name='+encodeURIComponent(p.n);i.alt=cap||p.n;if(cap)i.title=cap;d.appendChild(i);}
  else d.textContent=p.n+'（原图，不显示缩略图）';
+ if(video||gif){const t=document.createElement('span');t.className='tag';t.textContent=video?'视频':'GIF';d.appendChild(t);}
  if(cap){const c=document.createElement('span');c.className='cap';c.textContent=cap;d.appendChild(c);}
  if(del){
   const b=document.createElement('button');b.type='button';b.textContent='×';b.setAttribute('aria-label','删除 '+(cap||p.n));
@@ -537,7 +543,8 @@ async function loadAlbum(){
  try{j=await (await fetch('/album/list')).json();}catch(e){$('cardNote').textContent='读取失败，刷新页面再试';return;}
  const ok=j.card==='ok', bing=j.bing||[], mem=j.bing_mem;
  $('upCard').hidden=$('phCard').hidden=$('cardBar').hidden=!ok;
- $('albumSum').textContent=ok?j.photos.length+' 张照片 · 必应 '+bing.length+' 张':j.card==='noslot'?'这块板子没有 TF 卡槽':'没有检测到 TF 卡';
+ const nv=ok?j.photos.filter(p=>/\.avi$/i.test(p.n)).length:0;
+ $('albumSum').textContent=ok?(j.photos.length-nv)+' 张照片'+(nv?' · '+nv+' 个视频':'')+' · 必应 '+bing.length+' 张':j.card==='noslot'?'这块板子没有 TF 卡槽':'没有检测到 TF 卡';
  $('albumSub').textContent=ok?'TF 卡剩余 '+fmt(j.total-j.used):mem?'只放当天的必应每日一图':'照片存在 TF 卡的 photos 文件夹里';
  // 必应每日一图单独一组
  const bg=$('bingGrid');bg.textContent='';
@@ -554,8 +561,8 @@ async function loadAlbum(){
  if(!ok){$('cardUse').textContent='';$('cardNote').textContent='没有检测到 TF 卡。请插入 FAT32 格式的 TF 卡（32GB 以内的卡出厂就是 FAT32），插好后刷新这个页面。';return;}
  $('cardUse').textContent='已用 '+fmt(j.used)+' / 共 '+fmt(j.total);
  $('cardBar').firstChild.style.width=Math.max(1,Math.round(j.used*100/j.total))+'%';
- $('cardNote').textContent='照片在卡里的 photos 文件夹，支持 JPG 和 PNG，也可以拔下卡用电脑管理。'+(j.failed?'有 '+j.failed+' 张照片读不出来（可能是 HEIC 或渐进式 JPEG），可以删掉后在这里重新上传。':'');
- $('phCount').textContent='自己的照片（'+j.photos.length+' 张）';
+ $('cardNote').textContent='照片、动图和视频都在卡里的 photos 文件夹，支持 JPG、PNG、GIF 和 MJPEG 视频（.avi），也可以拔下卡用电脑管理。'+(j.failed?'有 '+j.failed+' 个文件读不出来（可能是 HEIC、渐进式 JPEG 或太大的 GIF），可以删掉后在这里重新上传。':'');
+ $('phCount').textContent='自己的照片和视频（'+j.photos.length+' 个）';
  const grid=$('grid');grid.textContent='';
  for(const p of j.photos)thumb(grid,'local',p,'',true);
 }
@@ -572,19 +579,91 @@ async function shrink(file){
  const [c,x]=canvas(tw,th);x.fillStyle='#000';x.fillRect(0,0,tw,th);x.drawImage(cur,0,0,tw,th);
  return await new Promise(r=>c.toBlob(r,'image/jpeg',0.88));
 }
+// 中文的出错原因，显示在上传结果里
+function err(m){const e=new Error(m);e.cn=m;return e;}
+const VFPS=15, VMAX=300;  // 视频转成每秒 15 帧，最长 5 分钟
+const isVideo=f=>f.type.startsWith('video/')||/\.(mp4|mov|m4v|webm|mkv|3gp|avi)$/i.test(f.name);
+const isGif=f=>f.type==='image/gif'||/\.gif$/i.test(f.name);
+// GIF 原样上传，板子最大放 640x480、8 MB
+async function checkGif(f){
+ if(f.size>8388608)throw err('动图超过 8 MB');
+ const i=new Image(),u=URL.createObjectURL(f);
+ try{await new Promise((ok,no)=>{i.onload=ok;i.onerror=()=>no(err('浏览器打不开这个动图'));i.src=u;});}finally{URL.revokeObjectURL(u);}
+ if(i.naturalWidth*i.naturalHeight>640*480)throw err('动图太大（'+i.naturalWidth+'×'+i.naturalHeight+'，最大 640×480）');
+}
+function seek(v,t){return new Promise((ok,no)=>{const tm=setTimeout(()=>no(err('视频跳转超时')),8000);v.onseeked=()=>{clearTimeout(tm);ok();};v.currentTime=t;});}
+// 视频转成 MJPEG：在手机浏览器里一帧一帧地跳过去，画到 320x240 以内的画布上，存成 JPG
+async function videoToAvi(file,onp){
+ const v=document.createElement('video'),u=URL.createObjectURL(file);
+ v.muted=true;v.playsInline=true;v.preload='auto';v.src=u;
+ let lock=null;try{lock=await navigator.wakeLock.request('screen');}catch(e){}  // 转换时别锁屏
+ try{
+  await new Promise((ok,no)=>{v.onloadeddata=ok;v.onerror=()=>no(err('浏览器打不开这个视频'));});
+  try{await v.play();v.pause();}catch(e){}  // iPhone 要先播一下，跳到的帧才画得出来
+  const W=v.videoWidth,H=v.videoHeight,dur=Math.min(v.duration,VMAX);
+  if(!W||!(dur>0))throw err('读不出视频的尺寸或长度');
+  const s=Math.min(1,320/W,240/H),w=Math.max(2,Math.round(W*s)),h=Math.max(2,Math.round(H*s));
+  const [c,x]=canvas(w,h),n=Math.max(1,Math.floor(dur*VFPS)),frames=[];
+  for(let i=0;i<n;i++){
+   await seek(v,(i+.5)/VFPS);
+   x.drawImage(v,0,0,w,h);
+   frames.push(await new Promise(r=>c.toBlob(r,'image/jpeg',.7)));
+   onp((i+1)/n);
+  }
+  return {blob:aviBlob(frames,w,h,VFPS),cut:v.duration>VMAX};
+ }finally{URL.revokeObjectURL(u);if(lock)lock.release().catch(()=>{});}
+}
+// 写 AVI 文件：文件头 + 每帧一个 00dc 块 + idx1 索引，电脑上的播放器也能放
+function aviBlob(frames,w,h,fps){
+ const n=frames.length;let max=0,movi=4;
+ for(const f of frames){max=Math.max(max,f.size);movi+=8+f.size+(f.size&1);}
+ const b=new DataView(new ArrayBuffer(224)),idx=new DataView(new ArrayBuffer(8+n*16));let p=0;
+ const s=(v,t)=>{for(const ch of t)v.setUint8(p++,ch.charCodeAt(0));},u32=(v,x)=>{v.setUint32(p,x,true);p+=4;},u16=(v,x)=>{v.setUint16(p,x,true);p+=2;};
+ s(b,'RIFF');u32(b,4+200+8+movi+8+n*16);s(b,'AVI ');
+ s(b,'LIST');u32(b,192);s(b,'hdrl');
+ s(b,'avih');u32(b,56);for(const x of [Math.round(1e6/fps),max*fps,0,0x10,n,0,1,max,w,h,0,0,0,0])u32(b,x);
+ s(b,'LIST');u32(b,116);s(b,'strl');
+ s(b,'strh');u32(b,56);s(b,'vids');s(b,'MJPG');u32(b,0);u16(b,0);u16(b,0);for(const x of [0,1,fps,0,n,max,0xFFFFFFFF,0])u32(b,x);u16(b,0);u16(b,0);u16(b,w);u16(b,h);
+ s(b,'strf');u32(b,40);u32(b,40);u32(b,w);u32(b,h);u16(b,1);u16(b,24);s(b,'MJPG');for(const x of [w*h*3,0,0,0,0])u32(b,x);
+ s(b,'LIST');u32(b,movi);s(b,'movi');
+ const parts=[b.buffer];p=0;s(idx,'idx1');u32(idx,n*16);let off=4;
+ for(const f of frames){
+  const hd=new DataView(new ArrayBuffer(8));hd.setUint32(0,0x63643030,true);hd.setUint32(4,f.size,true);  // "00dc"
+  parts.push(hd.buffer,f);if(f.size&1)parts.push(new Uint8Array(1));
+  s(idx,'00dc');u32(idx,0x10);u32(idx,off);u32(idx,f.size);off+=8+f.size+(f.size&1);
+ }
+ parts.push(idx.buffer);
+ return new Blob(parts,{type:'video/x-msvideo'});
+}
+// 上传一个文件，onp 收到上传进度（0～1）
+function upload(blob,name,onp){
+ return new Promise((ok,no)=>{
+  const fd=new FormData();fd.append('photo',blob,name);
+  const x=new XMLHttpRequest();x.open('POST','/album/upload');
+  x.upload.onprogress=e=>{if(e.lengthComputable)onp(e.loaded/e.total);};
+  x.onload=()=>{try{ok(JSON.parse(x.responseText));}catch(e){no(err('板子没有回应'));}};
+  x.onerror=()=>no(err('网络断了'));
+  x.send(fd);
+ });
+}
 $('files').onchange=async()=>{
  const files=[...$('files').files];if(!files.length)return;
- let ok=0;const bad=[];
+ const show=(t,p)=>{$('upMsg').textContent=t;$('upBar').hidden=p===undefined;if(p!==undefined)$('upBar').firstChild.style.width=Math.round(p*100)+'%';};
+ let ok=0;const bad=[],cut=[];
  for(let i=0;i<files.length;i++){
-  $('upMsg').textContent='正在上传 '+(i+1)+' / '+files.length+'…';
+  const f=files[i],tag=files.length>1?'（'+(i+1)+' / '+files.length+'）':'',stem=f.name.replace(/\.[^.]*$/,'');
   try{
-   const blob=await shrink(files[i]);
-   const fd=new FormData();fd.append('photo',blob,files[i].name.replace(/\.[^.]*$/,'')+'.jpg');
-   const j=await post('album/upload',fd);
-   if(j.ok)ok++;else bad.push(files[i].name+'（'+j.error+'）');
-  }catch(e){bad.push(files[i].name+'（浏览器打不开这张图）');}
+   let blob,name;
+   if(isVideo(f)){
+    const r=await videoToAvi(f,p=>show('正在转换视频'+tag+' '+Math.round(p*100)+'%，请不要锁屏或离开这个页面…',p));
+    blob=r.blob;name=stem+'.avi';if(r.cut)cut.push(f.name);
+   }else if(isGif(f)){await checkGif(f);blob=f;name=stem+'.gif';}
+   else{show('正在上传'+tag+'…');blob=await shrink(f);name=stem+'.jpg';}
+   const j=await upload(blob,name,p=>{if(blob.size>262144)show('正在上传'+tag+' '+Math.round(p*100)+'%…',p);});
+   if(j.ok)ok++;else bad.push(f.name+'（'+j.error+'）');
+  }catch(e){bad.push(f.name+'（'+(e.cn||'浏览器打不开这个文件')+'）');}
  }
- $('upMsg').textContent='上传了 '+ok+' 张'+(bad.length?'，失败：'+bad.join('，'):'');
+ show('上传了 '+ok+' 个'+(cut.length?'，'+cut.join('、')+' 超过 5 分钟，只保留了前 5 分钟':'')+(bad.length?'，失败：'+bad.join('，'):''));
  $('files').value='';loadAlbum();
 };
 

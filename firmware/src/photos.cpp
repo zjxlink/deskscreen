@@ -10,18 +10,23 @@
 #include <esp_heap_caps.h>
 
 #include <algorithm>
+#include <new>
 #include <vector>
 
 #include "album.h"
+#include "avi.h"
 #include "bing.h"
+#include "gif.h"
 
 static constexpr const char *kTmp = "/photos/.upload.tmp";
 static constexpr const char *kBingTmp = "/bing/.download.tmp";
 static constexpr uint32_t kMountRetryMs = 10000;       // 没插卡时多久再试一次
-static constexpr size_t kMaxFileBytes = 8 * 1024 * 1024;  // 再大的照片就不读了，免得 PSRAM 不够
+static constexpr size_t kMaxFileBytes = 8 * 1024 * 1024;  // 再大的照片、动图就不读了，免得 PSRAM 不够
 static constexpr uint64_t kMinFreeBytes = 1024 * 1024;    // 卡快满时不再接收上传和下载
 static constexpr int kMaxTries = 5;  // 一次最多试几张，都读不出来就等下一次
 static constexpr size_t kCaptionMax = 160;
+static constexpr int kVideoMaxBadFrames = 10;     // 视频开头连着这么多帧解不出来就跳过
+static constexpr size_t kVideoMaxFrameBytes = 512 * 1024;  // 一帧 JPG 再大就不是正常的 320x240 视频了
 
 struct PhotoFile {
   String name;
@@ -51,6 +56,8 @@ static volatile bool use_bing = true;
 static volatile bool busy = false;
 static volatile bool frame_ready = false;
 static volatile int failed = 0;
+static volatile bool stop_req = false;  // 离开相册页时停止放动图、视频
+static volatile uint32_t gif_min_ms = 10000;
 
 // 没插卡时内存里的当天必应图片
 static uint8_t *mem_data = nullptr;
@@ -61,6 +68,7 @@ static char mem_caption[kCaptionMax] = "";
 // 两帧轮流用：一帧在屏幕上显示，另一帧给后台解码
 static LGFX_Sprite frames[2];
 static char captions[2][kCaptionMax];
+static bool animated[2];  // 这一帧是动图或视频里的
 static int frame_shown = -1;
 static int frame_new = 0;
 
@@ -194,9 +202,11 @@ static bool is_png(String name) {
   return name.endsWith(".png");
 }
 
-// 选下一张并读进内存（拿着锁调用）。没有可放的图时返回 nullptr 且 name 为空
-static uint8_t *pick_locked(String &name, String &caption, size_t &len, int &src_out) {
+// 选下一张并读进内存（拿着锁调用）。没有可放的图时返回 nullptr 且 name 为空。
+// 视频边放边读，不读进内存，返回 nullptr，name 和 src_out 照常给出
+static uint8_t *pick_locked(String &name, String &caption, size_t &len, int &src_out, MediaKind &kind) {
   name = "";
+  kind = MediaKind::Still;
   bool card = mount_locked();
   bool scanned[2] = {false, false};
   bool reshuffle = order_shuffle != want_shuffle;  // 扫描时会更新 order_shuffle，先记下来
@@ -244,7 +254,164 @@ static uint8_t *pick_locked(String &name, String &caption, size_t &len, int &src
   if (k < 0) return nullptr;
   name = s.files[k].name;
   caption = s.files[k].caption;
+  kind = album_media_kind(name.c_str());
+  if (kind == MediaKind::Video) return nullptr;
   return read_locked(path_of(s, name), len);
+}
+
+static int back_frame() {
+  return frame_shown == 0 ? 1 : 0;
+}
+
+// 等屏幕取走上一帧；要停止时返回 false
+static bool wait_taken() {
+  while (frame_ready) {
+    if (stop_req) return false;
+    vTaskDelay(pdMS_TO_TICKS(2));
+  }
+  return !stop_req;
+}
+
+// 等到 due（毫秒时间），要停止时提前返回
+static void wait_until(uint32_t due) {
+  for (int32_t wait; !stop_req && (wait = (int32_t)(due - millis())) > 0;) vTaskDelay(pdMS_TO_TICKS(wait > 10 ? 10 : wait));
+}
+
+// 等到 due 再把画好的一帧交出去。慢了就马上交，并且不再追赶落下的时间
+static void publish(int back, const char *caption, bool anim, uint32_t &due) {
+  wait_until(due);
+  if ((int32_t)(millis() - due) > 200) due = millis();
+  strlcpy(captions[back], caption, kCaptionMax);
+  animated[back] = anim;
+  frame_new = back;
+  frame_ready = true;
+}
+
+// 精灵里的像素是给 SPI 屏幕用的高低字节对调格式，LVGL 要的是正常字节序
+static void swap_bytes(LGFX_Sprite &spr) {
+  auto *px = (uint16_t *)spr.getBuffer();
+  for (int i = 0; i < SCREEN_W * SCREEN_H; i++) px[i] = __builtin_bswap16(px[i]);
+}
+
+// 解码一张 JPG/PNG 到精灵，缩小到能完整放进屏幕（不放大），居中
+static bool draw_still(LGFX_Sprite &spr, const uint8_t *data, size_t len, bool png) {
+  spr.fillScreen(TFT_BLACK);
+  bool ok = png ? spr.drawPng(data, len, 0, 0, SCREEN_W, SCREEN_H, 0, 0, 0.0f, 0.0f, lgfx::datum_t::middle_center)
+                : spr.drawJpg(data, len, 0, 0, SCREEN_W, SCREEN_H, 0, 0, 0.0f, 0.0f, lgfx::datum_t::middle_center);
+  if (ok) swap_bytes(spr);
+  return ok;
+}
+
+static void *psram_alloc(size_t n) {
+  return heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+}
+
+// 放一个 GIF：至少放 gif_min_ms，不够一遍时放完这一遍。只有一帧的 GIF 当照片放。
+// 打不开时返回 false
+static bool play_gif(const uint8_t *data, size_t len) {
+  static GifDecoder *gif = nullptr;  // LZW 表有十几 KB，放在 PSRAM，一直留着
+  if (!gif) {
+    void *mem = psram_alloc(sizeof(GifDecoder));
+    if (!mem) return false;
+    gif = new (mem) GifDecoder();
+  }
+  if (!gif->open(data, len)) return false;
+  size_t n = (size_t)gif->width() * gif->height();
+  auto *canvas = (uint16_t *)psram_alloc(n * 2);
+  auto *prev = (uint16_t *)psram_alloc(n * 2);  // 申请不到也能放，只是处理方式 3 当成保留
+  if (!canvas) {
+    free(prev);
+    return false;
+  }
+  uint32_t start = millis(), due = start;
+  bool ok = false;
+  while (wait_taken()) {
+    int ms = gif->next_frame(canvas, prev);
+    if (ms < 0) {
+      if (!ok) break;  // 第一帧就坏了
+      wait_until(due);  // 最后一帧也放够它的时间
+      if (stop_req || millis() - start >= gif_min_ms) break;
+      gif->rewind();
+      continue;
+    }
+    int back = back_frame();
+    media_blit_fit(canvas, gif->width(), gif->height(), (uint16_t *)frames[back].getBuffer(), SCREEN_W, SCREEN_H);
+    // 只有一帧的 GIF 当照片放，交给主循环按间隔换下一张
+    bool single = !ok && !gif->has_more();
+    ok = true;
+    publish(back, "", !single, due);
+    if (single) break;
+    due += ms;
+  }
+  free(canvas);
+  free(prev);
+  return ok;
+}
+
+static size_t avi_read(void *ctx, uint32_t off, uint8_t *buf, size_t len) {
+  File &f = *(File *)ctx;
+  if (!f.seek(off)) return 0;
+  size_t got = 0;
+  while (got < len) {
+    int n = f.read(buf + got, len - got);
+    if (n <= 0) break;
+    got += n;
+  }
+  return got;
+}
+
+// 边读边放一个 MJPEG 视频，放到结尾或者被停止。打不开或者开头的帧都解不出来时返回 false
+static bool play_video(const String &path) {
+  File f;
+  AviReader avi;
+  xSemaphoreTake(lock, portMAX_DELAY);
+  if (mounted) f = SD_MMC.open(path);
+  bool ok = f && avi.open(avi_read, &f, f.size());
+  xSemaphoreGive(lock);
+  if (!ok) {
+    xSemaphoreTake(lock, portMAX_DELAY);
+    if (f) f.close();
+    xSemaphoreGive(lock);
+    log_w("can't open video %s", path.c_str());
+    return false;
+  }
+  static uint8_t *buf = nullptr;  // 一帧 JPG，按最大的一帧留着
+  static size_t buf_size = 0;
+  uint32_t interval = avi.frame_us() / 1000, due = millis();
+  int shown = 0, bad = 0;
+  while (wait_taken()) {
+    uint32_t off, len;
+    xSemaphoreTake(lock, portMAX_DELAY);
+    bool more = avi.next(off, len) && len <= kVideoMaxFrameBytes;
+    if (more && len > buf_size) {
+      free(buf);
+      buf_size = len + 16 * 1024;
+      buf = (uint8_t *)psram_alloc(buf_size);
+      if (!buf) buf_size = 0;
+    }
+    more = more && buf && avi_read(&f, off, buf, len) == len;
+    xSemaphoreGive(lock);
+    if (!more) break;
+    if ((int32_t)(millis() - due) > (int32_t)interval && shown > 0) {
+      due += interval;  // 解码跟不上时跳过这一帧
+      continue;
+    }
+    int back = back_frame();
+    if (!draw_still(frames[back], buf, len, false)) {
+      if (shown == 0 && ++bad >= kVideoMaxBadFrames) break;
+      due += interval;
+      continue;
+    }
+    publish(back, "", true, due);
+    due += interval;
+    shown++;
+  }
+  if (shown > 0) wait_until(due);  // 最后一帧也放够它的时间
+  xSemaphoreTake(lock, portMAX_DELAY);
+  f.close();
+  xSemaphoreGive(lock);
+  if (shown == 0) log_w("can't decode video %s", path.c_str());
+  return shown > 0;
 }
 
 static void decode_next() {
@@ -252,36 +419,36 @@ static void decode_next() {
     String name, caption;
     size_t len = 0;
     int src = -1;
+    MediaKind kind;
     xSemaphoreTake(lock, portMAX_DELAY);
-    uint8_t *data = pick_locked(name, caption, len, src);
+    uint8_t *data = pick_locked(name, caption, len, src, kind);
     xSemaphoreGive(lock);
     if (name.isEmpty()) return;  // 没有可放的图
     last_source = src;
+    if (kind == MediaKind::Video) {
+      if (play_video(path_of(sources[src], name)) || stop_req) return;
+      failed = failed + 1;
+      continue;
+    }
     if (!data) {
       failed = failed + 1;
       continue;
     }
-
-    int back = frame_shown == 0 ? 1 : 0;
-    LGFX_Sprite &spr = frames[back];
-    spr.fillScreen(TFT_BLACK);
-    // 缩小到能完整放进屏幕（不放大），居中
-    bool ok = is_png(name)
-                  ? spr.drawPng(data, len, 0, 0, SCREEN_W, SCREEN_H, 0, 0, 0.0f, 0.0f, lgfx::datum_t::middle_center)
-                  : spr.drawJpg(data, len, 0, 0, SCREEN_W, SCREEN_H, 0, 0, 0.0f, 0.0f, lgfx::datum_t::middle_center);
-    free(data);
-    if (!ok) {
-      log_w("can't decode %s", name.c_str());
-      failed = failed + 1;
-      continue;
+    bool ok;
+    if (kind == MediaKind::Gif) {
+      ok = play_gif(data, len);
+    } else {
+      int back = back_frame();
+      ok = draw_still(frames[back], data, len, is_png(name));
+      if (ok) {
+        uint32_t now = millis();
+        publish(back, caption.c_str(), false, now);
+      }
     }
-    // 精灵里的像素是给 SPI 屏幕用的高低字节对调格式，LVGL 要的是正常字节序
-    auto *px = (uint16_t *)spr.getBuffer();
-    for (int i = 0; i < SCREEN_W * SCREEN_H; i++) px[i] = __builtin_bswap16(px[i]);
-    strlcpy(captions[back], caption.c_str(), kCaptionMax);
-    frame_new = back;
-    frame_ready = true;
-    return;
+    free(data);
+    if (ok || stop_req) return;
+    log_w("can't decode %s", name.c_str());
+    failed = failed + 1;
   }
 }
 
@@ -343,22 +510,29 @@ void photos_set_sources(bool local, bool bing) {
   use_bing = bing;
 }
 
-void photos_request_next(bool shuffle) {
+void photos_request_next(bool shuffle, uint32_t gif_ms) {
   if (!task || busy || frame_ready) return;
   want_shuffle = shuffle;
+  gif_min_ms = gif_ms;
+  stop_req = false;
   busy = true;
   xTaskNotifyGive(task);
+}
+
+void photos_stop() {
+  if (busy) stop_req = true;
 }
 
 bool photos_busy() {
   return busy;
 }
 
-bool photos_take_frame(const uint16_t *&px, const char *&caption) {
+bool photos_take_frame(const uint16_t *&px, const char *&caption, bool &anim) {
   if (!frame_ready) return false;
   frame_shown = frame_new;
   px = (const uint16_t *)frames[frame_shown].getBuffer();
   caption = captions[frame_shown];
+  anim = animated[frame_shown];
   frame_ready = false;
   return true;
 }
@@ -438,9 +612,9 @@ bool photos_upload_end(String &saved_name) {
   // saved_name 进来时是浏览器给的文件名，重名时加 _2、_3……
   char base[64];
   album_safe_name(saved_name.c_str(), String(millis()).c_str(), base, sizeof(base));
-  String stem = String(base).substring(0, strlen(base) - 4);
   String name = base;
-  for (int i = 2; SD_MMC.exists(path_of(local_src(), name)) && i < 1000; i++) name = stem + "_" + i + ".jpg";
+  String stem = name.substring(0, name.length() - 4), ext = name.substring(name.length() - 4);
+  for (int i = 2; SD_MMC.exists(path_of(local_src(), name)) && i < 1000; i++) name = stem + "_" + i + ext;
   bool ok = SD_MMC.rename(kTmp, path_of(local_src(), name));
   if (!ok) SD_MMC.remove(kTmp);
   local_src().dirty = true;
@@ -601,9 +775,10 @@ void photos_begin() {}
 bool photos_supported() { return false; }
 PhotoStatus photos_status() { return {PhotoCard::NoSlot, 0, 0, 0, 0}; }
 void photos_set_sources(bool, bool) {}
-void photos_request_next(bool) {}
+void photos_request_next(bool, uint32_t) {}
 bool photos_busy() { return false; }
-bool photos_take_frame(const uint16_t *&, const char *&) { return false; }
+void photos_stop() {}
+bool photos_take_frame(const uint16_t *&, const char *&, bool &) { return false; }
 String photos_list_json() { return "{\"card\":\"noslot\"}"; }
 bool photos_upload_begin(const String &) { return false; }
 bool photos_upload_write(const uint8_t *, size_t) { return false; }
