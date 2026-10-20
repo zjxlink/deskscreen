@@ -101,6 +101,19 @@ static lv_obj_t *alert_title;
 static lv_obj_t *alert_body;
 static lv_obj_t *alert_foot;
 
+// 快捷设置页
+static lv_obj_t *scr_quick;
+static lv_obj_t *quick_close;
+static lv_obj_t *quick_minus;
+static lv_obj_t *quick_plus;
+static lv_obj_t *lbl_quick_bright;
+static lv_obj_t *quick_sound;
+static lv_obj_t *quick_away;
+static lv_obj_t *lbl_quick_away;
+static lv_obj_t *quick_qr;
+static lv_obj_t *lbl_quick_url;
+static String quick_url;
+
 static lv_obj_t *make_screen() {
   lv_obj_t *scr = lv_obj_create(nullptr);
   lv_obj_set_style_bg_color(scr, COLOR_BG, 0);
@@ -398,6 +411,139 @@ static void build_alert() {
   lv_obj_align(alert_foot, LV_ALIGN_BOTTOM_MID, 0, -8);
 }
 
+// 圆角按钮，里面一个符号
+static lv_obj_t *make_button(lv_obj_t *parent, const char *symbol) {
+  lv_obj_t *b = lv_obj_create(parent);
+  lv_obj_set_size(b, 44, 36);
+  lv_obj_set_style_radius(b, 8, 0);
+  lv_obj_set_style_border_width(b, 0, 0);
+  lv_obj_set_style_pad_all(b, 0, 0);
+  lv_obj_set_style_bg_color(b, COLOR_FLAT, 0);
+  lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_t *l = make_label(b, &lv_font_montserrat_20, COLOR_TEXT);
+  lv_label_set_text(l, symbol);
+  lv_obj_center(l);
+  return b;
+}
+
+// 开关：打开时绿色、圆点在右边
+static lv_obj_t *make_toggle(lv_obj_t *parent) {
+  lv_obj_t *t = lv_obj_create(parent);
+  lv_obj_set_size(t, 56, 30);
+  lv_obj_set_style_radius(t, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_border_width(t, 0, 0);
+  lv_obj_set_style_pad_all(t, 0, 0);
+  lv_obj_clear_flag(t, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_t *knob = lv_obj_create(t);
+  lv_obj_set_size(knob, 24, 24);
+  lv_obj_set_style_radius(knob, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_border_width(knob, 0, 0);
+  lv_obj_set_style_bg_color(knob, lv_color_hex(0xFFFFFF), 0);
+  lv_obj_set_style_pad_all(knob, 0, 0);
+  lv_obj_clear_flag(knob, LV_OBJ_FLAG_SCROLLABLE);
+  return t;
+}
+
+static void set_toggle(lv_obj_t *t, bool on, bool enabled = true) {
+  lv_obj_set_style_bg_color(t, on && enabled ? COLOR_OK : COLOR_FLAT, 0);
+  lv_obj_set_style_opa(t, enabled ? LV_OPA_COVER : LV_OPA_40, 0);
+  lv_obj_align(lv_obj_get_child(t, 0), on ? LV_ALIGN_RIGHT_MID : LV_ALIGN_LEFT_MID, on ? -3 : 3, 0);
+}
+
+static void build_quick() {
+  scr_quick = make_screen();
+
+  lv_obj_t *title = make_label(scr_quick, &font_cn_16, COLOR_SUBTLE);
+  lv_label_set_text(title, "快捷设置");
+  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 12, 10);
+
+  quick_close = make_button(scr_quick, LV_SYMBOL_CLOSE);
+  lv_obj_align(quick_close, LV_ALIGN_TOP_RIGHT, -8, 4);
+
+  // 左边：二维码
+  // 二维码外面留一圈白边，手机才扫得出来
+  lv_obj_t *qr_box = lv_obj_create(scr_quick);
+  lv_obj_set_size(qr_box, 124, 124);
+  lv_obj_set_style_radius(qr_box, 4, 0);
+  lv_obj_set_style_border_width(qr_box, 0, 0);
+  lv_obj_set_style_pad_all(qr_box, 0, 0);
+  lv_obj_set_style_bg_color(qr_box, lv_color_hex(0xFFFFFF), 0);
+  lv_obj_clear_flag(qr_box, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_align(qr_box, LV_ALIGN_TOP_LEFT, 12, 52);
+  quick_qr = lv_qrcode_create(qr_box, 112, lv_color_hex(0x000000), lv_color_hex(0xFFFFFF));
+  lv_obj_center(quick_qr);
+  lbl_quick_url = make_label(scr_quick, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_set_width(lbl_quick_url, 140);
+  lv_obj_set_style_text_align(lbl_quick_url, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(lbl_quick_url, LV_ALIGN_TOP_LEFT, 4, 186);
+
+  // 右边：三行设置
+  const int x = 158;
+  lv_obj_t *l = make_label(scr_quick, &font_cn_16, COLOR_TEXT);
+  lv_label_set_text(l, "亮度");
+  lv_obj_align(l, LV_ALIGN_TOP_LEFT, x, 52);
+  quick_minus = make_button(scr_quick, LV_SYMBOL_MINUS);
+  lv_obj_align(quick_minus, LV_ALIGN_TOP_LEFT, x, 76);
+  lbl_quick_bright = make_label(scr_quick, &lv_font_montserrat_20, COLOR_TEXT);
+  lv_obj_set_width(lbl_quick_bright, 62);
+  lv_obj_set_style_text_align(lbl_quick_bright, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(lbl_quick_bright, LV_ALIGN_TOP_LEFT, x + 44, 83);
+  quick_plus = make_button(scr_quick, LV_SYMBOL_PLUS);
+  lv_obj_align(quick_plus, LV_ALIGN_TOP_LEFT, x + 106, 76);
+
+  l = make_label(scr_quick, &font_cn_16, COLOR_TEXT);
+  lv_label_set_text(l, "提示音");
+  lv_obj_align(l, LV_ALIGN_TOP_LEFT, x, 140);
+  quick_sound = make_toggle(scr_quick);
+  lv_obj_align(quick_sound, LV_ALIGN_TOP_RIGHT, -10, 134);
+
+  lbl_quick_away = make_label(scr_quick, &font_cn_16, COLOR_TEXT);
+  lv_obj_align(lbl_quick_away, LV_ALIGN_TOP_LEFT, x, 190);
+  quick_away = make_toggle(scr_quick);
+  lv_obj_align(quick_away, LV_ALIGN_TOP_RIGHT, -10, 184);
+}
+
+void ui_show_quick(const QuickState &q) {
+  lv_label_set_text_fmt(lbl_quick_bright, "%d%%", (q.brightness * 100 + 127) / 255);
+  set_toggle(quick_sound, q.sound_on);
+  set_toggle(quick_away, q.away_off, q.has_dock);
+  lv_label_set_text(lbl_quick_away, q.has_dock ? "没人熄屏" : "没人熄屏\n#8B949E 未插底座#");
+  lv_label_set_recolor(lbl_quick_away, true);
+  if (strcmp(quick_url.c_str(), q.url) != 0) {
+    quick_url = q.url;
+    if (quick_url.length()) {
+      lv_qrcode_update(quick_qr, quick_url.c_str(), quick_url.length());
+      lv_obj_clear_flag(lv_obj_get_parent(quick_qr), LV_OBJ_FLAG_HIDDEN);
+      lv_label_set_text_fmt(lbl_quick_url, "扫码打开完整设置\n%s", quick_url.c_str() + 7);  // 去掉 http://
+    } else {
+      lv_obj_add_flag(lv_obj_get_parent(quick_qr), LV_OBJ_FLAG_HIDDEN);
+      lv_label_set_text(lbl_quick_url, "还没连上 WiFi");
+    }
+  }
+  if (lv_scr_act() != scr_quick) screen_load(scr_quick, false);
+}
+
+// 按钮四周各放宽 8 像素
+static bool hit(lv_obj_t *o, int x, int y) {
+  lv_area_t a;
+  lv_obj_get_coords(o, &a);
+  return x >= a.x1 - 8 && x <= a.x2 + 8 && y >= a.y1 - 8 && y <= a.y2 + 8;
+}
+
+QuickHit ui_quick_hit(int x, int y) {
+  lv_obj_update_layout(scr_quick);
+  if (hit(quick_close, x, y)) return QuickHit::Close;
+  if (hit(quick_minus, x, y)) return QuickHit::BrightDown;
+  if (hit(quick_plus, x, y)) return QuickHit::BrightUp;
+  // 开关那一整行都算
+  lv_area_t a;
+  lv_obj_get_coords(quick_sound, &a);
+  if (x >= 150 && y >= a.y1 - 12 && y <= a.y2 + 12) return QuickHit::Sound;
+  lv_obj_get_coords(quick_away, &a);
+  if (x >= 150 && y >= a.y1 - 12 && y <= a.y2 + 12) return QuickHit::Away;
+  return QuickHit::None;
+}
+
 static void build_pomodoro() {
   lv_obj_t *scr = make_screen();
   scr_pages[PAGE_POMODORO] = scr;
@@ -451,6 +597,7 @@ void ui_init() {
   build_pet();
   build_pomodoro();
   build_alert();
+  build_quick();
   Pomodoro idle;
   ui_set_pomodoro(idle, 0, nullptr, 0);
 }

@@ -45,6 +45,22 @@ void ui_pet_anim(int bob, int zzz);
 enum class AlertIcon { Message, Sit, Water, Alarm, Climate };
 void ui_show_alert(AlertIcon icon, const char *title, const char *body, const char *foot);
 
+// 快捷设置页（长按屏幕打开）：亮度、提示音、没人熄屏，以及打开网页设置的二维码
+struct QuickState {
+  uint8_t brightness;  // 白天亮度 10~255
+  bool sound_on;
+  bool has_dock;       // 插了 SENSOR 底座，「没人熄屏」才有用
+  bool away_off;
+  const char *url;     // 网页设置地址，空字符串表示还没连上 WiFi
+};
+enum class QuickHit { None, Close, BrightDown, BrightUp, Sound, Away };
+
+// 显示快捷设置页，或者在已经显示时刷新上面的状态
+void ui_show_quick(const QuickState &q);
+
+// 快捷设置页上点到了什么（按钮周围留了一圈余量，好点中）
+QuickHit ui_quick_hit(int x, int y);
+
 // 触摸点是否落在番茄钟的圆环上（圆环居中，屏幕上下或左右翻转时判断结果也不变）
 bool ui_pomodoro_hit(int x, int y);
 void ui_set_wifi(bool connected);
