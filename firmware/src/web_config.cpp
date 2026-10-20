@@ -22,6 +22,7 @@ static void (*pomo_cmd)(PomoCmd) = nullptr;
 static const PomoStats *pomo_stats = nullptr;
 static int (*today)() = nullptr;
 static void (*message_hook)(const String &, bool) = nullptr;
+static String (*room_hook)() = nullptr;
 static constexpr int kMessageMaxChars = 60;
 
 static const char PAGE[] PROGMEM = R"html(<!doctype html>
@@ -114,6 +115,20 @@ label.check input{width:auto}
 <div class="row" style="flex-wrap:wrap;margin-top:8px">%ALARM_DAYS%</div>
 <p class="hint">闹钟响时屏幕全屏提示、每隔几秒响一次，夜里也会响；点屏幕或按 BOOT 键关掉，5 分钟后自动停止。%NO_SPEAKER%</p>
 <p class="hint">只在提醒时段内提醒，屏幕会弹出全屏提示并响一声（音量和夜间静音跟番茄钟一样）。番茄钟专注时先不打扰，等休息时再提醒；开始休息时久坐提醒重新计时。%REMIND_STATE%</p>
+<h2>室内温湿度和人体感应</h2>
+<p class="hint">%ROOM_STATE%</p>
+<label class="check"><input type="checkbox" name="climate_on" %CLIMATE_ON%> 太热或太闷时提醒（持续 3 分钟才提醒，同一种提醒 1 小时最多一次，夜间时段不提醒）</label>
+<div class="row">
+<div><label>温度达到（°C）</label><input name="hot_c" value="%HOT_C%" inputmode="numeric"></div>
+<div><label>湿度达到（%）</label><input name="humid_pct" value="%HUMID_PCT%" inputmode="numeric"></div>
+<div><label>温度校准（°C）</label><input name="temp_offset" value="%TEMP_OFFSET%" inputmode="decimal"></div>
+</div>
+<p class="hint">温度校准：如果显示的温度比实际偏高 1.5 度，就填 -1.5。</p>
+<div class="row">
+<div><label class="check"><input type="checkbox" name="away_off" %AWAY_OFF%> 没人时熄屏，有人回来自动亮</label></div>
+<div><label>多久没人算离开（分钟）</label><input name="away_min" value="%AWAY_MIN%" inputmode="numeric"></div>
+</div>
+<p class="hint">雷达感应的是动作，人坐着一动不动时可能感应不到，所以离开时间别设太短。熄屏后点屏幕或按 BOOT 键也能亮；有提醒时会自动亮屏。</p>
 <h2>GitHub 贡献热力图</h2>
 <label>GitHub Token（%GH_STATE%）</label>
 <input type="password" name="gh_token" placeholder="%GH_PLACEHOLDER%" autocomplete="off">
@@ -284,6 +299,13 @@ static void handle_root() {
   page.replace("%ALARM_DAYS%", days);
   page.replace("%NO_SPEAKER%", audio_available() ? "" : "这块板子没有喇叭，只会在屏幕上提示。");
   page.replace("%REMIND_STATE%", s.sit_on || s.water_on ? "" : "两个提醒默认都关着。");
+  page.replace("%ROOM_STATE%", room_hook ? html_escape(room_hook()) : "");
+  page.replace("%CLIMATE_ON%", s.climate_on ? "checked" : "");
+  page.replace("%HOT_C%", String(s.hot_c));
+  page.replace("%HUMID_PCT%", String(s.humid_pct));
+  page.replace("%TEMP_OFFSET%", String(s.temp_offset / 10.0f, 1));
+  page.replace("%AWAY_OFF%", s.away_off ? "checked" : "");
+  page.replace("%AWAY_MIN%", String(s.away_min));
   page.replace("%SOUND_ON%", s.sound_on ? "checked" : "");
   page.replace("%SOUND_NOTE%", audio_available() ? "" : "（这块板子没有喇叭）");
   page.replace("%SOUND_VOL%", String(s.sound_volume));
@@ -369,6 +391,17 @@ static void handle_save() {
       if (server.hasArg(String("ad") + d)) mask |= 1 << d;
     }
     s.alarm_days = mask;
+  }
+  minutes_arg("hot_c", s.hot_c, 20, 45);
+  minutes_arg("humid_pct", s.humid_pct, 40, 95);
+  minutes_arg("away_min", s.away_min, 1, 60);
+  if (server.hasArg("hot_c")) {  // 确认是设置表单提交的，再更新复选框和校准值
+    s.climate_on = server.hasArg("climate_on");
+    s.away_off = server.hasArg("away_off");
+    String ofs = server.arg("temp_offset");
+    ofs.trim();
+    float o = ofs.toFloat();
+    if (ofs.length() > 0 && o >= -10 && o <= 10) s.temp_offset = (int8_t)lroundf(o * 10);
   }
   int rs = night_parse_hhmm(server.arg("remind_start").c_str());
   int re = night_parse_hhmm(server.arg("remind_end").c_str());
@@ -520,6 +553,10 @@ void web_config_set_pomo_stats(const PomoStats *s, int (*day)()) {
 
 void web_config_set_message_hook(void (*hook)(const String &text, bool sound)) {
   message_hook = hook;
+}
+
+void web_config_set_room_hook(String (*hook)()) {
+  room_hook = hook;
 }
 
 void web_config_set_progress_hook(void (*hook)()) {

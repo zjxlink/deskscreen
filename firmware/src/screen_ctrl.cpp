@@ -33,14 +33,16 @@ bool ScreenCtrl::take_page_change(Page &page, bool &animate) {
 void ScreenCtrl::tick(uint32_t now_ms, int minutes) {
   night_now_ = cfg_.night_on && minutes >= 0 &&
                night_is_active(minutes, cfg_.night_start, cfg_.night_end);
-  dimmed_ = night_now_ && !woken(now_ms);
+  away_ = started_ && cfg_.away_off && has_presence_ && !woken(now_ms) &&
+          now_ms - last_present_ >= cfg_.away_min * 60000UL;
+  dimmed_ = (night_now_ && !woken(now_ms)) || away_;
   fade(now_ms);
   if (started_) auto_rotate(now_ms);
 }
 
 // 开机时直接设定亮度；之后每 30ms 走一步，越接近目标步子越小
 void ScreenCtrl::fade(uint32_t now_ms) {
-  int target = dimmed_ ? cfg_.night_brightness : cfg_.day_brightness;
+  int target = away_ ? 0 : dimmed_ ? cfg_.night_brightness : cfg_.day_brightness;
   if (current_ < 0) {
     current_ = target;
     last_step_ = now_ms;
@@ -83,9 +85,16 @@ void ScreenCtrl::auto_rotate(uint32_t now_ms) {
   }
 }
 
+void ScreenCtrl::set_presence(bool present, uint32_t now_ms) {
+  if (!has_presence_ || present) last_present_ = now_ms;
+  has_presence_ = true;
+}
+
 bool ScreenCtrl::on_input(uint32_t now_ms) {
   if (!started_) return false;
   bool was_dimmed = dimmed_;
+  last_present_ = now_ms;  // 有人在操作，当然有人
+  away_ = false;
   // 点亮期间每次操作都顺延 30 秒
   if (night_now_) woken_until_ = now_ms + kWakeMs;
   if (was_dimmed) {

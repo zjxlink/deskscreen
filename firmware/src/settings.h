@@ -34,6 +34,13 @@ struct Settings {
   bool alarm_on;             // 闹钟
   uint16_t alarm_time;       // 当天第几分钟，默认 7:30
   uint8_t alarm_days;        // 第 i 位表示星期 i 响，周日为第 0 位，默认周一到周五
+  // 以下只在插了 SENSOR 底座时有用
+  bool climate_on;           // 太热、太闷时提醒
+  uint8_t hot_c;             // 温度达到多少度提醒，默认 30
+  uint8_t humid_pct;         // 湿度达到多少提醒，默认 80%
+  int8_t temp_offset;        // 温度校准，单位 0.1°C，测得的温度加上它再显示
+  bool away_off;             // 没人时熄屏，有人回来再亮
+  uint8_t away_min;          // 多少分钟没人算离开，默认 5
 };
 
 // 时区固定为北京时间，POSIX 格式
