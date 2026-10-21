@@ -16,6 +16,7 @@ void settings_begin() {
   current.github_token = prefs.getString("gh_token", "");
   current.stocks = prefs.getString("stocks", "");
   current.page_seconds = prefs.getUChar("page_sec", 15);
+  current.pages_off = prefs.getString("pages_off", "");
   current.night_on = prefs.getBool("night_on", true);
   current.night_start = prefs.getUShort("night_start", 23 * 60);
   current.night_sun = prefs.getBool("night_sun", true);
@@ -86,6 +87,7 @@ void settings_save(const Settings &s) {
   prefs.putString("gh_token", s.github_token);
   prefs.putString("stocks", s.stocks);
   prefs.putUChar("page_sec", s.page_seconds);
+  prefs.putString("pages_off", s.pages_off);
   prefs.putBool("night_on", s.night_on);
   prefs.putUShort("night_start", s.night_start);
   prefs.putBool("night_sun", s.night_sun);

@@ -191,6 +191,38 @@ static void test_unavailable_page_skipped() {
   TEST_ASSERT_EQUAL(PAGE_CLOCK, s.take_page());  // 自动轮播也跳过
 }
 
+static void test_hidden_page_skipped() {
+  ScreenConfig c = night_cfg();
+  c.page_enabled[PAGE_WEATHER] = true;
+  c.page_enabled[PAGE_PET] = true;
+  c.page_hidden = 1u << PAGE_WEATHER | 1u << PAGE_NEWS | 1u << PAGE_GITHUB | 1u << PAGE_CLOCK;  // 时钟页的位不算数
+  Sim s(c);
+  TEST_ASSERT_FALSE(s.ctrl.skipped(PAGE_CLOCK));
+  TEST_ASSERT_TRUE(s.ctrl.skipped(PAGE_WEATHER));
+  s.ctrl.on_input(s.now);
+  TEST_ASSERT_EQUAL(PAGE_STOCKS, s.take_page());  // 手动切换跳过天气、资讯和 GitHub
+  s.ctrl.on_input(s.now, true);
+  TEST_ASSERT_EQUAL(PAGE_CLOCK, s.take_page());
+  s.run(15500);
+  TEST_ASSERT_EQUAL(PAGE_STOCKS, s.take_page());  // 自动轮播也跳过天气和 GitHub
+  // 番茄钟、唤醒词这类直接跳过去的不受影响
+  s.ctrl.go_to(PAGE_GITHUB, s.now);
+  TEST_ASSERT_EQUAL(PAGE_GITHUB, s.take_page());
+  s.ctrl.on_input(s.now);
+  TEST_ASSERT_EQUAL(PAGE_STOCKS, s.take_page());
+}
+
+static void test_all_hidden_stays_on_clock() {
+  ScreenConfig c = night_cfg();
+  c.page_hidden = 0xFFFFFFFF;
+  Sim s(c);
+  s.take_page();
+  s.ctrl.on_input(s.now);
+  TEST_ASSERT_EQUAL(PAGE_CLOCK, s.take_page());
+  s.run(15500);
+  TEST_ASSERT_EQUAL(PAGE_CLOCK, s.take_page());
+}
+
 static void test_back_goes_to_previous_page() {
   ScreenConfig c = night_cfg();
   c.page_unavailable = 1u << PAGE_ALBUM;  // 没有 TF 卡槽
@@ -486,6 +518,8 @@ int main() {
   RUN_TEST(test_morning_restores_day);
   RUN_TEST(test_day_rotation_skips_unconfigured_pages);
   RUN_TEST(test_unavailable_page_skipped);
+  RUN_TEST(test_hidden_page_skipped);
+  RUN_TEST(test_all_hidden_stays_on_clock);
   RUN_TEST(test_back_goes_to_previous_page);
   RUN_TEST(test_stay_delays_rotation);
   RUN_TEST(test_rotation_off_and_single_page);

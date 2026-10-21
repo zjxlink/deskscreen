@@ -111,6 +111,7 @@ static uint32_t alert_until = 0;
 
 // 快捷设置页：长按屏幕打开，点右上角、按 BOOT 键或 30 秒不操作关掉
 static bool quick_on = false;
+static bool quick_pages = false;  // 快捷设置的第二屏「显示页面」
 static uint32_t quick_last = 0;
 
 // 小橘跑酷：在小猫页点小橘打开，点右上角、按 BOOT 键或 30 秒不玩关掉
@@ -184,6 +185,7 @@ static void apply_settings() {
   news_style = s.news_style;
   news_ticker = news_on && s.news_ticker;
   if (news_data) ui_set_news(*news_data, news_style);
+  c.page_hidden = pages_parse_hidden(s.pages_off.c_str());
   chat_has_key = s.ai_key.length() > 0;
   screen.configure(c);  // 番茄钟页、AI 聊天页和相册页不参与轮播，番茄钟进行中时固定显示
   album_sec = s.album_sec;
@@ -739,11 +741,21 @@ static void show_quick() {
   q.has_dock = sensors_dock();
   q.away_off = s.away_off;
   q.url = url.c_str();
+  q.pages_view = quick_pages;
+  q.page_hidden = screen_cfg.page_hidden;
+  // 没选新闻来源时资讯页翻页会跳过，但格子照样列出来，提示「未设置」
+  q.page_unavailable = screen_cfg.page_unavailable & ~(1u << PAGE_NEWS);
+  q.page_unset = 0;
+  if (s.news_src.length() == 0 && s.news_rss.length() == 0) q.page_unset |= 1u << PAGE_NEWS;
+  if (s.github_token.length() == 0) q.page_unset |= 1u << PAGE_GITHUB;
+  if (s.stocks.length() == 0) q.page_unset |= 1u << PAGE_STOCKS;
+  if (s.ai_key.length() == 0) q.page_unset |= 1u << PAGE_CHAT;
   ui_show_quick(q);
 }
 
 static void open_quick(uint32_t now) {
   quick_on = true;
+  quick_pages = false;
   quick_last = now;
   screen.activity(now);
   show_quick();
@@ -751,6 +763,12 @@ static void open_quick(uint32_t now) {
 
 static void close_quick() {
   quick_on = false;
+  quick_pages = false;
+  // 刚把当前这页隐藏了：回到时钟页（滑过去）
+  if (screen.skipped(screen.page())) {
+    screen.go_to(PAGE_CLOCK, millis());
+    return;
+  }
   ui_show_page(screen.page(), false);
 }
 
@@ -760,13 +778,27 @@ static void quick_tap(int x, int y, uint32_t now) {
   bool was_dimmed = screen.dimmed();
   screen.activity(now);
   if (was_dimmed) return;  // 屏幕调暗时第一下只点亮
-  QuickHit h = ui_quick_hit(x, y);
+  Page page = PAGE_CLOCK;
+  QuickHit h = ui_quick_hit(x, y, &page);
   if (h == QuickHit::Close) {
     close_quick();
     return;
   }
+  if (h == QuickHit::Pages || h == QuickHit::Back) {
+    quick_pages = h == QuickHit::Pages;
+    show_quick();
+    return;
+  }
   Settings s = settings_get();
   switch (h) {
+    case QuickHit::PageTile: {
+      if (page == PAGE_CLOCK) return;  // 时钟页一直显示
+      uint32_t hidden = pages_parse_hidden(s.pages_off.c_str()) ^ (1u << page);
+      char list[96];
+      pages_format_hidden(hidden, list, sizeof(list));
+      s.pages_off = list;
+      break;
+    }
     case QuickHit::BrightDown: s.brightness = s.brightness > 35 ? s.brightness - 25 : 10; break;
     case QuickHit::BrightUp: s.brightness = s.brightness < 230 ? s.brightness + 25 : 255; break;
     case QuickHit::VolumeDown: s.sound_volume = s.sound_volume > 10 ? s.sound_volume - 10 : 0; break;
@@ -1061,6 +1093,8 @@ static void check_touch() {
     last_x = x;
     last_y = y;
     if (abs(x - down_x) > kMoveSlop || abs(y - down_y) > kMoveSlop) moved = true;
+    // 快捷设置「显示页面」那一屏：上下滑动跟着手指滚动
+    if (moved && quick_on && !long_done) ui_quick_drag(down_y - y);
   }
   if (touched && !was_touched) {
     down_at = now;
@@ -1099,9 +1133,12 @@ static void check_touch() {
     // 滑动：横着滑够远才翻页；资讯页上竖着滑翻新闻（往上滑下一批），别的页面竖着滑什么也不做
     int dx = last_x - down_x;
     int dy = last_y - down_y;
-    if (!quick_on && abs(dx) >= kSwipePx && abs(dx) > abs(dy)) {
+    if (quick_on) {
+      quick_last = now;
+      ui_quick_drag_end();
+    } else if (abs(dx) >= kSwipePx && abs(dx) > abs(dy)) {
       on_tap(now, dx > 0);
-    } else if (!quick_on && abs(dy) >= kSwipePx && screen.page() == PAGE_NEWS && screen.started() && !screen.dimmed() &&
+    } else if (abs(dy) >= kSwipePx && screen.page() == PAGE_NEWS && screen.started() && !screen.dimmed() &&
                !ota_screen && !alert_on && !game_on) {
       if (dy < 0) ui_news_next();
       else ui_news_prev();
