@@ -1,0 +1,18 @@
+# 不用编译镜像：直接用官方 Python 镜像运行同目录的 relay.py
+# 飞牛 fnOS：Docker › Compose › 新增项目，路径选这个文件夹，勾选「创建项目后立即启动」
+# 其他系统：在这个文件夹里执行 docker compose up -d
+services:
+  friends-relay:
+    image: python:3.12-alpine
+    container_name: deskscreen-friends
+    restart: unless-stopped
+    command: ["python3", "-u", "/app/relay.py"]
+    ports:
+      - "18267:18267"   # 左边是 NAS 上的端口，被占用时只改左边
+    volumes:
+      - ./relay.py:/app/relay.py:ro
+      - ./static:/app/static:ro
+      - ./data:/data
+    environment:
+      PORT: "18267"
+      TTL_DAYS: "7"

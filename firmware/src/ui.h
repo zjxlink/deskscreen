@@ -128,6 +128,51 @@ struct ChatView {
 void ui_set_chat(const ChatView &v);
 bool ui_chat_button_hit(int x, int y);
 
+// 好友页：当前圈子的成员（一屏 kFriendRows 个，多了上下滑动翻屏），每人一个「戳一戳」，
+// 下面「戳全部人」和「发留言」。顶栏是圈子名（几个圈子时点它换下一个）和「邀请」按钮
+static constexpr int kFriendRows = 3;
+struct FriendRow {
+  const char *name;
+  bool here;
+  bool online;
+};
+struct FriendsView {
+  const char *msg;      // 不为空时只显示这段提示（没填服务器、连不上、还没加入圈子），可以用 #RRGGBB 文字# 上色
+  const char *title;    // 「我们家 · 4 台」
+  bool switchable;      // 有好几个圈子，标题后面加「›」
+  bool can_invite;
+  const FriendRow *rows;
+  int n;
+  int page, pages;      // 成员多时第几屏、一共几屏
+  const char *note;     // 底部一行：刚才的操作结果
+};
+void ui_set_friends(const FriendsView &v);
+enum class FriendsHit { None, Title, Invite, Poke, PokeAll, Send };
+// row 是点到的是这一屏的第几个人（Poke 时）
+FriendsHit ui_friends_hit(int x, int y, int *row);
+
+// 时钟页右上角：「小雨在桌前」，空字符串时换回城市名
+void ui_set_friends_here(const char *text);
+
+// 选一句话发出去（板子没有键盘）：title 如「发到 我们家」「回复 小雨」，句子见 kFrPhrases
+void ui_show_phrases(const char *title);
+// 点到第几句；点「取消」返回 -1，什么都没点到返回 -2
+int ui_phrases_hit(int x, int y);
+
+// 好友弹窗：收到戳一戳、留言，或者显示邀请码。盖在页面上，关掉后用 ui_show_page 回去
+struct FriendAlertView {
+  const char *title;    // 「小雨」「小雨 → 我们家」
+  const char *body;     // 「戳了你一下」、留言内容、邀请码
+  const char *foot;     // 一行小字：时间、有效期
+  bool poke;            // 画一只挥手的小橘
+  bool big;             // body 用大号数字（邀请码）
+  const uint16_t *thumb;  // 留言里的照片（kFrThumbW x kFrThumbH），nullptr 表示没有
+  const char *action;   // 左边按钮的字（「也戳 TA」「回复」），nullptr 表示只有「关闭」
+};
+void ui_show_friend_alert(const FriendAlertView &v);
+enum class FriendAlertHit { None, Action, Close };
+FriendAlertHit ui_friend_alert_hit(int x, int y);
+
 // 电子相册页：px 为 320x240 的 RGB565 像素（photos_take_frame 给的），nullptr 表示不显示照片；
 // msg 是盖在中间的提示（没插卡、没有照片），nullptr 表示不显示
 void ui_set_album_photo(const uint16_t *px);

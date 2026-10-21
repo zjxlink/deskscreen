@@ -88,7 +88,7 @@ static void test_descending_vs_ascending() {
 }
 
 static void test_new_sounds_render_without_clipping() {
-  for (SoundId id : {SoundId::Message, SoundId::Reminder, SoundId::Chime, SoundId::Alarm, SoundId::ChatOn, SoundId::ChatOff}) {
+  for (SoundId id : {SoundId::Message, SoundId::Reminder, SoundId::Chime, SoundId::Alarm, SoundId::ChatOn, SoundId::ChatOff, SoundId::Poke}) {
     auto buf = render(id, 100);
     TEST_ASSERT_TRUE(buf.size() > 0);
     int p = peak(buf, 0, buf.size());

@@ -70,6 +70,9 @@ void settings_begin() {
   current.news_style = prefs.getUChar("news_style", 0);
   current.news_ticker = prefs.getBool("news_ticker", true);
   current.news_voice = prefs.getBool("news_voice", true);
+  current.fr_url = prefs.getString("fr_url", "");
+  current.fr_name = prefs.getString("fr_name", "桌面屏");
+  current.fr_here = prefs.getBool("fr_here", false);
 }
 
 Settings settings_get() {
@@ -142,6 +145,9 @@ void settings_save(const Settings &s) {
   prefs.putUChar("news_style", s.news_style);
   prefs.putBool("news_ticker", s.news_ticker);
   prefs.putBool("news_voice", s.news_voice);
+  prefs.putString("fr_url", s.fr_url);
+  prefs.putString("fr_name", s.fr_name);
+  prefs.putBool("fr_here", s.fr_here);
 }
 
 void settings_load_pomo_stats(PomoStatsData &d) {
@@ -155,6 +161,21 @@ void settings_load_pomo_stats(PomoStatsData &d) {
 void settings_save_pomo_stats(const PomoStatsData &d) {
   prefs.putBytes("pomo_stats", &d, sizeof(d));
 }
+
+String settings_load_fr_token(String &base) {
+  base = prefs.getString("fr_tok_url", "");
+  return prefs.getString("fr_token", "");
+}
+
+void settings_save_fr_token(const String &base, const String &token) {
+  prefs.putString("fr_tok_url", base);
+  prefs.putString("fr_token", token);
+  prefs.putULong("fr_seq", 0);
+}
+
+uint32_t settings_load_fr_seq() { return prefs.getULong("fr_seq", 0); }
+
+void settings_save_fr_seq(uint32_t seq) { prefs.putULong("fr_seq", seq); }
 
 int settings_load_game_best() { return prefs.getUShort("run_best", 0); }
 

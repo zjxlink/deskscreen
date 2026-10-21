@@ -14,6 +14,7 @@ enum class SoundId : uint8_t {
   Alarm,      // 闹钟：急促的三声，响铃期间反复播放
   ChatOn,     // AI 聊天接通，开始听：两声上扬
   ChatOff,    // AI 聊天挂断：两声下行
+  Poke,       // 好友戳了一下：「啵啵」两声轻快的高音
 };
 
 struct Note {

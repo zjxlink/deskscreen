@@ -68,6 +68,10 @@ struct Settings {
   uint8_t news_style;        // 资讯页样式：0 列表（一屏 4 条），1 一屏一条带摘要
   bool news_ticker;          // 时钟页显示一行要闻，和日出日落轮流
   bool news_voice;           // AI 聊天时把最新标题告诉小橘，让它能念新闻
+  // 好友圈子（friends.h）
+  String fr_url;             // 中转服务地址，如 https://friends.zjxlink.cn，空表示不用
+  String fr_name;            // 在好友屏幕上显示的名字，最多 10 个字
+  bool fr_here;              // 告诉圈子「我在桌前」（有雷达时按雷达，没有时按最近有没有碰屏幕）
 };
 
 // 时区固定为北京时间，POSIX 格式
@@ -83,6 +87,13 @@ void settings_save(const Settings &s);
 // 番茄钟统计单独存一块，只在主循环里读写
 void settings_load_pomo_stats(PomoStatsData &d);
 void settings_save_pomo_stats(const PomoStatsData &d);
+
+// 好友圈子：服务器给的 token 和它是哪个服务器给的（换了服务器要重新注册）。联网任务里读写
+String settings_load_fr_token(String &base);
+void settings_save_fr_token(const String &base, const String &token);
+// 收到的最后一条消息的序号，关机期间收到的留言开机后照样弹出来
+uint32_t settings_load_fr_seq();
+void settings_save_fr_seq(uint32_t seq);
 
 // 小游戏最高分
 int settings_load_game_best();

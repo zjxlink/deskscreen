@@ -11,6 +11,7 @@
 #include "desk_brief.h"
 #include "clock_events.h"
 #include "display.h"
+#include "friends.h"
 #include "github.h"
 #include "imu.h"
 #include "listen.h"
@@ -195,6 +196,10 @@ static void apply_settings() {
   news_style = s.news_style;
   news_ticker = news_on && s.news_ticker;
   if (news_data) ui_set_news(*news_data, news_style);
+  bool friends_on = s.fr_url.length() > 0;
+  c.page_enabled[PAGE_FRIENDS] = friends_on;
+  if (!friends_on) c.page_unavailable |= 1u << PAGE_FRIENDS;  // 没填好友服务器时不显示好友页
+  friends_kick();
   c.page_hidden = pages_parse_hidden(s.pages_off.c_str());
   chat_has_key = s.ai_key.length() > 0;
   screen.configure(c);  // 番茄钟页、AI 聊天页和相册页不参与轮播，番茄钟进行中时固定显示
@@ -277,10 +282,15 @@ static int local_day() {
   return (int)((now + 8 * 3600) / 86400);
 }
 
+// 好友弹窗和选句子也用 alert_on（见下面「好友圈子」），这里记着正在显示的是哪种
+enum class FrOverlay : uint8_t { None, Poke, Text, Invite, Phrases };
+static FrOverlay fr_overlay = FrOverlay::None;
+
 static void show_alert(AlertIcon icon, const char *title, const char *body, const char *foot,
                        uint32_t show_ms) {
   uint32_t now = millis();
   alert_on = true;
+  fr_overlay = FrOverlay::None;
   quick_on = false;  // 提醒盖掉快捷设置页和小游戏，关掉提醒后回到原来的页面
   game_on = false;
   alert_timed = show_ms > 0;
@@ -292,6 +302,7 @@ static void show_alert(AlertIcon icon, const char *title, const char *body, cons
 
 static void close_alert() {
   alert_on = false;
+  fr_overlay = FrOverlay::None;
   pair_shown = false;
   if (!ota_screen) ui_show_page(screen.page(), false);
 }
@@ -796,12 +807,13 @@ static void show_quick() {
   q.pages_view = quick_pages;
   q.page_hidden = screen_cfg.page_hidden;
   // 没选新闻来源时资讯页翻页会跳过，但格子照样列出来，提示「未设置」
-  q.page_unavailable = screen_cfg.page_unavailable & ~(1u << PAGE_NEWS);
+  q.page_unavailable = screen_cfg.page_unavailable & ~(1u << PAGE_NEWS | 1u << PAGE_FRIENDS);
   q.page_unset = 0;
   if (s.news_src.length() == 0 && s.news_rss.length() == 0) q.page_unset |= 1u << PAGE_NEWS;
   if (s.github_token.length() == 0) q.page_unset |= 1u << PAGE_GITHUB;
   if (s.stocks.length() == 0) q.page_unset |= 1u << PAGE_STOCKS;
   if (s.ai_key.length() == 0) q.page_unset |= 1u << PAGE_CHAT;
+  if (s.fr_url.length() == 0) q.page_unset |= 1u << PAGE_FRIENDS;
   q.music = player_status().loaded;
   q.music_playing = player_playing();
   ui_show_quick(q);
@@ -1247,6 +1259,347 @@ static void update_movie() {
   ui_set_movie_player(v);
 }
 
+// ---------- 好友圈子 ----------
+// 收到的戳一戳、留言在可以打扰的时候弹出来；夜间、没人、专注、聊天、看片子、别的提醒在显示时先排队，之后再弹
+static constexpr uint32_t kPokeShowMs = 10000;
+static constexpr uint32_t kInviteShowMs = 60000;
+static constexpr uint32_t kPhrasesIdleMs = 30000;
+static constexpr uint32_t kFrNoteMs = 6000;          // 好友页底部的操作结果显示多久
+static constexpr uint32_t kHereTouchMs = 10 * 60000;  // 没有雷达时，多久没碰屏幕算不在桌前
+static constexpr int kFrPending = 8;
+static FrStatus *fr = nullptr;           // 最近的状态（PSRAM）
+static int fr_circle = 0;               // 好友页显示第几个圈子
+static int fr_page = 0;                 // 成员多时第几屏
+static bool fr_dirty = true;
+// 消息缓冲都放 PSRAM（一条约 440 字节），内部内存留给网络和 TLS
+static FrEvent *fr_pending = nullptr;   // 还没弹出来的，kFrPending 条
+static int fr_pending_n = 0;
+static FrEvent *fr_shown = nullptr;     // 正在显示的留言 / 最后一个戳的人
+static FrEvent *fr_evs = nullptr;       // 从后台取新消息用，kFrTake 条
+static constexpr int kFrTake = 4;
+static char poke_names[96];
+static int poke_count = 0;
+static char ph_circle[kFrIdLen], ph_to[kFrIdLen];  // 选好句子发给谁
+static bool fr_invite_wait = false;
+static char fr_note[96] = "";
+static uint32_t fr_note_until = 0;
+static uint32_t fr_note_seq = 0;
+static uint32_t last_presence = 0;  // 雷达最近一次感应到人
+
+static void set_fr_note(const char *text) {
+  snprintf(fr_note, sizeof(fr_note), "%s", text);
+  fr_note_until = millis() + kFrNoteMs;
+  fr_dirty = true;
+}
+
+static const FrCircle *fr_current() {
+  if (!fr || fr->ncircles == 0) return nullptr;
+  if (fr_circle >= fr->ncircles) fr_circle = 0;
+  return &fr->circles[fr_circle];
+}
+
+// 当前圈子里除了自己的人，第 i 个
+static const FrMember *fr_other(const FrCircle &c, int i) {
+  for (int k = 0; k < c.n; k++) {
+    if (c.m[k].me) continue;
+    if (i-- == 0) return &c.m[k];
+  }
+  return nullptr;
+}
+
+static int fr_other_count(const FrCircle &c) {
+  int n = 0;
+  for (int k = 0; k < c.n; k++) n += !c.m[k].me;
+  return n;
+}
+
+static void render_friends() {
+  fr_dirty = false;
+  FriendsView v = {};
+  char msg[160];
+  char title[64];
+  FriendRow rows[kFriendRows];
+  const FrCircle *c = fr_current();
+  if (!fr || !fr->configured) {
+    v.msg = "还没有设置好友圈子\n\n在网页设置的「服务 › 好友圈子」里填上中转服务的地址";
+  } else if (!fr->registered || (!fr->synced && fr->ncircles == 0)) {
+    snprintf(msg, sizeof(msg), "正在连接好友服务器…%s%s", fr->error[0] ? "\n\n" : "", fr->error);
+    v.msg = msg;
+  } else if (!c) {
+    v.msg = "还没有加入圈子\n\n在网页设置的「服务 › 好友圈子」里点「管理圈子」，新建一个圈子，或者用家人给的邀请码加入";
+  } else {
+    int others = fr_other_count(*c);
+    v.pages = others ? (others + kFriendRows - 1) / kFriendRows : 1;
+    if (fr_page >= v.pages) fr_page = v.pages - 1;
+    v.page = fr_page;
+    for (int i = 0; i < kFriendRows; i++) {
+      const FrMember *m = fr_other(*c, fr_page * kFriendRows + i);
+      if (!m) break;
+      rows[v.n++] = {m->name, m->here, m->online};
+    }
+    v.rows = rows;
+    snprintf(title, sizeof(title), "%s · %d 台", c->name, c->n);
+    v.title = title;
+    v.switchable = fr->ncircles > 1;
+    v.can_invite = c->n < kFrMaxMembers;
+    if (fr_note[0] && (int32_t)(millis() - fr_note_until) < 0) v.note = fr_note;
+    else if (!fr->synced && fr->error[0]) v.note = fr->error;
+  }
+  ui_set_friends(v);
+}
+
+static void begin_overlay(FrOverlay kind, uint32_t show_ms) {
+  uint32_t now = millis();
+  alert_on = true;
+  quick_on = false;
+  game_on = false;
+  alert_timed = show_ms > 0;
+  alert_until = now + show_ms;
+  fr_overlay = kind;
+  if (screen.started()) screen.wake(now);
+}
+
+static void show_poke(const FrEvent &e, bool merge) {
+  if (!merge) {
+    poke_names[0] = '\0';
+    poke_count = 0;
+  }
+  friends_add_name(poke_names, sizeof(poke_names), poke_count, e.from_name);
+  *fr_shown = e;
+  begin_overlay(FrOverlay::Poke, kPokeShowMs);
+  char title[128], foot[96];
+  friends_names_text(poke_names, poke_count, title, sizeof(title));
+  snprintf(foot, sizeof(foot), "刚刚 · %s", e.circle_name);
+  FriendAlertView v = {};
+  v.title = title;
+  v.body = "戳了你一下";
+  v.foot = foot;
+  v.poke = true;
+  v.action = poke_count > 1 ? "戳回去" : "也戳 TA";
+  if (!ota_screen) ui_show_friend_alert(v);
+  play(SoundId::Poke);
+}
+
+static void show_text(const FrEvent &e) {
+  *fr_shown = e;
+  begin_overlay(FrOverlay::Text, 0);
+  char title[96], foot[64];
+  if (e.to_me) snprintf(title, sizeof(title), "%s", e.from_name);
+  else snprintf(title, sizeof(title), "%s → %s", e.from_name, e.circle_name);
+  struct tm t;
+  time_t ts = (time_t)e.ts;
+  if (e.ts > 0 && localtime_r(&ts, &t)) snprintf(foot, sizeof(foot), "%02d:%02d · 点「回复」选一句话回过去", t.tm_hour, t.tm_min);
+  else snprintf(foot, sizeof(foot), "点「回复」选一句话回过去");
+  FriendAlertView v = {};
+  v.title = title;
+  v.body = e.text[0] ? e.text : "（一张照片）";
+  v.foot = foot;
+  v.thumb = friends_thumb(e.thumb, e.thumb_gen);
+  v.action = "回复";
+  if (!ota_screen) ui_show_friend_alert(v);
+  play(SoundId::Message);
+  friends_mark_read(e.id);
+}
+
+static void show_invite() {
+  begin_overlay(FrOverlay::Invite, kInviteShowMs);
+  char title[96], code[16];
+  snprintf(title, sizeof(title), "邀请加入「%s」", fr->invite_circle);
+  snprintf(code, sizeof(code), "%.3s %s", fr->invite_code, fr->invite_code + 3);
+  FriendAlertView v = {};
+  v.title = title;
+  v.body = code;
+  v.big = true;
+  v.foot = "在 TA 的网页里输入，10 分钟内有效";
+  if (!ota_screen) ui_show_friend_alert(v);
+}
+
+static void open_phrases(const char *circle, const char *to, const char *title) {
+  snprintf(ph_circle, sizeof(ph_circle), "%s", circle);
+  snprintf(ph_to, sizeof(ph_to), "%s", to);
+  begin_overlay(FrOverlay::Phrases, kPhrasesIdleMs);
+  ui_show_phrases(title);
+}
+
+// 弹窗、选句子上点了一下。返回 false 表示交给 on_tap（关掉）
+static bool friend_overlay_tap(int x, int y) {
+  if (fr_overlay == FrOverlay::Phrases) {
+    int i = ui_phrases_hit(x, y);
+    if (i == -2) return true;  // 没点到按钮，不关
+    if (i >= 0) {
+      friends_send_text(ph_circle, ph_to, kFrPhrases[i]);
+      set_fr_note("正在发送…");
+    }
+    close_alert();
+    return true;
+  }
+  FriendAlertHit h = ui_friend_alert_hit(x, y);
+  if (h != FriendAlertHit::Action) return false;
+  if (fr_overlay == FrOverlay::Poke) {
+    // 一个人戳的就戳回去给 TA，好几个人戳的就戳整个圈子
+    friends_poke(fr_shown->circle, poke_count > 1 ? "" : fr_shown->from);
+    set_fr_note("正在戳回去…");
+    close_alert();
+  } else if (fr_overlay == FrOverlay::Text) {
+    char title[64];
+    snprintf(title, sizeof(title), "回复 %s", fr_shown->from_name);
+    open_phrases(fr_shown->circle, fr_shown->from, title);
+  }
+  return true;
+}
+
+// 现在能不能弹出好友的消息；merge_poke 为 true 时，正在显示的戳一戳可以合进去
+static bool fr_can_show(bool merge_poke) {
+  if (!screen.started() || screen.night() || screen.away() || ota_screen || quick_on || game_on || movie_playing())
+    return false;
+  if (pomo.running() && pomo.phase() == PomoPhase::Focus) return false;  // 专注时先不打扰，和久坐提醒一样
+  if (chat_busy_at && millis() - chat_busy_at < kChatStayMs) return false;
+  if (alert_on) return merge_poke && fr_overlay == FrOverlay::Poke;
+  return true;
+}
+
+static void fr_handle(const FrEvent &e) {
+  switch (e.type) {
+    case FrEventType::Poke:
+      show_poke(e, alert_on && fr_overlay == FrOverlay::Poke);
+      break;
+    case FrEventType::Text:
+      show_text(e);
+      break;
+    default:
+      break;
+  }
+}
+
+static void update_friends() {
+  if (!fr) return;
+  uint32_t now = millis();
+  bool had_invite = fr->invite_code[0];
+  if (friends_take_status(*fr)) {
+    fr_dirty = true;
+    char here_text[96];
+    friends_presence_text(fr->circles, fr->ncircles, here_text, sizeof(here_text));
+    static char last_here[96] = "";
+    if (strcmp(here_text, last_here) != 0) {
+      snprintf(last_here, sizeof(last_here), "%s", here_text);
+      ui_set_friends_here(here_text);
+    }
+    if (fr->note_seq != fr_note_seq) {
+      fr_note_seq = fr->note_seq;
+      set_fr_note(fr->note);
+    }
+    if (fr_invite_wait && fr->invite_code[0] && !had_invite) {
+      fr_invite_wait = false;
+      if (!alert_on && !ota_screen) show_invite();
+    }
+  }
+
+  // 新消息：已读、成员变化只在好友页底部说一声；戳一戳和留言排队弹出来
+  int n = friends_take_events(fr_evs, kFrTake);
+  for (int i = 0; i < n; i++) {
+    const FrEvent &e = fr_evs[i];
+    char note[96];
+    if (e.type == FrEventType::Read) {
+      snprintf(note, sizeof(note), "%s 看了你的留言", e.from_name);
+      set_fr_note(note);
+    } else if (e.type == FrEventType::Circle) {
+      snprintf(note, sizeof(note), "%s %s", e.from_name, e.text);
+      set_fr_note(note);
+    } else if (e.type == FrEventType::Poke && fr_can_show(true)) {
+      fr_handle(e);
+    } else if (fr_pending_n < kFrPending) {
+      fr_pending[fr_pending_n++] = e;
+    } else {
+      // 排满了：丢掉最早的一条
+      memmove(fr_pending, fr_pending + 1, sizeof(FrEvent) * (kFrPending - 1));
+      fr_pending[kFrPending - 1] = e;
+    }
+  }
+  if (fr_pending_n > 0 && fr_can_show(fr_pending[0].type == FrEventType::Poke)) {
+    fr_evs[0] = fr_pending[0];
+    fr_pending_n--;
+    memmove(fr_pending, fr_pending + 1, sizeof(FrEvent) * fr_pending_n);
+    fr_handle(fr_evs[0]);
+  }
+  if (!alert_on) fr_overlay = FrOverlay::None;
+
+  // 告诉圈子在不在桌前：有雷达按雷达（坐着不动也有一阵没信号，所以 5 分钟内感应到过就算在），
+  // 没有雷达按最近有没有碰屏幕
+  if (sensors_dock() && sensors_presence()) last_presence = now;
+  Settings s = settings_get();
+  bool here = s.fr_here && (sensors_dock() ? last_presence && now - last_presence < 5 * 60000UL
+                                           : last_input && now - last_input < kHereTouchMs);
+  friends_set_here(here);
+
+  // 同步快慢：看着好友页时快，夜里、聊天、看片子时慢
+  bool on_page = screen.page() == PAGE_FRIENDS && !alert_on && !quick_on && !game_on && !ota_screen;
+  bool chatting = chat_busy_at && now - chat_busy_at < kChatStayMs;
+  if (on_page || fr_overlay != FrOverlay::None) friends_set_pace(FrPace::Fast);
+  else if (screen.night() || chatting || movie_playing()) friends_set_pace(FrPace::Slow);
+  else friends_set_pace(FrPace::Normal);
+
+  if (fr_note[0] && (int32_t)(now - fr_note_until) >= 0) {
+    fr_note[0] = '\0';
+    fr_dirty = true;
+  }
+  static bool was_on = false;
+  if (on_page && !was_on) fr_dirty = true;
+  was_on = on_page;
+  if (on_page) screen.stay(now);  // 看着好友页时不轮播走
+  if (fr_dirty && on_page) render_friends();
+}
+
+// 好友页上点了一下。返回 false 表示不是点在按钮上，照常翻页
+static bool friends_tap(int x, int y) {
+  int row = -1;
+  FriendsHit h = ui_friends_hit(x, y, &row);
+  const FrCircle *c = fr_current();
+  if (h == FriendsHit::None || !c) return false;
+  switch (h) {
+    case FriendsHit::Title:
+      if (fr->ncircles < 2) return false;
+      fr_circle = (fr_circle + 1) % fr->ncircles;
+      fr_page = 0;
+      break;
+    case FriendsHit::Invite:
+      fr_invite_wait = true;
+      friends_invite(c->id);
+      set_fr_note("正在生成邀请码…");
+      break;
+    case FriendsHit::Poke: {
+      const FrMember *m = fr_other(*c, fr_page * kFriendRows + row);
+      if (!m) return true;
+      friends_poke(c->id, m->id);
+      char note[96];
+      snprintf(note, sizeof(note), "正在戳 %s…", m->name);
+      set_fr_note(note);
+      break;
+    }
+    case FriendsHit::PokeAll:
+      friends_poke(c->id, "");
+      set_fr_note("正在戳全部人…");
+      break;
+    case FriendsHit::Send: {
+      char title[64];
+      snprintf(title, sizeof(title), "发到 %s", c->name);
+      open_phrases(c->id, "", title);
+      return true;
+    }
+    default:
+      return false;
+  }
+  render_friends();
+  return true;
+}
+
+// 好友页上下滑动：成员多时翻屏
+static void friends_scroll(int dir) {
+  fr_page += dir;
+  if (fr_page < 0) fr_page = 0;
+  fr_dirty = true;
+  render_friends();
+}
+
 // ---- 音乐页 ----
 
 static constexpr uint32_t kMusicBarKeepMs = 10 * 60000;  // 暂停后时钟页的迷你播放条再留这么久
@@ -1584,6 +1937,9 @@ static void check_touch() {
       else ui_news_prev();
       news_flip_at = now + kNewsFlipMs;
       screen.stay(now);
+    } else if (abs(dy) >= kSwipePx && screen.page() == PAGE_FRIENDS && screen.started() && !screen.dimmed() &&
+               !ota_screen && !alert_on && !game_on) {
+      friends_scroll(dy < 0 ? 1 : -1);  // 往上滑看后面的人
     } else if (abs(dy) >= kSwipePx && screen.page() == PAGE_MOVIE && screen.started() && !screen.dimmed() &&
                !ota_screen && !alert_on && !game_on && !movie_status().open) {
       movie_scroll(dy < 0 ? 1 : -1);  // 往上滑看后面的片子
@@ -1597,6 +1953,12 @@ static void check_touch() {
       pomo_command(PomoCmd::Toggle);
     } else if (quick_on) {
       quick_tap(down_x, down_y, now);
+    } else if (alert_on && fr_overlay != FrOverlay::None && !ota_screen && !screen.dimmed() &&
+               friend_overlay_tap(down_x, down_y)) {
+      // 好友弹窗上的按钮、选句子
+    } else if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && screen.page() == PAGE_FRIENDS &&
+               friends_tap(down_x, down_y)) {
+      // 好友页：戳一戳、邀请、发留言、换圈子
     } else if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && screen.page() == PAGE_PET &&
                ui_pet_hit(down_x, down_y)) {
       open_game(now);
@@ -1700,6 +2062,13 @@ void setup() {
     ui_set_news(*news_data, news_style);
     news_begin();
   }
+  fr_pending = (FrEvent *)heap_caps_calloc(kFrPending + 1 + kFrTake, sizeof(FrEvent), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (fr_pending) {
+    fr_shown = fr_pending + kFrPending;
+    fr_evs = fr_shown + 1;
+    fr = (FrStatus *)heap_caps_calloc(1, sizeof(FrStatus), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  }
+  friends_begin();
   log_i("heap: internal %u (largest block %u), psram %u", heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
         heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL), heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
@@ -1753,6 +2122,7 @@ void loop() {
   if (github_take_update(github_data)) ui_set_github(github_data);
   if (stock_take_update(stock_data)) ui_set_stocks(stock_data);
   update_news();
+  update_friends();
   update_voice_desk();
 
   static bool last_wifi = false;

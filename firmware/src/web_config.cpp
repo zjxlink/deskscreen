@@ -11,6 +11,7 @@
 #include "album.h"
 #include "audio.h"
 #include "display.h"
+#include "friends.h"
 #include "github.h"
 #include "net.h"
 #include "movie.h"
@@ -213,6 +214,10 @@ static void handle_api_settings() {
   doc["theme"] = s.screen_theme;
   doc["night_bright"] = s.night_brightness;
   doc["stocks"] = s.stocks;
+  doc["fr_url"] = s.fr_url;
+  doc["fr_name"] = s.fr_name;
+  doc["fr_here"] = s.fr_here;
+  doc["fr_manage"] = friends_manage_url();  // 带着板子的 token，只给局域网里的设置网页
   doc["has_token"] = s.github_token.length() > 0;  // Token 和 Key 不发给网页，只告诉有没有
   doc["auto_update"] = s.auto_update;
   doc["ota_url"] = s.ota_url;
@@ -328,6 +333,7 @@ static void handle_api_status() {
   room["presence"] = ri.presence;
   room["away"] = ri.away;
 
+  doc["friends"] = friends_brief();
   doc["net"] = net_status_html();
   String panel = "屏幕：";
   if (display_panel_watching()) {
@@ -496,6 +502,21 @@ static void handle_save() {
     s.news_style = server.arg("news_style").toInt() == 1 ? 1 : 0;
     s.news_ticker = server.hasArg("news_ticker");
     s.news_voice = server.hasArg("news_voice");
+  }
+
+  if (server.hasArg("fr_form")) {  // 设置表单里有好友圈子这张卡片
+    String url = server.arg("fr_url");
+    url.trim();
+    if (url.length() && url.indexOf("://") < 0) url = "https://" + url;  // 只写了域名
+    char clean[160];
+    friends_clean_url(url.c_str(), clean, sizeof(clean));
+    s.fr_url = clean;
+    String name = server.arg("fr_name");
+    name.trim();
+    char short_name[kFrNameLen];
+    friends_copy(short_name, sizeof(short_name), name.c_str());  // 服务器只留 10 个字，这里先截一下
+    if (short_name[0]) s.fr_name = short_name;
+    s.fr_here = server.hasArg("fr_here");
   }
 
   settings_save(s);

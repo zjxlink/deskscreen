@@ -9,6 +9,7 @@
 #include <string>
 
 #include "astro.h"
+#include "friends.h"
 #include "movie_util.h"
 #include "board.h"
 #include "screen_load.h"
@@ -74,6 +75,8 @@ static lv_obj_t *page_arrows[PAGE_COUNT][2];  // 页面左右边缘淡淡的 < >
 static lv_obj_t *scr_main;
 static lv_obj_t *lbl_date;
 static lv_obj_t *lbl_city;
+static std::string city_name;          // 有好友在桌前时右上角显示好友，换回来时用
+static bool friends_here_shown = false;
 static lv_obj_t *dot_wifi[PAGE_COUNT];
 static lv_obj_t *lbl_time;
 static lv_obj_t *lbl_sec;
@@ -300,6 +303,7 @@ static void build_main() {
   dot_wifi[PAGE_CLOCK] = make_wifi_dot(scr_main);
 
   lbl_city = make_label(scr_main, &font_cn_16, COLOR_SUBTLE);
+  lv_label_set_recolor(lbl_city, true);  // 好友在桌前时前面有个绿点
   lv_obj_align_to(lbl_city, dot_wifi[PAGE_CLOCK], LV_ALIGN_OUT_LEFT_MID, -8, 0);
 
   // 中间：大号时间
@@ -1252,6 +1256,295 @@ MovieHit ui_movie_hit(int x, int y, float *frac) {
     if (abs(dx - kMovieBtnDx) <= 40) return MovieHit::Forward;
   }
   return MovieHit::None;
+}
+
+// ---------- 好友页 ----------
+// 顶栏：圈子名（几个圈子时点它换）、「邀请」；中间一屏 3 个人，每人一个「戳一戳」；底部「戳全部人」「发留言」
+static constexpr int kFrRowTop = 36, kFrRowStep = 42, kFrRowH = 38;
+static constexpr int kFrBtnY = 188, kFrBtnH = 44;
+static constexpr uint32_t kFrOrange = 0xF08A2C;  // 戳一戳的按钮，两套主题都用它
+static constexpr uint32_t kFrHere = 0x3FB950;
+static lv_obj_t *lbl_fr_title;
+static lv_obj_t *fr_invite;
+static lv_obj_t *lbl_fr_msg;
+static lv_obj_t *lbl_fr_note;
+static lv_obj_t *fr_all;
+static lv_obj_t *fr_send;
+struct FriendRowUi {
+  lv_obj_t *card, *name, *dot, *state, *poke;
+};
+static FriendRowUi fr_rows[kFriendRows];
+
+// 圆角按钮，里面一行字。bg 是 0 时用主题的灰色
+static lv_obj_t *make_text_button(lv_obj_t *parent, int x, int y, int w, int h, uint32_t bg, const char *text,
+                                  lv_obj_t **label = nullptr) {
+  lv_obj_t *b = lv_obj_create(parent);
+  lv_obj_set_pos(b, x, y);
+  lv_obj_set_size(b, w, h);
+  lv_obj_set_style_radius(b, h / 2, 0);
+  lv_obj_set_style_border_width(b, 0, 0);
+  lv_obj_set_style_pad_all(b, 0, 0);
+  lv_obj_set_style_bg_color(b, bg ? lv_color_hex(bg) : COLOR_FLAT, 0);
+  lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_t *l = make_label(b, &font_cn_16, bg ? lv_color_hex(0xFFFFFF) : COLOR_TEXT);
+  lv_label_set_text(l, text);
+  lv_obj_center(l);
+  if (label) *label = l;
+  return b;
+}
+
+static void build_friends() {
+  lv_obj_t *scr = make_screen();
+  scr_pages[PAGE_FRIENDS] = scr;
+
+  lbl_fr_title = make_label(scr, &font_cn_16, COLOR_SUBTLE);
+  lv_label_set_long_mode(lbl_fr_title, LV_LABEL_LONG_DOT);
+  lv_obj_set_width(lbl_fr_title, 200);
+  lv_obj_set_pos(lbl_fr_title, 12, 10);
+  dot_wifi[PAGE_FRIENDS] = make_wifi_dot(scr);
+  fr_invite = make_text_button(scr, SCREEN_W - 92, 5, 64, 28, 0, "邀请");
+
+  for (int i = 0; i < kFriendRows; i++) {
+    FriendRowUi &r = fr_rows[i];
+    r.card = make_card(scr, 12, kFrRowTop + i * kFrRowStep, SCREEN_W - 24, kFrRowH);
+    r.name = make_label(r.card, &font_cn_16, COLOR_TEXT);
+    lv_label_set_long_mode(r.name, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(r.name, 96);
+    lv_obj_align(r.name, LV_ALIGN_LEFT_MID, 12, 0);
+    r.dot = lv_obj_create(r.card);
+    lv_obj_set_size(r.dot, 8, 8);
+    lv_obj_set_style_radius(r.dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(r.dot, 0, 0);
+    lv_obj_set_style_bg_color(r.dot, lv_color_hex(kFrHere), 0);
+    lv_obj_align(r.dot, LV_ALIGN_LEFT_MID, 116, 0);
+    r.state = make_label(r.card, &font_cn_16, COLOR_SUBTLE);
+    lv_obj_align(r.state, LV_ALIGN_LEFT_MID, 130, 0);
+    r.poke = make_text_button(r.card, SCREEN_W - 24 - 84, 4, 78, kFrRowH - 8, kFrOrange, "戳一戳");
+  }
+
+  lbl_fr_note = make_label(scr, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_set_width(lbl_fr_note, SCREEN_W - 24);
+  lv_label_set_long_mode(lbl_fr_note, LV_LABEL_LONG_DOT);
+  lv_obj_set_style_text_align(lbl_fr_note, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(lbl_fr_note, LV_ALIGN_TOP_MID, 0, kFrRowTop + kFriendRows * kFrRowStep + 2);
+
+  fr_all = make_text_button(scr, 12, kFrBtnY, 144, kFrBtnH, 0, "戳全部人");
+  lv_obj_set_style_bg_color(fr_all, COLOR_ACCENT, 0);
+  lv_obj_set_style_text_color(lv_obj_get_child(fr_all, 0), lv_color_hex(0xFFFFFF), 0);
+  fr_send = make_text_button(scr, SCREEN_W - 12 - 144, kFrBtnY, 144, kFrBtnH, 0, "发留言 ›");
+
+  lbl_fr_msg = make_label(scr, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_set_width(lbl_fr_msg, SCREEN_W - 48);
+  lv_label_set_long_mode(lbl_fr_msg, LV_LABEL_LONG_WRAP);
+  lv_obj_set_style_text_align(lbl_fr_msg, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_line_space(lbl_fr_msg, 4, 0);
+  lv_label_set_recolor(lbl_fr_msg, true);
+  lv_obj_align(lbl_fr_msg, LV_ALIGN_CENTER, 0, 6);
+}
+
+void ui_set_friends(const FriendsView &v) {
+  bool list = v.msg == nullptr;
+  set_hidden(lbl_fr_msg, list);
+  if (!list) lv_label_set_text(lbl_fr_msg, v.msg);
+  char title[64];
+  snprintf(title, sizeof(title), "%s%s", v.title ? v.title : "好友", v.switchable ? " ›" : "");
+  lv_label_set_text(lbl_fr_title, title);
+  set_hidden(fr_invite, !(list && v.can_invite));
+  for (int i = 0; i < kFriendRows; i++) {
+    FriendRowUi &r = fr_rows[i];
+    bool on = list && i < v.n;
+    set_hidden(r.card, !on);
+    if (!on) continue;
+    const FriendRow &f = v.rows[i];
+    lv_label_set_text(r.name, f.name);
+    set_hidden(r.dot, !f.here);
+    lv_label_set_text(r.state, f.here ? "在桌前" : f.online ? "在线" : "不在");
+    lv_obj_align(r.state, LV_ALIGN_LEFT_MID, f.here ? 130 : 116, 0);
+    lv_obj_set_style_text_color(r.state, f.here ? lv_color_hex(kFrHere) : COLOR_SUBTLE, 0);
+  }
+  bool any = list && v.n > 0;
+  set_hidden(fr_all, !any);
+  set_hidden(fr_send, !any);
+  char note[128] = "";
+  if (list && v.note && v.note[0]) snprintf(note, sizeof(note), "%s", v.note);
+  else if (list && v.pages > 1) snprintf(note, sizeof(note), "%d/%d  上下滑动看其他人", v.page + 1, v.pages);
+  else if (list && v.n == 0) snprintf(note, sizeof(note), "圈子里还只有你，点右上角「邀请」");
+  lv_label_set_text(lbl_fr_note, note);
+  set_hidden(lbl_fr_note, !list);
+}
+
+// 按钮本身的范围再放宽 2 像素，相邻的按钮不会抢
+static bool hit_exact(lv_obj_t *o, int x, int y) {
+  if (lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN)) return false;
+  lv_area_t a;
+  lv_obj_get_coords(o, &a);
+  return x >= a.x1 - 2 && x <= a.x2 + 2 && y >= a.y1 - 2 && y <= a.y2 + 2;
+}
+
+FriendsHit ui_friends_hit(int x, int y, int *row) {
+  lv_obj_update_layout(scr_pages[PAGE_FRIENDS]);
+  if (hit_exact(fr_invite, x, y)) return FriendsHit::Invite;
+  for (int i = 0; i < kFriendRows; i++) {
+    if (!lv_obj_has_flag(fr_rows[i].card, LV_OBJ_FLAG_HIDDEN) && hit_exact(fr_rows[i].poke, x, y)) {
+      if (row) *row = i;
+      return FriendsHit::Poke;
+    }
+  }
+  if (hit_exact(fr_all, x, y)) return FriendsHit::PokeAll;
+  if (hit_exact(fr_send, x, y)) return FriendsHit::Send;
+  if (y < 32 && x < 220) return FriendsHit::Title;
+  return FriendsHit::None;
+}
+
+void ui_set_friends_here(const char *text) {
+  bool show = text && text[0];
+  friends_here_shown = show;
+  if (show) {
+    char buf[96];
+    snprintf(buf, sizeof(buf), "#3FB950 ●# %s", text);
+    lv_label_set_text(lbl_city, buf);
+  } else {
+    lv_label_set_text(lbl_city, city_name.c_str());
+  }
+  lv_obj_align_to(lbl_city, dot_wifi[PAGE_CLOCK], LV_ALIGN_OUT_LEFT_MID, -8, 0);
+}
+
+// ---------- 选一句话 ----------
+static constexpr int kPhW = 96, kPhH = 48, kPhGap = 8, kPhTop = 46;
+static lv_obj_t *scr_phrases;
+static lv_obj_t *lbl_ph_title;
+static lv_obj_t *ph_chips[kFrPhraseCount];
+static lv_obj_t *ph_cancel;
+
+static void build_phrases() {
+  scr_phrases = make_screen();
+  lbl_ph_title = make_label(scr_phrases, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_set_pos(lbl_ph_title, 12, 10);
+  int left = (SCREEN_W - 3 * kPhW - 2 * kPhGap) / 2;
+  for (int i = 0; i < kFrPhraseCount; i++) {
+    ph_chips[i] = make_text_button(scr_phrases, left + i % 3 * (kPhW + kPhGap), kPhTop + i / 3 * (kPhH + kPhGap), kPhW,
+                                   kPhH, 0, kFrPhrases[i]);
+    lv_obj_set_style_radius(ph_chips[i], 12, 0);
+    lv_obj_set_style_bg_color(ph_chips[i], COLOR_CARD, 0);
+  }
+  ph_cancel = make_text_button(scr_phrases, (SCREEN_W - 144) / 2, kFrBtnY, 144, kFrBtnH, 0, "取消");
+}
+
+void ui_show_phrases(const char *title) {
+  lv_label_set_text(lbl_ph_title, title);
+  screen_load(scr_phrases, false);
+}
+
+int ui_phrases_hit(int x, int y) {
+  lv_obj_update_layout(scr_phrases);
+  for (int i = 0; i < kFrPhraseCount; i++) {
+    if (hit_exact(ph_chips[i], x, y)) return i;
+  }
+  if (hit_exact(ph_cancel, x, y)) return -1;
+  return -2;
+}
+
+// ---------- 好友弹窗 ----------
+static constexpr int kFrCatPx = kPetSize * 4;
+static lv_obj_t *scr_friend;
+static lv_obj_t *lbl_fa_title;
+static lv_obj_t *lbl_fa_body;
+static lv_obj_t *lbl_fa_foot;
+static lv_obj_t *fa_cat;
+static lv_color_t *fa_cat_buf;
+static lv_obj_t *fa_img;
+static lv_img_dsc_t fa_dsc;
+static lv_obj_t *fa_action;
+static lv_obj_t *lbl_fa_action;
+static lv_obj_t *fa_close;
+static uint8_t fa_cat_epoch = 0xFF;
+
+static void build_friend_alert() {
+  scr_friend = make_screen();
+  // 名字什么字都有，font_cn_24 只有源码里用到的字，所以标题用 16 号（GB2312 全部汉字）
+  lbl_fa_title = make_label(scr_friend, &font_cn_16, COLOR_TEXT);
+  lv_obj_set_width(lbl_fa_title, SCREEN_W - 32);
+  lv_label_set_long_mode(lbl_fa_title, LV_LABEL_LONG_DOT);
+  lv_obj_set_style_text_align(lbl_fa_title, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(lbl_fa_title, LV_ALIGN_TOP_MID, 0, 14);
+
+  fa_cat_buf = (lv_color_t *)lv_mem_alloc(LV_CANVAS_BUF_SIZE_TRUE_COLOR(kFrCatPx, kFrCatPx));
+  fa_cat = lv_canvas_create(scr_friend);
+  if (fa_cat_buf) lv_canvas_set_buffer(fa_cat, fa_cat_buf, kFrCatPx, kFrCatPx, LV_IMG_CF_TRUE_COLOR);
+  lv_obj_set_pos(fa_cat, 40, 62);
+
+  fa_img = lv_img_create(scr_friend);
+  lv_obj_set_pos(fa_img, 12, 52);
+  fa_dsc.header.cf = LV_IMG_CF_TRUE_COLOR;
+  fa_dsc.header.w = kFrThumbW;
+  fa_dsc.header.h = kFrThumbH;
+  fa_dsc.data_size = kFrThumbW * kFrThumbH * 2;
+
+  lbl_fa_body = make_label(scr_friend, &font_cn_16, COLOR_TEXT);
+  lv_label_set_long_mode(lbl_fa_body, LV_LABEL_LONG_WRAP);
+  lv_obj_set_style_text_line_space(lbl_fa_body, 4, 0);
+
+  lbl_fa_foot = make_label(scr_friend, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_set_width(lbl_fa_foot, SCREEN_W - 24);
+  lv_label_set_long_mode(lbl_fa_foot, LV_LABEL_LONG_DOT);
+  lv_obj_set_style_text_align(lbl_fa_foot, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(lbl_fa_foot, LV_ALIGN_TOP_MID, 0, 162);
+
+  fa_action = make_text_button(scr_friend, 12, kFrBtnY, 144, kFrBtnH, kFrOrange, "", &lbl_fa_action);
+  fa_close = make_text_button(scr_friend, SCREEN_W - 12 - 144, kFrBtnY, 144, kFrBtnH, 0, "关闭");
+}
+
+void ui_show_friend_alert(const FriendAlertView &v) {
+  lv_label_set_text(lbl_fa_title, v.title);
+  set_hidden(fa_cat, !v.poke);
+  if (v.poke && fa_cat_buf && fa_cat_epoch != theme_epoch) {
+    fa_cat_epoch = theme_epoch;
+    for (int y = 0; y < kFrCatPx; y++) {
+      for (int x = 0; x < kFrCatPx; x++)
+        fa_cat_buf[y * kFrCatPx + x] = pet_color(pet_pixel(PetMood::Happy, false, x / 4, y / 4));
+    }
+    lv_obj_invalidate(fa_cat);
+  }
+  set_hidden(fa_img, !v.thumb);
+  if (v.thumb) {
+    fa_dsc.data = (const uint8_t *)v.thumb;
+    lv_img_set_src(fa_img, &fa_dsc);
+    lv_obj_invalidate(fa_img);
+  }
+
+  lv_obj_set_style_text_font(lbl_fa_body, v.big ? &lv_font_montserrat_48 : v.poke ? &font_cn_24 : &font_cn_16, 0);
+  lv_obj_set_style_text_color(lbl_fa_body, v.poke ? lv_color_hex(0xFF8FA3) : COLOR_TEXT, 0);
+  lv_label_set_text(lbl_fa_body, v.body);
+  if (v.poke) {
+    lv_obj_set_width(lbl_fa_body, SCREEN_W - 136);
+    lv_obj_set_style_text_align(lbl_fa_body, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_align(lbl_fa_body, LV_ALIGN_TOP_LEFT, 124, 80);
+  } else if (v.thumb) {
+    lv_obj_set_width(lbl_fa_body, SCREEN_W - 12 - kFrThumbW - 24);
+    lv_obj_set_style_text_align(lbl_fa_body, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_align(lbl_fa_body, LV_ALIGN_TOP_LEFT, 12 + kFrThumbW + 12, 52);
+  } else {
+    lv_obj_set_width(lbl_fa_body, SCREEN_W - 40);
+    lv_obj_set_style_text_align(lbl_fa_body, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(lbl_fa_body, LV_ALIGN_TOP_MID, 0, v.big ? 70 : 62);
+  }
+  lv_label_set_text(lbl_fa_foot, v.foot ? v.foot : "");
+
+  set_hidden(fa_action, !v.action);
+  if (v.action) {
+    lv_label_set_text(lbl_fa_action, v.action);
+    lv_obj_set_x(fa_close, SCREEN_W - 12 - 144);
+  } else {
+    lv_obj_set_x(fa_close, (SCREEN_W - 144) / 2);
+  }
+  screen_load(scr_friend, false);
+}
+
+FriendAlertHit ui_friend_alert_hit(int x, int y) {
+  lv_obj_update_layout(scr_friend);
+  if (hit_exact(fa_action, x, y)) return FriendAlertHit::Action;
+  if (hit_exact(fa_close, x, y)) return FriendAlertHit::Close;
+  return FriendAlertHit::None;
 }
 
 // ---- 音乐页：播放画面 + 歌曲列表 ----
@@ -2590,6 +2883,7 @@ void ui_init() {
   build_github();
   build_stocks();
   build_pet();
+  build_friends();
   build_pomodoro();
   build_chat();
   build_album();
@@ -2612,6 +2906,8 @@ void ui_init() {
   build_quick();
   build_qpages();
   build_game();
+  build_phrases();
+  build_friend_alert();
   Pomodoro idle;
   ui_set_pomodoro(idle, 0, nullptr, 0);
 }
@@ -2710,7 +3006,8 @@ void ui_tick_clock() {
 }
 
 void ui_set_city(const char *city) {
-  lv_label_set_text(lbl_city, city);
+  city_name = city ? city : "";
+  if (!friends_here_shown) lv_label_set_text(lbl_city, city);
   lv_obj_align_to(lbl_city, dot_wifi[PAGE_CLOCK], LV_ALIGN_OUT_LEFT_MID, -8, 0);
   if (city && city[0]) lv_label_set_text_fmt(lbl_fc_city, "%s · 天气预报", city);
   else lv_label_set_text(lbl_fc_city, "天气预报");
@@ -3063,7 +3360,7 @@ void ui_set_theme(bool light) {
   for (lv_obj_t *scr : scr_pages) {
     if (scr != scr_pages[PAGE_ALBUM]) recolor(scr, from, *pal);  // 影片页的播放画面用固定的颜色，换不到
   }
-  for (lv_obj_t *scr : {scr_alert, scr_quick, scr_qpages, scr_game}) recolor(scr, from, *pal);
+  for (lv_obj_t *scr : {scr_alert, scr_quick, scr_qpages, scr_game, scr_phrases, scr_friend}) recolor(scr, from, *pal);
   for (int lv = 0; lv < 5; lv++) lv_obj_set_style_bg_color(gh_legend[lv], lv_color_hex(pal->level[lv]), 0);
   if (moon_now >= 0) draw_moon(moon_now);
   if (have_weather) ui_set_weather(last_weather);

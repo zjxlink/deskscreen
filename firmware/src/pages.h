@@ -10,6 +10,7 @@ enum Page {
   PAGE_GITHUB,
   PAGE_STOCKS,
   PAGE_PET,  // 像素小猫
+  PAGE_FRIENDS,  // 好友圈子（没填服务器地址时跳过）
   PAGE_POMODORO,
   PAGE_CHAT,  // AI 语音聊天
   PAGE_ALBUM,  // 电子相册（TF 卡）
