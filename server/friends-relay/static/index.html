@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f3f1ec">
+<title>小橘好友</title>
+<style>
+:root{--bg:#f3f1ec;--card:#fff;--text:#1f2328;--sub:#6e7781;--line:#e4e2dc;--orange:#f08a2c;--blue:#2f81f7;--green:#2da44e;--red:#e5534b;--chip:#eef3fa;--chipt:#1d5fa8}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--card:#161b22;--text:#e6edf3;--sub:#8b949e;--line:#30363d;--chip:#1c2f45;--chipt:#cfe3ff}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;padding:16px 16px 40px;max-width:520px;margin:0 auto}
+h1{font-size:22px;margin:4px 0 0}
+.sub{color:var(--sub);font-size:14px;margin-bottom:14px}
+.sub select{font:inherit;color:var(--text);background:transparent;border:0;border-bottom:1px dashed var(--sub);padding:0 2px}
+.card{background:var(--card);border-radius:14px;padding:14px;margin-bottom:12px}
+.card h2{font-size:16px;margin:0 0 8px}
+.mem{display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px solid var(--line)}
+.mem:first-of-type{border-top:0}
+.mem .n{flex:1}
+.mem .s{color:var(--sub);font-size:14px;min-width:64px}
+.mem .s.on{color:var(--green)}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--green);margin-right:5px}
+button{font:inherit;border:0;border-radius:22px;padding:9px 16px;background:var(--chip);color:var(--chipt);cursor:pointer}
+button.big{display:block;width:100%;background:var(--orange);color:#fff;font-size:18px;padding:12px;margin-top:8px}
+button.blue{background:var(--blue);color:#fff}
+button.link{background:none;color:var(--sub);padding:4px 6px;font-size:14px}
+button:disabled{opacity:.5}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 8px}
+.chips button{padding:6px 12px}
+textarea,input[type=text],input[inputmode]{width:100%;font:inherit;color:var(--text);background:transparent;border:1px solid var(--line);border-radius:10px;padding:9px 10px}
+textarea{height:64px;resize:none}
+.row{display:flex;gap:8px;margin-top:8px;align-items:center}
+.row>*{flex:1}
+.sw{appearance:none;width:46px;height:28px;border-radius:14px;background:var(--line);position:relative;flex:none;margin:0;cursor:pointer;transition:.2s}
+.sw:checked{background:#34c759}
+.sw::after{content:"";position:absolute;left:3px;top:3px;width:22px;height:22px;border-radius:50%;background:#fff;transition:.2s}
+.sw:checked::after{left:21px}
+.hint{color:var(--sub);font-size:13px;margin:6px 0 0}
+.hist{font-size:14px;color:var(--sub)}
+.hist div{padding:4px 0;border-top:1px solid var(--line)}
+.hist div:first-child{border-top:0}
+.hist b{color:var(--text);font-weight:500}
+.hist img{display:block;max-width:160px;border-radius:8px;margin-top:4px}
+.read{color:var(--green)}
+.code{font-size:40px;letter-spacing:8px;text-align:center;font-variant-numeric:tabular-nums;margin:6px 0}
+.banner{background:#fff3e0;color:#8a4b00;border-radius:10px;padding:8px 12px;font-size:14px;margin-bottom:12px}
+#toast{position:fixed;left:50%;top:16px;transform:translateX(-50%);background:#1f2328;color:#fff;padding:10px 16px;border-radius:20px;font-size:15px;z-index:9;max-width:90%}
+#preview{max-width:120px;border-radius:8px;display:block;margin-top:6px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div id="toast" hidden></div>
+<h1>小橘好友</h1>
+<div class="sub" id="who">连接中…</div>
+<div class="banner" id="mgr" hidden></div>
+
+<section class="card" id="regCard" hidden>
+<h2>先起个名字</h2>
+<input type="text" id="regName" maxlength="10" placeholder="比如：小雨">
+<button class="big" id="regGo">开始</button>
+<p class="hint">名字会显示在朋友的屏幕上，最多 10 个字。这个网页记住你的身份，下次打开不用再填。</p>
+</section>
+
+<section class="card" id="noCircle" hidden>
+<h2>还没有加入圈子</h2>
+<div class="row"><input type="text" id="joinCode" inputmode="numeric" maxlength="7" placeholder="6 位邀请码"><button class="blue" id="joinGo" style="flex:none">加入</button></div>
+<p class="hint">邀请码在朋友的桌面屏「好友」页点「邀请」，或者在 TA 的网页里生成。</p>
+<div class="row"><input type="text" id="newCircle" maxlength="10" placeholder="新圈子的名字，如：我们家"><button id="createGo" style="flex:none">创建</button></div>
+</section>
+
+<section class="card" id="memCard" hidden>
+<div id="members"></div>
+<button class="big" id="pokeAll">戳全部人 ♥</button>
+</section>
+
+<section class="card" id="sendCard" hidden>
+<h2>发留言 <select id="to" style="font:inherit;color:var(--text);background:transparent;border:0"></select></h2>
+<div class="chips" id="phrases"></div>
+<textarea id="text" maxlength="60" placeholder="写点什么…（最多 60 字）"></textarea>
+<img id="preview" hidden alt="">
+<div class="row"><button id="photoBtn">＋ 照片</button><button class="blue" id="sendGo">发送</button></div>
+<input type="file" id="photo" accept="image/*" hidden>
+</section>
+
+<section class="card" id="hereCard" hidden>
+<div class="row" style="margin:0"><div><b>我在桌前</b><div class="hint" style="margin:0">打开后圈子里每台屏幕都显示「<span id="hereName"></span> 在桌前」。网页关掉一分多钟就算离开。</div></div><input type="checkbox" class="sw" id="here"></div>
+</section>
+
+<section class="card" id="histCard" hidden>
+<h2>记录</h2>
+<div class="hist" id="hist"></div>
+</section>
+
+<section class="card" id="moreCard" hidden>
+<h2>圈子</h2>
+<button id="inviteGo">生成邀请码</button>
+<div id="inviteBox" hidden><div class="code" id="inviteCode"></div><p class="hint" id="inviteNote" style="text-align:center"></p></div>
+<div class="row"><input type="text" id="joinCode2" inputmode="numeric" maxlength="7" placeholder="加入别的圈子：邀请码"><button id="joinGo2" style="flex:none">加入</button></div>
+<div class="row"><input type="text" id="newCircle2" maxlength="10" placeholder="再建一个圈子"><button id="createGo2" style="flex:none">创建</button></div>
+<div class="row" style="justify-content:space-between"><button class="link" id="rename">改名字</button><button class="link" id="leave" style="color:var(--red)">退出这个圈子</button></div>
+<div class="row" id="slotRow"><button class="link" id="newSlot">再开一个测试身份（新标签页）</button></div>
+</section>
+
+<script>
+const $=id=>document.getElementById(id);
+const PHRASES=['想你了','吃饭了吗','加油','早点睡','晚安','在忙吗'];
+const qs=new URLSearchParams(location.hash.slice(1));
+// 板子的设置网页用 #t=板子的token 打开这里，用来管理板子的圈子；这时不发「在桌前」
+const mgrToken=qs.get('t')||sessionStorage.getItem('mgr')||'';
+if(qs.get('t')){sessionStorage.setItem('mgr',mgrToken);history.replaceState(null,'',location.pathname);}
+const slot=qs.get('slot')||sessionStorage.getItem('slot')||'0';
+sessionStorage.setItem('slot',slot);
+const KEY='fr_id_'+slot;
+let ident=mgrToken?{token:mgrToken}:JSON.parse(localStorage.getItem(KEY)||'null');
+let me=null,circles=[],cur=localStorage.getItem(KEY+'_c')||'',seq=0,events=[],photo=null,inviteTimer=0;
+let here=localStorage.getItem(KEY+'_here')==='1';
+
+let toastT;
+function toast(s){const t=$('toast');t.textContent=s;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>t.hidden=true,2600);}
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function api(path,body,opts={}){
+ const r=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json',...(ident?{Authorization:'Bearer '+ident.token}:{})},body:body?JSON.stringify(body):undefined,signal:opts.signal});
+ const j=await r.json().catch(()=>({error:'服务器没有回应'}));
+ if(!r.ok)throw Object.assign(new Error(j.error||r.status),{status:r.status});
+ return j;
+}
+const circle=()=>circles.find(c=>c.id===cur);
+const hhmm=ts=>{const d=new Date(ts*1000);return d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');};
+
+function render(){
+ const reg=!ident;
+ $('regCard').hidden=!reg;
+ for(const id of ['noCircle','memCard','sendCard','hereCard','histCard','moreCard'])$(id).hidden=true;
+ if(reg||!me){$('who').textContent=reg?'第一次打开':'连接中…';return;}
+ if(!circle()&&circles.length)cur=circles[0].id;
+ localStorage.setItem(KEY+'_c',cur);
+ const c=circle();
+ $('who').innerHTML=`以「${esc(me.name)}」的身份`+(circles.length?` · 圈子：<select id="sel">${circles.map(x=>`<option value="${x.id}"${x.id===cur?' selected':''}>${esc(x.name)}（${x.members.length}）</option>`).join('')}</select>`:'');
+ if($('sel'))$('sel').onchange=e=>{cur=e.target.value;render();};
+ $('mgr').hidden=!mgrToken;
+ if(mgrToken)$('mgr').textContent=`正在管理桌面屏「${me.name}」：在这里邀请别人、加入或退出圈子。`;
+ $('slotRow').hidden=!!mgrToken;
+ if(!c){$('noCircle').hidden=false;return;}
+ $('memCard').hidden=$('sendCard').hidden=$('histCard').hidden=$('moreCard').hidden=false;
+ $('hereCard').hidden=!!mgrToken;
+ $('hereName').textContent=me.name;$('here').checked=here;
+ const others=c.members.filter(m=>!m.me);
+ const owner=c.owner===me.id;
+ $('members').innerHTML=others.length?others.map(m=>`<div class="mem"><span class="n">${esc(m.name)}${m.kind==='board'?'':' <small style="color:var(--sub)">手机</small>'}</span>`+
+  `<span class="s${m.here?' on':''}">${m.here?'<span class="dot"></span>在桌前':m.online?'在线':'不在'}</span>`+
+  `<button data-poke="${m.id}">戳</button>${owner?`<button class="link" data-kick="${m.id}" title="移出">✕</button>`:''}</div>`).join('')
+  :'<p class="hint">圈子里还只有你。在下面「圈子」里生成邀请码，发给家人朋友。</p>';
+ $('pokeAll').hidden=!others.length;
+ const sel=$('to'),old=sel.value;
+ sel.innerHTML=`<option value="">发到 ${esc(c.name)}</option>`+others.map(m=>`<option value="${m.id}">只发给 ${esc(m.name)}</option>`).join('');
+ sel.value=[...sel.options].some(o=>o.value===old)?old:'';
+ renderHist();
+}
+
+function renderHist(){
+ const c=circle();if(!c)return;
+ const reads={};
+ for(const e of events)if(e.type==='read')(reads[e.id]=reads[e.id]||new Set()).add(e.from);
+ const name=id=>(c.members.find(m=>m.id===id)||{}).name||'';
+ const rows=events.filter(e=>e.circle===c.id&&e.type!=='read').slice(-40).reverse().map(e=>{
+  const t=hhmm(e.ts), to=e.to?' → '+esc(name(e.to)||'TA'):' → '+esc(c.name);
+  if(e.type==='circle')return `<div>${t} ${esc(e.from_name)} ${esc(e.text)}</div>`;
+  if(e.mine){
+   const n=(reads[e.id]||new Set()).size;
+   const rd=e.type==='text'&&n?` <span class="read">${e.recipients>1?n+' 人':''}已读</span>`:'';
+   return e.type==='poke'?`<div>${t} 你戳了${e.to?esc(name(e.to)):'全部人'}</div>`
+    :`<div>${t} 你${to}：<b>${esc(e.text)}</b>${rd}${e.photo?`<img src="${e.photo}" alt="">`:''}</div>`;
+  }
+  return e.type==='poke'?`<div>${t} <b>${esc(e.from_name)}</b> 戳了你一下 ♥</div>`
+   :`<div>${t} <b>${esc(e.from_name)}</b>${e.to?'':' → '+esc(c.name)}：<b>${esc(e.text)}</b>${e.photo?`<img src="${e.photo}" alt="">`:''}</div>`;
+ });
+ $('hist').innerHTML=rows.join('')||'<span>还没有消息</span>';
+}
+
+// 收到的留言：网页在前台时算已读
+let unread=[];
+function markRead(){
+ if(document.hidden||!unread.length||mgrToken)return;
+ const ids=unread;unread=[];
+ api('/api/read',{ids}).catch(()=>{});
+}
+document.addEventListener('visibilitychange',markRead);
+
+function onEvents(list,live){
+ for(const e of list){
+  if(events.some(x=>x.seq===e.seq))continue;
+  events.push(e);
+  if(!live||e.mine)continue;
+  if(e.type==='poke'){toast(e.from_name+' 戳了你一下 ♥');navigator.vibrate&&navigator.vibrate([80,60,80]);}
+  else if(e.type==='text'){toast(e.from_name+'：'+e.text);navigator.vibrate&&navigator.vibrate(120);unread.push(e.id);}
+  else if(e.type==='circle')toast(e.from_name+' '+e.text);
+ }
+ events=events.slice(-300);
+ if(!live)for(const e of list)if(e.type==='text'&&!e.mine&&!e.read)unread.push(e.id);
+ markRead();
+}
+
+let ctl=null;
+async function syncLoop(){
+ let first=true,fails=0;
+ while(ident){
+  try{
+   ctl=new AbortController();
+   const q=first?'since=0&history=1':`since=${seq}&wait=25`;
+   const h=mgrToken?'':`&here=${here?1:0}`;
+   const j=await api(`/api/sync?${q}${h}`,null,{signal:ctl.signal});
+   me=j.me;circles=j.circles;
+   if(j.seq<seq)events=[];
+   onEvents(j.events,!first);seq=j.seq;first=false;fails=0;
+   render();
+  }catch(e){
+   if(e.name==='AbortError')continue;
+   if(e.status===401&&!mgrToken){localStorage.removeItem(KEY);ident=null;render();return;}
+   fails++;$('who').textContent='连不上服务器，正在重试…';
+   await new Promise(r=>setTimeout(r,Math.min(30000,2000*fails)));
+  }
+ }
+}
+// 改了「在桌前」马上同步一次，不等长轮询
+function resync(){if(ctl)ctl.abort();}
+
+async function act(fn,ok){
+ try{const r=await fn();if(ok)toast(ok);resync();return r;}catch(e){toast(e.message);}
+}
+
+$('regGo').onclick=async()=>{
+ const name=$('regName').value.trim();if(!name)return toast('先写个名字');
+ const r=await act(()=>api('/api/register',{name,kind:'web'}));
+ if(!r)return;
+ ident={token:r.token,id:r.id};localStorage.setItem(KEY,JSON.stringify(ident));
+ render();syncLoop();
+};
+const join=inp=>act(async()=>{const r=await api('/api/join',{code:$(inp).value});cur=r.circle.id;$(inp).value='';return r;},'加入了');
+const create=inp=>act(async()=>{const r=await api('/api/circles',{name:$(inp).value.trim()});cur=r.circle.id;$(inp).value='';return r;},'圈子建好了，生成邀请码请家人加入吧');
+$('joinGo').onclick=()=>join('joinCode');$('joinGo2').onclick=()=>join('joinCode2');
+$('createGo').onclick=()=>create('newCircle');$('createGo2').onclick=()=>create('newCircle2');
+$('members').onclick=e=>{
+ const p=e.target.dataset.poke,k=e.target.dataset.kick;
+ if(p)act(()=>api('/api/send',{circle:cur,to:p,kind:'poke'}),'戳了一下');
+ if(k&&confirm('把 TA 移出这个圈子？'))act(()=>api('/api/leave',{circle:cur,member:k}),'已移出');
+};
+$('pokeAll').onclick=()=>act(()=>api('/api/send',{circle:cur,kind:'poke'}),'戳了全部人');
+$('phrases').innerHTML=PHRASES.map(p=>`<button>${p}</button>`).join('');
+$('phrases').onclick=e=>{if(e.target.tagName==='BUTTON')$('text').value=e.target.textContent;};
+$('photoBtn').onclick=()=>$('photo').click();
+// 照片先缩到 320x240 以内再传，板子屏幕就这么大
+$('photo').onchange=async()=>{
+ const f=$('photo').files[0];if(!f)return;
+ try{
+  const bmp=await createImageBitmap(f);
+  const s=Math.min(1,320/bmp.width,240/bmp.height);
+  const cv=document.createElement('canvas');cv.width=Math.round(bmp.width*s);cv.height=Math.round(bmp.height*s);
+  cv.getContext('2d').drawImage(bmp,0,0,cv.width,cv.height);
+  const url=cv.toDataURL('image/jpeg',0.82);
+  photo=url.split(',')[1];$('preview').src=url;$('preview').hidden=false;
+ }catch(e){toast('这张照片读不出来');}
+ $('photo').value='';
+};
+$('preview').onclick=()=>{photo=null;$('preview').hidden=true;};
+$('sendGo').onclick=async()=>{
+ const text=$('text').value.trim();
+ if(!text&&!photo)return toast('写点什么，或者选张照片');
+ $('sendGo').disabled=true;
+ const r=await act(()=>api('/api/send',{circle:cur,to:$('to').value,kind:'text',text,photo}),'发出去了');
+ $('sendGo').disabled=false;
+ if(r){$('text').value='';photo=null;$('preview').hidden=true;}
+};
+$('here').onchange=()=>{here=$('here').checked;localStorage.setItem(KEY+'_here',here?'1':'0');resync();};
+$('inviteGo').onclick=async()=>{
+ const r=await act(()=>api('/api/invite',{circle:cur}));if(!r)return;
+ $('inviteBox').hidden=false;$('inviteCode').textContent=r.code.slice(0,3)+' '+r.code.slice(3);
+ const end=Date.now()+r.expires_in*1000;clearInterval(inviteTimer);
+ const tick=()=>{const s=Math.round((end-Date.now())/1000);if(s<=0){$('inviteBox').hidden=true;clearInterval(inviteTimer);return;}
+  $('inviteNote').textContent=`把邀请码告诉对方，在 TA 的网页或设置里输入加入「${r.circle}」。还剩 ${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}，用一次就失效`;};
+ tick();inviteTimer=setInterval(tick,1000);
+};
+$('rename').onclick=()=>{const n=prompt('新名字（最多 10 个字）',me.name);if(n)act(()=>api('/api/rename',{name:n}),'改好了');};
+$('leave').onclick=()=>{const c=circle();if(c&&confirm(`退出「${c.name}」？以后要重新拿邀请码才能加入`))act(()=>api('/api/leave',{circle:cur}),'已退出');};
+$('newSlot').onclick=()=>{let n=1;while(localStorage.getItem('fr_id_'+n))n++;window.open(location.pathname+'#slot='+n,'_blank');};
+
+render();
+if(ident)syncLoop();
+</script>
+</body>
+</html>

@@ -105,6 +105,7 @@ textarea.txt{height:76px;padding:10px 12px;resize:none}
 .file input{flex:1;min-width:0;font:inherit;font-size:13px;color:var(--sub)}
 .res button{display:block;width:100%;margin-top:6px;text-align:left}
 .album{display:flex;align-items:center;gap:12px;padding:6px 16px 14px;text-decoration:none;color:inherit}
+.album.off{pointer-events:none;opacity:.55}
 .go{color:var(--ink);text-decoration:none;font-size:14px;font-weight:500;white-space:nowrap}
 .bar{height:8px;border-radius:999px;background:var(--field);border:1px solid var(--line);overflow:hidden;margin:2px 16px 14px}
 .bar i{display:block;height:100%;width:0;background:var(--accent);border-radius:999px}
@@ -312,6 +313,11 @@ const CARDS=[
  {type:'sw',k:'news_ticker',label:'时钟页显示要闻',sub:'时间下面那一行，和日出日落每 10 秒轮流'},
  {type:'sw',k:'news_voice',label:'喵喵同学可以念新闻',sub:'聊天时问「今天有什么新闻」「科技新闻有啥」，它会挑最新的标题念'}],
  hint:'选了来源后，天气页后面会多一页「资讯」，每 30 分钟更新一次，夜间不更新。每个来源是一个频道：资讯页每 12 秒翻一批，上下滑动翻上一批 / 下一批，点顶上的频道名换频道，左右照常翻页。列表样式一屏 4 条；一屏一条会多显示两三行摘要（热榜没有摘要）。自定义 RSS 可以填 RSSHub 等任何 RSS / Atom 地址，比如自己 NAS 上的 RSSHub。'},
+{t:'services',title:'好友圈子',icon:'person',meta:'friends',f:[
+ {type:'html',html:'<input type="hidden" name="fr_form" value="1"><div class="fld"><label class="lab" for="f_fr_url">中转服务地址（NAS 上的 deskscreen-friends 容器）</label><input class="txt" id="f_fr_url" name="fr_url" maxlength="120" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="https://friends.example.com"></div><div class="fld"><label class="lab" for="f_fr_name">我的名字（显示在好友的屏幕上，最多 10 个字）</label><input class="txt" id="f_fr_name" name="fr_name" maxlength="10" placeholder="桌面屏"></div>'},
+ {type:'sw',k:'fr_here',label:'告诉圈子我在桌前',sub:'有 SENSOR 底座时按雷达，没有时按最近 10 分钟有没有碰过屏幕；只有圈子里的人看得到'},
+ {type:'html',html:'<a class="album" id="frManage" href="#" target="_blank" rel="noopener"><span class="l"><b>管理圈子</b><small id="frSub">新建圈子、邀请家人、用邀请码加入、退出</small></span><span class="go">打开 ›</span></a>'}],
+ hint:'填好地址保存后，屏幕上会多一页「好友」：每个人旁边有「戳一戳」，下面能戳全部人、选一句话发到圈子里；好友戳你、给你留言时屏幕会弹出来，留言可以带照片，点「回复」选一句话回过去。夜里、没人、番茄钟专注、聊天和看片子时先攒着，之后再弹。<br>没有板子的家人用手机打开中转服务的地址就能加入，和板子一样能戳、能留言。消息和照片只经过你自己的 NAS，7 天后自动删除。'},
 {t:'remind',title:'番茄钟',icon:'timer',f:[
  {type:'num',k:'pomo_focus',label:'专注',unit:'分钟'},
  {type:'num',k:'pomo_short',label:'短休息',unit:'分钟'},
@@ -423,6 +429,9 @@ function fill(s){
  meta('has_token',s.has_token?'● 已保存':'未设置',s.has_token);
  newsMeta();
  meta('has_ai',!s.voice?'这块板子没有麦克风':s.has_ai?'● 已保存':'未设置',s.has_ai&&s.voice);
+ // 管理圈子：中转服务的网页，带着板子的 token 打开；还没注册好时先提示
+ $('frManage').href=s.fr_manage||'#';$('frManage').classList.toggle('off',!s.fr_manage);
+ $('frSub').textContent=s.fr_manage?'新建圈子、邀请家人、用邀请码加入、退出':s.fr_url?'板子正在连接中转服务，过几秒刷新这个网页':'先填上地址并保存';
  base=snap();dirty();
 }
 // 资讯：标题栏显示选了几个来源
@@ -550,6 +559,7 @@ async function status(){
  $('updTitle').textContent=o.state==='downloading'?o.text:'发现新版本 '+o.latest;
  $('updSub').textContent=S.auto_update?'今晚 3～5 点会自动升级，也可以现在升级':'点右边按钮现在升级';
  $('diag').innerHTML=j.net+'<li>'+j.panel+'</li>';
+ meta('friends',j.friends,/^●/.test(j.friends));
  statT=setTimeout(status,o.busy?2000:5000);
 }
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)status();});

@@ -11,6 +11,7 @@ static const Note kAlarm[] = {{1760, 140}, {0, 70}, {1760, 140}, {0, 70}, {1760,
 static const Note kReminder[] = {{1047, 120}, {0, 60}, {1047, 120}, {1568, 360}};  // C6、C6、G6
 static const Note kChatOn[] = {{1175, 90}, {1568, 160}};                    // D6、G6，短促上扬
 static const Note kChatOff[] = {{1568, 90}, {1175, 160}};                   // G6、D6，下行
+static const Note kPoke[] = {{1760, 70}, {0, 50}, {2093, 110}};             // A6、C7，轻快地「啵啵」
 
 static constexpr float kPi = 3.14159265f;
 static constexpr float kAttackMs = 5.0f;
@@ -38,6 +39,9 @@ const Note *sound_melody(SoundId id, int &count) {
     case SoundId::ChatOff:
       count = sizeof(kChatOff) / sizeof(kChatOff[0]);
       return kChatOff;
+    case SoundId::Poke:
+      count = sizeof(kPoke) / sizeof(kPoke[0]);
+      return kPoke;
     case SoundId::BreakDone:
       count = sizeof(kBreakDone) / sizeof(kBreakDone[0]);
       return kBreakDone;
