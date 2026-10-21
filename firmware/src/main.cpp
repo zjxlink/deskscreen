@@ -15,6 +15,8 @@
 #include "imu.h"
 #include "listen.h"
 #include "motion.h"
+#include "movie.h"
+#include "movie_util.h"
 #include "net.h"
 #include "night.h"
 #include "ota.h"
@@ -181,7 +183,7 @@ static void apply_settings() {
   c.away_off = s.away_off;
   c.away_min = s.away_min;
   if (!voice_available()) c.page_unavailable |= 1u << PAGE_CHAT;  // 没有麦克风
-  if (!photos_supported()) c.page_unavailable |= 1u << PAGE_ALBUM;  // 没有 TF 卡槽
+  if (!photos_supported()) c.page_unavailable |= 1u << PAGE_ALBUM | 1u << PAGE_MOVIE;  // 没有 TF 卡槽
   bool news_on = s.news_src.length() > 0 || s.news_rss.length() > 0;
   c.page_enabled[PAGE_NEWS] = news_on;
   if (!news_on) c.page_unavailable |= 1u << PAGE_NEWS;  // 没选新闻来源时不显示资讯页
@@ -199,6 +201,7 @@ static void apply_settings() {
   album_bing = s.album_bing;
   show_caption = s.bing_caption;
   photos_set_sources(album_local, album_bing);
+  photos_set_video_sound(s.album_sound);
   ui_set_album_caption(show_caption ? album_caption : "");
   bing_kick();  // 刚打开必应时立即下载
 
@@ -256,6 +259,7 @@ static int local_minutes() {
 
 // 夜间时段默认不响
 static void play(SoundId id) {
+  if (movie_playing()) return;  // 看片子时不打扰（闹钟不走这里，照常响，片子会暂停）
   if (sound_on && !(sound_quiet_night && screen.night())) audio_play(id);
 }
 
@@ -519,7 +523,7 @@ static void update_motion() {
 }
 
 // 音乐律动：听到音乐、又一分钟没人碰屏幕时切到小橘页；音乐停了，如果是自动切过来的就切回去。
-// 番茄钟、提醒、聊天、相册、夜间和熄屏时不切
+// 番茄钟、提醒、聊天、相册、影片、夜间和熄屏时不切
 static void update_music() {
   uint32_t now = millis();
   bool was = music.playing;
@@ -530,8 +534,8 @@ static void update_music() {
     music_start = now;
     Page p = screen.page();
     if (screen.started() && p != PAGE_PET && p != PAGE_POMODORO && p != PAGE_CHAT && p != PAGE_ALBUM &&
-        now - last_input >= kMusicIdleMs && !screen.night() && !screen.dimmed() && !alert_on && !quick_on &&
-        !game_on && !ota_screen && !pomo.running()) {
+        p != PAGE_MOVIE && now - last_input >= kMusicIdleMs && !screen.night() && !screen.dimmed() && !alert_on &&
+        !quick_on && !game_on && !ota_screen && !pomo.running()) {
       music_return = p;
       music_switched = true;
       screen.go_to(PAGE_PET, now);
@@ -693,8 +697,11 @@ static void update_screen() {
 
 // 写固件期间暂停唤醒词、回声消除和音乐律动：它们一直在算，会拖慢上传，以前上传到一半板子会重启。
 // 在网页上传的处理函数或联网任务里调用，所以只改标志，不碰界面
+static bool ota_busy = false;
+
 static void on_ota_busy(bool busy) {
-  voice_pause(busy);
+  ota_busy = busy;
+  voice_pause(busy || movie_playing());
   listen_set_enabled(!busy && settings_get().music_on);
 }
 
@@ -960,8 +967,9 @@ static void update_game() {
 // 空闲够久就进相册当屏保。番茄钟、聊天、提醒、夜间和熄屏时都不打扰
 static void update_saver(uint32_t now) {
   if (!saver_on || saver_active || !screen.started() || now - last_input < saver_min * 60000UL) return;
-  if (screen.page() == PAGE_ALBUM || screen.night() || screen.dimmed() || alert_on || quick_on || game_on ||
-      ota_screen || pomo.running() || pomo_msg || (chat_busy_at && now - chat_busy_at < kChatStayMs))
+  if (screen.page() == PAGE_ALBUM || screen.page() == PAGE_MOVIE || screen.night() || screen.dimmed() || alert_on ||
+      quick_on || game_on || ota_screen || pomo.running() || pomo_msg ||
+      (chat_busy_at && now - chat_busy_at < kChatStayMs))
     return;
   if (photos_status().count == 0) return;
   saver_return = screen.page();
@@ -1046,6 +1054,164 @@ static void update_album() {
     photos_request_next(album_shuffle, album_sec * 1000UL);
     last_req = now;
   }
+}
+
+
+// 影片页：列表里点一部开始放；放的时候点一下屏幕出控制条，3 秒后自动藏起来。离开影片页就暂停
+static constexpr uint32_t kMovieOverlayMs = 3000;
+static int movie_list_page = 0;
+static bool movie_overlay = false;
+static uint32_t movie_overlay_at = 0;
+static bool movie_list_dirty = true;
+
+static void render_movie_list() {
+  int n = movie_count();
+  const char *msg = nullptr;
+  switch (movie_card()) {
+    case MovieCard::NoSlot:
+    case MovieCard::NoCard:
+      msg = "#E6EDF3 没有检测到 TF 卡#\n\n插入 FAT32 格式的 TF 卡，把转好的影片放进卡里的 movies 文件夹";
+      break;
+    case MovieCard::Reading: msg = "正在读取 TF 卡…"; break;
+    case MovieCard::Empty:
+      msg = "#E6EDF3 还没有影片#\n\n在电脑上用转换工具（tools/movie）把电影转成 .avi，放进 TF 卡的 movies 文件夹";
+      break;
+    case MovieCard::Ok: break;
+  }
+  int pages = (n + kMovieRows - 1) / kMovieRows;
+  if (movie_list_page >= pages) movie_list_page = pages > 0 ? pages - 1 : 0;
+  MovieRow rows[kMovieRows];
+  char names[kMovieRows][kMovieNameMax];
+  int shown = 0;
+  for (int i = 0; i < kMovieRows && !msg; i++) {
+    MovieInfo m;
+    if (!movie_info(movie_list_page * kMovieRows + i, m)) break;
+    movie_display_name(m.name, names[i], sizeof(names[i]));
+    rows[i] = {names[i], m.dur_ms, m.pos_ms};
+    shown++;
+  }
+  ui_set_movie_list(msg, rows, shown, movie_list_page, pages);
+}
+
+// 列表上下滑动翻屏
+static void movie_scroll(int dir) {
+  int pages = (movie_count() + kMovieRows - 1) / kMovieRows;
+  int p = movie_list_page + dir;
+  if (p < 0 || p >= pages) return;
+  movie_list_page = p;
+  render_movie_list();
+}
+
+// 影片页上点了一下。返回 false 表示不是点在列表的片子上，照常翻页
+static bool movie_tap(int x, int y, uint32_t now) {
+  MovieStatus st = movie_status();
+  if (!st.open) {
+    int row = ui_movie_list_hit(x, y);
+    if (row < 0) return false;
+    movie_play(movie_list_page * kMovieRows + row);
+    movie_overlay = true;
+    movie_overlay_at = now;
+    return true;
+  }
+  bool shown = movie_overlay || st.paused || st.ended || st.error;
+  if (!shown) {  // 控制条藏着：点一下先把它叫出来
+    movie_overlay = true;
+    movie_overlay_at = now;
+    return true;
+  }
+  float frac = 0;
+  switch (ui_movie_hit(x, y, &frac)) {
+    case MovieHit::Back:
+      movie_close();
+      break;
+    case MovieHit::PlayPause:
+      if (!st.error) movie_toggle_pause();
+      break;
+    case MovieHit::Rewind:
+      if (!st.error) movie_seek_by(-10000);
+      break;
+    case MovieHit::Forward:
+      if (!st.error) movie_seek_by(10000);
+      break;
+    case MovieHit::Progress:
+      if (!st.error && st.dur_ms) movie_seek_to((uint32_t)(frac * st.dur_ms));
+      break;
+    case MovieHit::Volume: {
+      // 20、40、60、80、100 轮流换，和快捷设置里的是同一个音量
+      Settings s = settings_get();
+      s.sound_volume = s.sound_volume >= 100 ? 20 : (s.sound_volume / 20 + 1) * 20;
+      settings_save(s);
+      apply_settings();
+      break;
+    }
+    case MovieHit::None:
+      movie_overlay = false;  // 点在画面上：藏起控制条
+      return true;
+  }
+  movie_overlay = true;
+  movie_overlay_at = now;
+  return true;
+}
+
+static void update_movie() {
+  static bool was_on = false;
+  static bool player = false;
+  static uint32_t seen_version = 0;
+  static MovieCard seen_card = MovieCard::NoSlot;
+  static uint32_t last_ui = 0;
+  uint32_t now = millis();
+  bool on_page = screen.page() == PAGE_MOVIE && !alert_on && !quick_on && !game_on && !ota_screen;
+  if (on_page && !was_on && !movie_status().open) movie_rescan();  // 刚拷进去的片子也能看到
+  if (!on_page && was_on) movie_pause();  // 提醒、快捷设置、翻到别的页都先暂停
+  was_on = on_page;
+
+  // 放片子时不听唤醒词：片子里的对白会误唤醒，回声消除和唤醒词也很吃 CPU
+  static bool was_playing = false;
+  if (movie_playing() != was_playing) {
+    was_playing = !was_playing;
+    voice_pause(ota_busy || was_playing);
+  }
+
+  MovieStatus st = movie_status();
+  if (st.open != player) {
+    player = st.open;
+    ui_movie_show_player(player);
+    movie_list_dirty = true;
+  }
+  const uint16_t *px;
+  if (movie_take_frame(px)) ui_set_movie_frame(px);
+  if (!player) {
+    if (movie_list_dirty || movie_list_version() != seen_version || movie_card() != seen_card) {
+      movie_list_dirty = false;
+      seen_version = movie_list_version();
+      seen_card = movie_card();
+      render_movie_list();
+    }
+    if (on_page) screen.stay(now);
+    return;
+  }
+  if (on_page) {
+    screen.stay(now);  // 放片子、暂停着都不轮播走
+    if (movie_playing()) screen.activity(now);  // 放的时候不熄屏，夜里也保持亮
+  }
+  if (movie_overlay && movie_playing() && now - movie_overlay_at >= kMovieOverlayMs) movie_overlay = false;
+  if (now - last_ui < 200) return;
+  last_ui = now;
+  MovieInfo m;
+  char title[kMovieNameMax] = "";
+  if (movie_info(st.index, m)) movie_display_name(m.name, title, sizeof(title));
+  MovieView v;
+  v.title = title;
+  v.overlay = movie_overlay;
+  v.paused = st.paused;
+  v.loading = st.loading;
+  v.ended = st.ended;
+  v.sound = st.sound;
+  v.volume = settings_get().sound_volume;
+  v.pos_ms = st.pos_ms;
+  v.dur_ms = st.dur_ms;
+  v.error = st.error;
+  ui_set_movie_player(v);
 }
 
 // 点屏幕或短按 BOOT 键：有全屏提醒时先关掉提醒（屏幕调暗时第一下只点亮），否则切换页面。
@@ -1169,6 +1335,9 @@ static void check_touch() {
       else ui_news_prev();
       news_flip_at = now + kNewsFlipMs;
       screen.stay(now);
+    } else if (abs(dy) >= kSwipePx && screen.page() == PAGE_MOVIE && screen.started() && !screen.dimmed() &&
+               !ota_screen && !alert_on && !game_on && !movie_status().open) {
+      movie_scroll(dy < 0 ? 1 : -1);  // 往上滑看后面的片子
     }
   } else if (!touched && was_touched && !long_done) {
     if (on_ring) {
@@ -1183,6 +1352,9 @@ static void check_touch() {
       ui_news_channel(1);  // 点顶栏的频道名换下一个频道
       news_flip_at = now + kNewsFlipMs;
       screen.stay(now);
+    } else if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && screen.page() == PAGE_MOVIE &&
+               movie_tap(down_x, down_y, now)) {
+      // 影片页：点片子、控制条
     } else {
       on_tap(now, down_x < SCREEN_W / 2);
     }
@@ -1207,6 +1379,7 @@ void setup() {
   sensors_begin();
   imu_ok = imu_begin();
   photos_begin();
+  movie_begin();
   ui_init();
   apply_settings();
   update_screen();  // 还没对时，先用白天亮度
@@ -1273,6 +1446,7 @@ void loop() {
   update_game();
   update_chat();
   update_album();
+  update_movie();
   update_screen();
   update_ota_screen();
 

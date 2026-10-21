@@ -35,6 +35,13 @@ PhotoStatus photos_status();
 // 设置里打开了哪些来源
 void photos_set_sources(bool local, bool bing);
 
+// 视频带声音时要不要放出来
+void photos_set_video_sound(bool on);
+
+// 影片页用：拿 TF 卡的锁（没挂载时试着挂载），返回卡能不能用。不管结果如何都要调用 unlock
+bool photos_card_lock();
+void photos_card_unlock();
+
 // 请后台解码下一张（随机或按文件名顺序）。还在解码上一张、或者上一张还没取走时忽略。
 // 轮到动图时至少放 gif_ms 毫秒（不够一遍时放完这一遍），视频从头放到尾
 void photos_request_next(bool shuffle, uint32_t gif_ms);

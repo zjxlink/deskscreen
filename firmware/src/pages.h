@@ -13,6 +13,7 @@ enum Page {
   PAGE_POMODORO,
   PAGE_CHAT,  // AI 语音聊天
   PAGE_ALBUM,  // 电子相册（TF 卡）
+  PAGE_MOVIE,  // 影片（TF 卡 movies 文件夹）
   PAGE_COUNT,
 };
 

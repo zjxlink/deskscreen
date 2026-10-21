@@ -11,11 +11,14 @@ void audio_begin() {}
 void audio_set_volume(int) {}
 void audio_play(SoundId) {}
 void audio_stream_begin() {}
+bool audio_stream_try_begin() { return false; }
 void audio_stream_write(const int16_t *, size_t) {}
 void audio_stream_done() {}
 void audio_stream_end() {}
 void audio_stream_flush() {}
 size_t audio_stream_pending() { return 0; }
+uint32_t audio_stream_played() { return 0; }
+uint32_t audio_output_delay() { return 0; }
 bool audio_mic_available() { return false; }
 void audio_set_capture_sink(CaptureSink, void *) {}
 size_t audio_mic_listen(int16_t *, size_t) { return 0; }
@@ -62,6 +65,7 @@ static volatile uint32_t out_target = kPrebufferMin;  // 要攒够多少采样�
 static volatile uint32_t out_underruns = 0;           // 这次回答中途放空了几次
 static int16_t *ref_ring;
 static volatile uint32_t tx_count = 0;  // 已经交给 I2S 的采样数
+static volatile uint32_t out_played = 0;  // 从 out_ring 取走去放的采样数（扔掉的不算）
 
 // 麦克风：一个任务一直读，转给 AI 聊天（回调）和音乐律动（listen_ring）
 static int16_t *listen_ring;
@@ -245,6 +249,7 @@ static void speaker_task(void *) {
     size_t n = avail < (uint32_t)kDmaLen ? avail : kDmaLen;
     for (size_t i = 0; i < n; i++) mono[i] = out_ring[(r + i) & (kOutRing - 1)];
     out_r = r + n;
+    out_played = out_played + n;
     for (size_t i = n; i < (size_t)kDmaLen; i++) mono[i] = 0;
     uint32_t t = tx_count;
     if (n > 0) {
@@ -375,6 +380,14 @@ void audio_stream_begin() {
   out_streaming = true;
 }
 
+bool audio_stream_try_begin() {
+  if (!ready || xSemaphoreTake(out_lock, 0) != pdTRUE) return false;
+  out_hold = true;
+  out_underruns = 0;
+  out_streaming = true;
+  return true;
+}
+
 void audio_stream_write(const int16_t *mono, size_t n) {
   if (!ready) return;
   // 默认音量 60 时原样播放，调大最多放大到 1.5 倍
@@ -400,6 +413,10 @@ void audio_stream_flush() {
 }
 
 size_t audio_stream_pending() { return ready ? out_w - out_r : 0; }
+
+uint32_t audio_stream_played() { return out_played; }
+
+uint32_t audio_output_delay() { return kTxQueue; }
 
 void audio_stream_done() { out_streaming = false; }
 

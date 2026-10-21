@@ -5,6 +5,7 @@
 const PageInfo kPageInfo[PAGE_COUNT] = {
     {"clock", "时钟"},  {"weather", "天气"},  {"news", "资讯"},  {"github", "GitHub"},  {"stocks", "股票"},
     {"pet", "小橘"},    {"pomodoro", "番茄钟"}, {"chat", "AI 聊天"}, {"album", "相册"},
+    {"movie", "影片"},
 };
 
 int page_by_key(const char *key) {

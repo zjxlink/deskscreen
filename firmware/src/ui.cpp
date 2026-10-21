@@ -8,6 +8,7 @@
 #include <string>
 
 #include "astro.h"
+#include "movie_util.h"
 #include "board.h"
 #include "screen_load.h"
 
@@ -1003,6 +1004,251 @@ void ui_set_album_msg(const char *msg) {
   lv_obj_clear_flag(lbl_album_msg, LV_OBJ_FLAG_HIDDEN);
 }
 
+
+// ---- 影片页：列表 + 全屏播放 ----
+
+static constexpr int kMovieRowH = 42;
+static constexpr int kMovieRowTop = 46;
+static constexpr int kMovieRowGap = 4;
+static constexpr uint32_t kMovieOrange = 0xF2A65A;  // 和网页设置一样的橙色，不跟主题变
+static constexpr int kMovieBarX = 14, kMovieBarY = 204, kMovieBarW = SCREEN_W - 28;
+static constexpr int kMovieBtnY = 120;               // 中间三个按钮的中心
+static constexpr int kMovieBtnDx = 84;               // 快退、快进离中间多远
+
+struct MovieRowUi {
+  lv_obj_t *row;
+  lv_obj_t *name;
+  lv_obj_t *dur;
+  lv_obj_t *bar;
+  lv_obj_t *fill;
+};
+static MovieRowUi movie_rows[kMovieRows];
+static lv_obj_t *movie_list;    // 列表那一屏的东西都放在这里面
+static lv_obj_t *lbl_movie_page;
+static lv_obj_t *lbl_movie_msg;
+static lv_obj_t *movie_player;  // 全屏播放：黑底、画面、控制条
+static lv_obj_t *movie_img;
+static lv_img_dsc_t movie_dsc;
+static lv_obj_t *movie_overlay;
+static lv_obj_t *lbl_movie_title;
+static lv_obj_t *lbl_movie_volume;
+static lv_obj_t *lbl_movie_play;
+static lv_obj_t *movie_bar_fill;
+static lv_obj_t *movie_knob;
+static lv_obj_t *lbl_movie_pos;
+static lv_obj_t *lbl_movie_dur;
+static lv_obj_t *lbl_movie_center;  // 正在打开、打不开时的提示
+static bool movie_player_on = false;
+
+static lv_obj_t *make_box(lv_obj_t *parent, int w, int h, uint32_t color, lv_opa_t opa, int radius) {
+  lv_obj_t *o = lv_obj_create(parent);
+  lv_obj_set_size(o, w, h);
+  lv_obj_set_style_bg_color(o, lv_color_hex(color), 0);
+  lv_obj_set_style_bg_opa(o, opa, 0);
+  lv_obj_set_style_radius(o, radius, 0);
+  lv_obj_set_style_border_width(o, 0, 0);
+  lv_obj_set_style_pad_all(o, 0, 0);
+  lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(o, LV_OBJ_FLAG_CLICKABLE);
+  return o;
+}
+
+// 中间的圆按钮：半透明黑底白字，播放键大一点、橙色
+static lv_obj_t *make_round(lv_obj_t *parent, int size, int dx, bool main_btn, const lv_font_t *font, const char *text) {
+  lv_obj_t *b = make_box(parent, size, size, main_btn ? kMovieOrange : 0x000000, main_btn ? LV_OPA_90 : LV_OPA_50,
+                         LV_RADIUS_CIRCLE);
+  lv_obj_set_pos(b, SCREEN_W / 2 + dx - size / 2, kMovieBtnY - size / 2);
+  lv_obj_t *l = make_label(b, font, lv_color_hex(main_btn ? 0x1A1A1A : 0xFFFFFF));
+  lv_label_set_text(l, text);
+  lv_obj_center(l);
+  return l;
+}
+
+static void build_movie() {
+  lv_obj_t *scr = make_screen();
+  scr_pages[PAGE_MOVIE] = scr;
+  dot_wifi[PAGE_MOVIE] = make_wifi_dot(scr);
+
+  movie_list = make_box(scr, SCREEN_W, SCREEN_H, pal->bg, LV_OPA_TRANSP, 0);
+  lv_obj_t *title = make_label(movie_list, &font_cn_24, COLOR_TEXT);
+  lv_label_set_text(title, "影片");
+  lv_obj_set_pos(title, 16, 8);
+  lbl_movie_page = make_label(movie_list, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_align(lbl_movie_page, LV_ALIGN_TOP_RIGHT, -30, 14);
+  for (int i = 0; i < kMovieRows; i++) {
+    MovieRowUi &r = movie_rows[i];
+    r.row = make_card(movie_list, 16, kMovieRowTop + i * (kMovieRowH + kMovieRowGap), SCREEN_W - 32, kMovieRowH);
+    lv_obj_set_style_radius(r.row, 10, 0);
+    lv_obj_t *play = make_label(r.row, &lv_font_montserrat_14, COLOR_SUBTLE);
+    lv_label_set_text(play, LV_SYMBOL_PLAY);
+    lv_obj_align(play, LV_ALIGN_LEFT_MID, 12, 0);
+    r.name = make_label(r.row, &font_cn_16, COLOR_TEXT);
+    lv_label_set_long_mode(r.name, LV_LABEL_LONG_DOT);
+    lv_obj_set_size(r.name, 170, 20);
+    lv_obj_set_pos(r.name, 34, 6);
+    r.bar = make_box(r.row, 170, 3, pal->flat, LV_OPA_COVER, 2);
+    lv_obj_set_pos(r.bar, 34, 30);
+    r.fill = make_box(r.bar, 0, 3, kMovieOrange, LV_OPA_COVER, 2);
+    r.dur = make_label(r.row, &font_cn_16, COLOR_SUBTLE);
+    lv_obj_align(r.dur, LV_ALIGN_RIGHT_MID, -12, 0);
+    lv_obj_add_flag(r.row, LV_OBJ_FLAG_HIDDEN);
+  }
+  lbl_movie_msg = make_label(movie_list, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_set_width(lbl_movie_msg, SCREEN_W - 40);
+  lv_obj_set_style_text_align(lbl_movie_msg, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_line_space(lbl_movie_msg, 6, 0);
+  lv_label_set_recolor(lbl_movie_msg, true);
+  lv_obj_align(lbl_movie_msg, LV_ALIGN_CENTER, 0, 14);
+  lv_label_set_text(lbl_movie_msg, "正在读取 TF 卡…");
+
+  // 全屏播放：黑底上放画面，控制条盖在上面，点一下屏幕出来
+  movie_player = make_box(scr, SCREEN_W, SCREEN_H, 0x000000, LV_OPA_COVER, 0);
+  lv_obj_add_flag(movie_player, LV_OBJ_FLAG_HIDDEN);
+  movie_dsc.header.always_zero = 0;
+  movie_dsc.header.cf = LV_IMG_CF_TRUE_COLOR;
+  movie_dsc.header.w = SCREEN_W;
+  movie_dsc.header.h = SCREEN_H;
+  movie_dsc.data_size = SCREEN_W * SCREEN_H * LV_COLOR_SIZE / 8;
+  movie_img = lv_img_create(movie_player);
+  lv_obj_set_pos(movie_img, 0, 0);
+  lv_obj_add_flag(movie_img, LV_OBJ_FLAG_HIDDEN);
+  lbl_movie_center = make_label(movie_player, &font_cn_16, lv_color_hex(0xC9D1D9));
+  lv_obj_set_width(lbl_movie_center, SCREEN_W - 40);
+  lv_obj_set_style_text_align(lbl_movie_center, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_line_space(lbl_movie_center, 6, 0);
+  lv_obj_align(lbl_movie_center, LV_ALIGN_CENTER, 0, 0);
+
+  movie_overlay = make_box(movie_player, SCREEN_W, SCREEN_H, 0x000000, LV_OPA_TRANSP, 0);
+  lv_obj_add_flag(movie_overlay, LV_OBJ_FLAG_HIDDEN);
+  // 上面一条：返回列表、片名、音量
+  lv_obj_t *top = make_box(movie_overlay, SCREEN_W, 40, 0x000000, LV_OPA_50, 0);
+  lv_obj_t *back = make_label(top, &lv_font_montserrat_20, lv_color_white());
+  lv_label_set_text(back, LV_SYMBOL_LEFT);
+  lv_obj_align(back, LV_ALIGN_LEFT_MID, 12, 0);
+  lbl_movie_title = make_label(top, &font_cn_16, lv_color_white());
+  lv_label_set_long_mode(lbl_movie_title, LV_LABEL_LONG_DOT);
+  lv_obj_set_size(lbl_movie_title, 190, 20);
+  lv_obj_align(lbl_movie_title, LV_ALIGN_LEFT_MID, 40, 0);
+  lbl_movie_volume = make_label(top, &lv_font_montserrat_14, lv_color_white());
+  lv_obj_align(lbl_movie_volume, LV_ALIGN_RIGHT_MID, -12, 0);
+  // 中间：快退 10 秒、播放/暂停、快进 10 秒
+  make_round(movie_overlay, 46, -kMovieBtnDx, false, &font_cn_16, "-10s");
+  lbl_movie_play = make_round(movie_overlay, 60, 0, true, &lv_font_montserrat_20, LV_SYMBOL_PAUSE);
+  make_round(movie_overlay, 46, kMovieBtnDx, false, &font_cn_16, "+10s");
+  // 下面：进度条和时间
+  lv_obj_t *bottom = make_box(movie_overlay, SCREEN_W, 52, 0x000000, LV_OPA_50, 0);
+  lv_obj_set_pos(bottom, 0, SCREEN_H - 52);
+  lv_obj_t *track = make_box(movie_overlay, kMovieBarW, 4, 0xFFFFFF, LV_OPA_30, 2);
+  lv_obj_set_pos(track, kMovieBarX, kMovieBarY);
+  movie_bar_fill = make_box(track, 0, 4, kMovieOrange, LV_OPA_COVER, 2);
+  movie_knob = make_box(movie_overlay, 12, 12, 0xFFFFFF, LV_OPA_COVER, LV_RADIUS_CIRCLE);
+  lbl_movie_pos = make_label(bottom, &lv_font_montserrat_14, lv_color_hex(0xE6EDF3));
+  lv_obj_align(lbl_movie_pos, LV_ALIGN_BOTTOM_LEFT, kMovieBarX, -8);
+  lbl_movie_dur = make_label(bottom, &lv_font_montserrat_14, lv_color_hex(0xE6EDF3));
+  lv_obj_align(lbl_movie_dur, LV_ALIGN_BOTTOM_RIGHT, -kMovieBarX, -8);
+}
+
+static void set_hidden(lv_obj_t *o, bool hidden) {
+  if (hidden) lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+  else lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
+}
+
+void ui_set_movie_list(const char *msg, const MovieRow *rows, int n, int page, int pages) {
+  set_hidden(lbl_movie_msg, !msg);
+  if (msg) lv_label_set_text(lbl_movie_msg, msg);
+  for (int i = 0; i < kMovieRows; i++) {
+    MovieRowUi &r = movie_rows[i];
+    set_hidden(r.row, msg || i >= n);
+    if (msg || i >= n) continue;
+    lv_label_set_text(r.name, rows[i].name);
+    char t[16] = "";
+    if (rows[i].dur_ms) movie_format_time(rows[i].dur_ms, t, sizeof(t));
+    lv_label_set_text(r.dur, t);
+    uint32_t pos = rows[i].pos_ms, dur = rows[i].dur_ms;
+    int w = dur ? (int)((uint64_t)170 * (pos > dur ? dur : pos) / dur) : 0;
+    lv_obj_set_width(r.fill, w);
+    set_hidden(r.bar, pos == 0);  // 还没看过的不画进度条
+  }
+  if (pages > 1 && !msg) {
+    char t[24];
+    snprintf(t, sizeof(t), "%d / %d", page + 1, pages);
+    lv_label_set_text(lbl_movie_page, t);
+  } else {
+    lv_label_set_text(lbl_movie_page, "");
+  }
+}
+
+int ui_movie_list_hit(int x, int y) {
+  if (movie_player_on || x < 16 || x >= SCREEN_W - 16) return -1;
+  for (int i = 0; i < kMovieRows; i++) {
+    int top = kMovieRowTop + i * (kMovieRowH + kMovieRowGap);
+    if (y >= top - 2 && y < top + kMovieRowH + 2 && !lv_obj_has_flag(movie_rows[i].row, LV_OBJ_FLAG_HIDDEN)) return i;
+  }
+  return -1;
+}
+
+void ui_movie_show_player(bool on) {
+  movie_player_on = on;
+  set_hidden(movie_player, !on);
+  set_hidden(movie_list, on);
+  set_hidden(dot_wifi[PAGE_MOVIE], on);
+  for (lv_obj_t *a : page_arrows[PAGE_MOVIE]) set_hidden(a, on);  // 放片子时边上不放翻页提示
+  if (!on) lv_obj_add_flag(movie_img, LV_OBJ_FLAG_HIDDEN);
+}
+
+void ui_set_movie_frame(const uint16_t *px) {
+  movie_dsc.data = (const uint8_t *)px;
+  lv_img_cache_invalidate_src(&movie_dsc);  // 两帧轮流用同一个描述，换了像素要清掉缓存
+  lv_img_set_src(movie_img, &movie_dsc);
+  lv_obj_invalidate(movie_img);
+  lv_obj_clear_flag(movie_img, LV_OBJ_FLAG_HIDDEN);
+}
+
+void ui_set_movie_player(const MovieView &v) {
+  const char *center = v.error ? v.error : v.loading ? "正在打开…" : nullptr;
+  set_hidden(lbl_movie_center, !center);
+  if (center) lv_label_set_text(lbl_movie_center, center);
+  // 暂停、放完、打不开时一直显示控制条
+  set_hidden(movie_overlay, !(v.overlay || v.paused || v.ended || v.error));
+  lv_label_set_text(lbl_movie_title, v.title ? v.title : "");
+  char t[24];
+  snprintf(t, sizeof(t), "%s %d%%", !v.sound ? LV_SYMBOL_MUTE : v.volume == 0 ? LV_SYMBOL_MUTE : LV_SYMBOL_VOLUME_MAX,
+           v.volume);
+  lv_label_set_text(lbl_movie_volume, v.sound ? t : LV_SYMBOL_MUTE " --");
+  lv_label_set_text(lbl_movie_play, v.paused || v.ended ? LV_SYMBOL_PLAY : LV_SYMBOL_PAUSE);
+  uint32_t pos = v.pos_ms > v.dur_ms ? v.dur_ms : v.pos_ms;
+  int w = v.dur_ms ? (int)((uint64_t)kMovieBarW * pos / v.dur_ms) : 0;
+  lv_obj_set_width(movie_bar_fill, w);
+  lv_obj_set_pos(movie_knob, kMovieBarX + w - 6, kMovieBarY - 4);
+  movie_format_time(pos, t, sizeof(t));
+  lv_label_set_text(lbl_movie_pos, t);
+  movie_format_time(v.dur_ms, t, sizeof(t));
+  lv_label_set_text(lbl_movie_dur, t);
+}
+
+MovieHit ui_movie_hit(int x, int y, float *frac) {
+  if (!movie_player_on || lv_obj_has_flag(movie_overlay, LV_OBJ_FLAG_HIDDEN)) return MovieHit::None;
+  if (y < 44) {
+    if (x < 70) return MovieHit::Back;
+    if (x >= SCREEN_W - 90) return MovieHit::Volume;
+    return MovieHit::None;
+  }
+  if (y >= kMovieBarY - 22) {
+    if (frac) {
+      float f = (float)(x - kMovieBarX) / kMovieBarW;
+      *frac = f < 0 ? 0 : f > 1 ? 1 : f;
+    }
+    return MovieHit::Progress;
+  }
+  if (abs(y - kMovieBtnY) <= 40) {
+    int dx = x - SCREEN_W / 2;
+    if (abs(dx) <= 38) return MovieHit::PlayPause;
+    if (abs(dx + kMovieBtnDx) <= 40) return MovieHit::Rewind;
+    if (abs(dx - kMovieBtnDx) <= 40) return MovieHit::Forward;
+  }
+  return MovieHit::None;
+}
+
 static void build_alert() {
   scr_alert = make_screen();
 
@@ -1804,6 +2050,7 @@ void ui_init() {
   build_pomodoro();
   build_chat();
   build_album();
+  build_movie();
   // 每个页面左右边缘加淡淡的 < >，提示点两边或左右滑动翻页
   for (int p = 0; p < PAGE_COUNT; p++) {
     for (int side = 0; side < 2; side++) {
@@ -2264,7 +2511,7 @@ void ui_set_theme(bool light) {
   pal = next;
   theme_epoch++;
   for (lv_obj_t *scr : scr_pages) {
-    if (scr != scr_pages[PAGE_ALBUM]) recolor(scr, from, *pal);
+    if (scr != scr_pages[PAGE_ALBUM]) recolor(scr, from, *pal);  // 影片页的播放画面用固定的颜色，换不到
   }
   for (lv_obj_t *scr : {scr_alert, scr_quick, scr_qpages, scr_game}) recolor(scr, from, *pal);
   for (int lv = 0; lv < 5; lv++) lv_obj_set_style_bg_color(gh_legend[lv], lv_color_hex(pal->level[lv]), 0);

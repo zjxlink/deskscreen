@@ -217,6 +217,245 @@ static void test_avi_reject() {
   TEST_ASSERT_FALSE(avi.open(read_file, nullptr, 0));
 }
 
+
+static std::string strh(const char *type, uint32_t scale, uint32_t rate, uint32_t length) {
+  std::string s(type, 4);
+  s += "MJPG";
+  for (int i = 0; i < 3; i++) put32(s, 0);  // dwFlags、wPriority + wLanguage、dwInitialFrames
+  put32(s, scale);
+  put32(s, rate);
+  put32(s, 0);
+  put32(s, length);
+  for (int i = 0; i < 3; i++) put32(s, 0);
+  return chunk("strh", s + std::string(8, '\0'));
+}
+
+static void put16(std::string &s, uint16_t v) {
+  s += (char)(v & 0xFF);
+  s += (char)(v >> 8);
+}
+
+static std::string wavefmt(uint16_t tag, uint16_t ch, uint32_t rate, uint16_t bits) {
+  std::string s;
+  put16(s, tag);
+  put16(s, ch);
+  put32(s, rate);
+  put32(s, rate * ch * bits / 8);
+  put16(s, ch * bits / 8);
+  put16(s, bits);
+  put16(s, 0);
+  return chunk("strf", s);
+}
+
+// 视频 + 声音两个流，每帧后面跟一块声音，最后是 idx1（位置从 movi 那四个字算起），和 ffmpeg、网页转的一样
+static std::string av_file(uint16_t audio_tag, bool with_idx1, int frames) {
+  std::string hdrl = list("hdrl", avih(66666, 320, 240) + list("strl", strh("vids", 1, 20, frames)) +
+                                      list("strl", strh("auds", 1, 16000, 0) + wavefmt(audio_tag, 1, 16000, 16)));
+  std::string body, idx;
+  for (int i = 0; i < frames; i++) {
+    uint32_t at = 4 + body.size();
+    std::string jpg = "F" + std::to_string(i);
+    body += chunk("00dc", jpg);
+    idx += "00dc";
+    put32(idx, 0x10);
+    put32(idx, at);
+    put32(idx, jpg.size());
+    at = 4 + body.size();
+    body += chunk("01wb", std::string(4, (char)i));
+    idx += "01wb";
+    put32(idx, 0);
+    put32(idx, at);
+    put32(idx, 4);
+  }
+  return riff(hdrl + list("movi", body) + (with_idx1 ? chunk("idx1", idx) : ""));
+}
+
+static void test_avi_audio_and_seek() {
+  for (int with_idx1 = 0; with_idx1 < 2; with_idx1++) {
+    file = av_file(1, with_idx1, 10);
+    AviReader avi;
+    TEST_ASSERT_TRUE(avi.open(read_file, nullptr, file.size()));
+    TEST_ASSERT_EQUAL(50000, avi.frame_us());  // strh 里的每秒 20 帧比 avih 准
+    TEST_ASSERT_EQUAL(10, avi.frames());
+    TEST_ASSERT_EQUAL(500, avi.duration_ms());
+    TEST_ASSERT_TRUE(avi.has_audio());
+    TEST_ASSERT_EQUAL(16000, avi.audio_rate());
+    TEST_ASSERT_EQUAL(1, avi.audio_channels());
+    uint32_t off, len;
+    for (int i = 0; i < 10; i++) {
+      TEST_ASSERT_EQUAL(i, avi.frame_pos());
+      TEST_ASSERT_TRUE(avi.next_chunk(off, len) == AviChunk::Video);
+      TEST_ASSERT_EQUAL_STRING(("F" + std::to_string(i)).c_str(), frame_at(off, len).c_str());
+      TEST_ASSERT_TRUE(avi.next_chunk(off, len) == AviChunk::Audio);
+      TEST_ASSERT_EQUAL(4, len);
+      TEST_ASSERT_EQUAL(i, file[off]);
+    }
+    TEST_ASSERT_TRUE(avi.next_chunk(off, len) == AviChunk::End);
+
+    // 跳到第 7 帧：接着给第 7 帧和它后面的声音；有没有 idx1 结果都一样
+    TEST_ASSERT_TRUE(avi.seek_frame(7));
+    TEST_ASSERT_EQUAL(7, avi.frame_pos());
+    TEST_ASSERT_TRUE(avi.next_chunk(off, len) == AviChunk::Video);
+    TEST_ASSERT_EQUAL_STRING("F7", frame_at(off, len).c_str());
+    TEST_ASSERT_TRUE(avi.next_chunk(off, len) == AviChunk::Audio);
+    TEST_ASSERT_EQUAL(7, file[off]);
+    // 往回跳、跳过结尾（停在最后一帧）、跳回开头
+    TEST_ASSERT_TRUE(avi.seek_frame(2));
+    TEST_ASSERT_TRUE(avi.next(off, len));
+    TEST_ASSERT_EQUAL_STRING("F2", frame_at(off, len).c_str());
+    TEST_ASSERT_TRUE(avi.seek_frame(500));
+    TEST_ASSERT_EQUAL(9, avi.frame_pos());
+    TEST_ASSERT_TRUE(avi.next(off, len));
+    TEST_ASSERT_EQUAL_STRING("F9", frame_at(off, len).c_str());
+    TEST_ASSERT_TRUE(avi.seek_frame(0));
+    TEST_ASSERT_TRUE(avi.next(off, len));
+    TEST_ASSERT_EQUAL_STRING("F0", frame_at(off, len).c_str());
+  }
+}
+
+static void test_avi_unsupported_audio() {
+  // MP3 声音（0x55）放不了：当成没有声音，只给视频
+  file = av_file(0x55, true, 3);
+  AviReader avi;
+  TEST_ASSERT_TRUE(avi.open(read_file, nullptr, file.size()));
+  TEST_ASSERT_FALSE(avi.has_audio());
+  uint32_t off, len;
+  for (int i = 0; i < 3; i++) TEST_ASSERT_TRUE(avi.next_chunk(off, len) == AviChunk::Video);
+  TEST_ASSERT_TRUE(avi.next_chunk(off, len) == AviChunk::End);
+}
+
+// OpenDML（超过 1GB 的文件）：RIFF AVI 段后面接一个 RIFF AVIX 段，视频的 indx 指向每段的 ix00
+static void test_avi_opendml() {
+  const int per_seg = 4;
+  // 先算出两段 movi 的内容，再回填 ix00 里的位置
+  auto movi_body = [](int first) {
+    std::string b;
+    for (int i = first; i < first + per_seg; i++) b += chunk("01wb", "ss") + chunk("00dc", "V" + std::to_string(i));
+    return b;
+  };
+  auto ix00 = [](uint32_t base, uint32_t movi_data) {
+    std::string s;
+    put16(s, 2);
+    s += (char)0;
+    s += (char)1;
+    put32(s, per_seg);
+    s += "00dc";
+    put32(s, base);
+    put32(s, 0);
+    put32(s, 0);
+    // 每段里的第 i 帧：前面有 i 对（声音 10 字节 + 视频 10 字节），再加这一帧前面那块声音
+    for (int i = 0; i < per_seg; i++) {
+      put32(s, movi_data - base + i * 20 + 10 + 8);
+      put32(s, 2);
+    }
+    return chunk("ix00", s);
+  };
+  for (int pass = 0; pass < 2; pass++) {
+    static uint32_t ix_at[2], movi_at[2];
+    std::string indx;
+    put16(indx, 4);
+    indx += (char)0;
+    indx += (char)0;
+    put32(indx, 2);
+    indx += "00dc";
+    for (int i = 0; i < 3; i++) put32(indx, 0);
+    for (int i = 0; i < 2; i++) {
+      put32(indx, ix_at[i]);
+      put32(indx, 0);
+      put32(indx, 40);
+      put32(indx, per_seg);
+    }
+    std::string odml = list("odml", chunk("dmlh", std::string("\x08\0\0\0", 4) + std::string(244, '\0')));
+    std::string hdrl = list("hdrl", avih(50000, 320, 240) +
+                                        list("strl", strh("vids", 1, 20, per_seg) + chunk("indx", indx)) +
+                                        list("strl", strh("auds", 1, 16000, 0) + wavefmt(1, 1, 16000, 16)) + odml);
+    std::string head = "RIFF....AVI " + hdrl;
+    movi_at[0] = head.size() + 12;
+    std::string seg0 = list("movi", movi_body(0) + std::string());
+    ix_at[0] = head.size() + seg0.size();
+    std::string riff0 = head + seg0 + ix00(0, movi_at[0]);
+    std::string r0 = riff0.substr(0, 4);
+    put32(r0, riff0.size() - 8);
+    riff0 = r0 + riff0.substr(8);
+    movi_at[1] = riff0.size() + 12 + 12;
+    std::string seg1 = list("movi", movi_body(per_seg));
+    ix_at[1] = riff0.size() + 12 + seg1.size();
+    std::string avix = "AVIX" + seg1 + ix00(riff0.size(), movi_at[1]);
+    std::string riff1 = "RIFF";
+    put32(riff1, avix.size());
+    file = riff0 + riff1 + avix;
+  }
+  AviReader avi;
+  TEST_ASSERT_TRUE(avi.open(read_file, nullptr, file.size()));
+  TEST_ASSERT_EQUAL(8, avi.frames());  // dmlh 里的总帧数
+  uint32_t off, len;
+  for (int i = 0; i < 8; i++) {
+    TEST_ASSERT_TRUE(avi.next(off, len));
+    TEST_ASSERT_EQUAL_STRING(("V" + std::to_string(i)).c_str(), frame_at(off, len).c_str());
+  }
+  TEST_ASSERT_FALSE(avi.next(off, len));
+  for (int f : {6, 1, 4, 3, 7}) {
+    TEST_ASSERT_TRUE(avi.seek_frame(f));
+    TEST_ASSERT_EQUAL(f, avi.frame_pos());
+    TEST_ASSERT_TRUE(avi.next(off, len));
+    TEST_ASSERT_EQUAL_STRING(("V" + std::to_string(f)).c_str(), frame_at(off, len).c_str());
+  }
+}
+
+// ---- 声音转换 ----
+
+static std::string pcm(std::initializer_list<int> v) {
+  std::string s;
+  for (int x : v) put16(s, (uint16_t)(int16_t)x);
+  return s;
+}
+
+static void test_pcm_16k() {
+  PcmTo16k c;
+  int16_t out[64];
+  // 16kHz 单声道：原样输出（晚一个采样）
+  c.reset(16000, 1);
+  std::string in = pcm({100, 200, 300, 400});
+  size_t n = c.convert((const uint8_t *)in.data(), in.size(), out, 64);
+  TEST_ASSERT_EQUAL(3, n);
+  TEST_ASSERT_EQUAL(100, out[0]);
+  TEST_ASSERT_EQUAL(300, out[2]);
+  // 半个采样留到下一块
+  in = pcm({500, 600});
+  n = c.convert((const uint8_t *)in.data(), 3, out, 64);
+  TEST_ASSERT_EQUAL(1, n);
+  TEST_ASSERT_EQUAL(400, out[0]);
+  n = c.convert((const uint8_t *)in.data() + 3, 1, out, 64);
+  TEST_ASSERT_EQUAL(1, n);
+  TEST_ASSERT_EQUAL(500, out[0]);
+
+  // 32kHz 立体声：两个声道取平均，每两个采样取一个
+  c.reset(32000, 2);
+  in = pcm({0, 100, 1000, 1000, 2000, 2200, 3000, 3000, 4000, 4000});
+  n = c.convert((const uint8_t *)in.data(), in.size(), out, 64);
+  TEST_ASSERT_EQUAL(2, n);
+  TEST_ASSERT_EQUAL(50, out[0]);
+  TEST_ASSERT_EQUAL(2100, out[1]);
+
+  // 8kHz：中间插一个
+  c.reset(8000, 1);
+  in = pcm({0, 1000, -1000});
+  n = c.convert((const uint8_t *)in.data(), in.size(), out, 64);
+  TEST_ASSERT_EQUAL(4, n);
+  const int16_t want[] = {0, 500, 1000, 0};
+  TEST_ASSERT_EQUAL_INT16_ARRAY(want, out, 4);
+
+  // 44.1kHz 的一秒转出来差不多 16000 个，不超过 max_out
+  c.reset(44100, 2);
+  std::string sec(44100 * 4, '\0');
+  static int16_t big[20000];
+  size_t cap = c.max_out(sec.size());
+  TEST_ASSERT_TRUE(cap <= 20000);
+  n = c.convert((const uint8_t *)sec.data(), sec.size(), big, cap);
+  TEST_ASSERT_TRUE(n >= 15999 && n <= 16001);
+  TEST_ASSERT_TRUE(n <= cap);
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_gif_plain);
@@ -231,5 +470,9 @@ int main() {
   RUN_TEST(test_avi_frames);
   RUN_TEST(test_avi_defaults_and_truncated);
   RUN_TEST(test_avi_reject);
+  RUN_TEST(test_avi_audio_and_seek);
+  RUN_TEST(test_avi_unsupported_audio);
+  RUN_TEST(test_avi_opendml);
+  RUN_TEST(test_pcm_16k);
   return UNITY_END();
 }
