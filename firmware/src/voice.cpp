@@ -626,6 +626,8 @@ static std::string converse(bool &idle, bool &retry) {
   Session &s = *sp;
   s.full_duplex = afe != nullptr && barge_on;
   WsReader reader(kMaxMessage);
+  // WiFi 省电模式下收数据要等路由器的信标，语音一阵一阵地到，回答会卡；聊天时关掉
+  WiFi.setSleep(false);
   std::string why = connect_session(s, reader);
   uint32_t start = millis();
   while (why.empty() && !hangup) {
@@ -743,6 +745,7 @@ static std::string converse(bool &idle, bool &retry) {
   }
   s.client.stop();
   delete sp;
+  WiFi.setSleep(true);
   if (why.empty() || idle) net_report(NetService::Voice, 200);
   return why;
 }

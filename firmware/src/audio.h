@@ -16,7 +16,7 @@ void audio_set_volume(int volume);
 void audio_play(SoundId id);
 
 // 语音回答：边下载边播放。begin 和 end 之间提示音会排队等着；write 放进 32 秒的播放缓冲，一般不用等；
-// 先攒够 300ms 再开始放，中途放空了也重新攒一下，网络时快时慢时声音不会一卡一卡的。
+// 先攒够 300ms 再开始放，中途放空了就多攒一些（最多 1.5 秒）再接着放，网络时快时慢时声音不会一卡一卡的。
 // end 等声音全部放完才返回。采样率 16kHz 单声道，音量按 audio_set_volume 调整
 void audio_stream_begin();
 void audio_stream_write(const int16_t *mono, size_t n);
