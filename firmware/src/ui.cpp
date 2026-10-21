@@ -417,6 +417,315 @@ static lv_obj_t *make_stat(lv_obj_t *parent, int col, const char *caption) {
   return num;
 }
 
+// ---------- 资讯页 ----------
+// 两种样式：列表（一屏 4 条，标题 + 来源和时间）和一屏一条（标题、摘要）。
+// 自动每隔一会儿翻到下一批，一个频道翻完换下一个频道；上下滑动直接换频道
+static constexpr int kNewsRows = 4;
+static constexpr int kNewsRowH = 49;
+static constexpr int kNewsTop = 38;
+static constexpr uint32_t kNewsOrange = 0xF28C3C;  // 前三名的序号、要闻条的标签，两套主题都用它
+static const NewsData *news;  // 主循环里的那份（PSRAM），ui_set_news 时更新
+static uint8_t news_style;
+static int news_ch, news_pos;  // 当前频道、这一屏第一条的下标
+static lv_obj_t *lbl_news_title;
+static lv_obj_t *lbl_news_page;
+static lv_obj_t *lbl_news_msg;
+struct NewsRow {
+  lv_obj_t *row;
+  lv_obj_t *num;
+  lv_obj_t *title;
+  lv_obj_t *meta;
+};
+static NewsRow news_rows[kNewsRows];
+static lv_obj_t *news_card;
+static lv_obj_t *lbl_nc_title;
+static lv_obj_t *nc_bar;
+static lv_obj_t *lbl_nc_summary;
+static lv_obj_t *lbl_nc_meta;
+
+// 时钟页的要闻条，和日出日落那一行轮流显示
+static lv_obj_t *ticker_row;
+static lv_obj_t *lbl_ticker;
+static bool ticker_shown = false;
+static int ticker_ch = 0, ticker_idx = 0;
+static void update_sun_row();
+
+// 新闻里偶尔有字库里没有的字（生僻字、繁体、表情），直接去掉，免得显示成方块
+static void news_fit_font(const char *in, char *out, size_t size) {
+  size_t o = 0;
+  const uint8_t *p = (const uint8_t *)in;
+  while (*p && o + 1 < size) {
+    int len = *p < 0x80 ? 1 : (*p >> 5) == 6 ? 2 : (*p >> 4) == 14 ? 3 : (*p >> 3) == 30 ? 4 : 0;
+    if (len == 0) {
+      p++;
+      continue;
+    }
+    uint32_t cp = len == 1 ? *p : (*p & (0x3F >> (len - 1)));
+    bool ok = true;
+    for (int i = 1; i < len; i++) {
+      if ((p[i] & 0xC0) != 0x80) ok = false;
+      else cp = (cp << 6) | (p[i] & 0x3F);
+    }
+    if (!ok) {
+      p++;
+      continue;
+    }
+    lv_font_glyph_dsc_t g;
+    if ((cp == ' ' || lv_font_get_glyph_dsc(&font_cn_16, &g, cp, 0)) && o + len < size) {
+      memcpy(out + o, p, len);
+      o += len;
+    }
+    p += len;
+  }
+  out[o] = 0;
+}
+
+static void set_label_fit(lv_obj_t *l, const char *text) {
+  char buf[256];
+  news_fit_font(text, buf, sizeof(buf));
+  lv_label_set_text(l, buf);
+}
+
+static void build_news() {
+  lv_obj_t *scr = make_screen();
+  scr_pages[PAGE_NEWS] = scr;
+
+  lbl_news_title = make_label(scr, &font_cn_16, COLOR_SUBTLE);
+  lv_label_set_text(lbl_news_title, "资讯");
+  lv_obj_align(lbl_news_title, LV_ALIGN_TOP_LEFT, 12, 10);
+  dot_wifi[PAGE_NEWS] = make_wifi_dot(scr);
+  lbl_news_page = make_label(scr, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_align_to(lbl_news_page, dot_wifi[PAGE_NEWS], LV_ALIGN_OUT_LEFT_MID, -8, 0);
+
+  // 列表样式
+  for (int i = 0; i < kNewsRows; i++) {
+    NewsRow &r = news_rows[i];
+    r.row = lv_obj_create(scr);
+    lv_obj_remove_style_all(r.row);
+    lv_obj_set_size(r.row, SCREEN_W - 24, kNewsRowH);
+    lv_obj_set_pos(r.row, 12, kNewsTop + i * kNewsRowH);
+    lv_obj_clear_flag(r.row, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    if (i < kNewsRows - 1) {
+      lv_obj_set_style_border_side(r.row, LV_BORDER_SIDE_BOTTOM, 0);
+      lv_obj_set_style_border_width(r.row, 1, 0);
+      lv_obj_set_style_border_color(r.row, COLOR_LINE, 0);
+    }
+    r.num = make_label(r.row, &lv_font_montserrat_20, COLOR_SUBTLE);
+    lv_obj_set_width(r.num, 24);
+    lv_obj_align(r.num, LV_ALIGN_TOP_LEFT, 0, 4);
+    r.title = make_label(r.row, &font_cn_16, COLOR_TEXT);
+    lv_obj_set_width(r.title, SCREEN_W - 24 - 26);
+    lv_label_set_long_mode(r.title, LV_LABEL_LONG_DOT);
+    lv_obj_align(r.title, LV_ALIGN_TOP_LEFT, 26, 4);
+    r.meta = make_label(r.row, &font_cn_16, COLOR_SUBTLE);
+    lv_obj_set_width(r.meta, SCREEN_W - 24 - 26);
+    lv_label_set_long_mode(r.meta, LV_LABEL_LONG_DOT);
+    lv_obj_set_height(r.meta, 20);
+    lv_obj_align(r.meta, LV_ALIGN_TOP_LEFT, 26, 25);
+    lv_obj_add_flag(r.row, LV_OBJ_FLAG_HIDDEN);
+  }
+
+  // 一屏一条：卡片里从上往下是标题、一小段橙色横线、摘要，最下面是来源和时间
+  news_card = make_card(scr, 12, kNewsTop, SCREEN_W - 24, SCREEN_H - kNewsTop - 12);
+  lv_obj_set_style_pad_all(news_card, 12, 0);
+  lv_obj_set_style_pad_row(news_card, 8, 0);
+  lv_obj_set_flex_flow(news_card, LV_FLEX_FLOW_COLUMN);
+  lbl_nc_title = make_label(news_card, &font_cn_16, COLOR_TEXT);
+  lv_obj_set_width(lbl_nc_title, lv_pct(100));
+  lv_obj_set_style_text_line_space(lbl_nc_title, 4, 0);
+  lv_label_set_long_mode(lbl_nc_title, LV_LABEL_LONG_DOT);  // 最多三行，高度在 render_news 里按字数算
+  nc_bar = lv_obj_create(news_card);
+  lv_obj_remove_style_all(nc_bar);
+  lv_obj_set_size(nc_bar, 32, 3);
+  lv_obj_set_style_bg_opa(nc_bar, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(nc_bar, lv_color_hex(kNewsOrange), 0);
+  lbl_nc_summary = make_label(news_card, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_set_width(lbl_nc_summary, lv_pct(100));
+  lv_obj_set_style_text_line_space(lbl_nc_summary, 3, 0);
+  lv_label_set_long_mode(lbl_nc_summary, LV_LABEL_LONG_DOT);
+  lv_obj_set_flex_grow(lbl_nc_summary, 1);
+  lbl_nc_meta = make_label(news_card, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_set_width(lbl_nc_meta, lv_pct(100));
+  lv_label_set_long_mode(lbl_nc_meta, LV_LABEL_LONG_DOT);
+  lv_obj_set_height(lbl_nc_meta, 20);
+  lv_obj_add_flag(news_card, LV_OBJ_FLAG_HIDDEN);
+
+  lbl_news_msg = make_label(scr, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_set_width(lbl_news_msg, SCREEN_W - 32);
+  lv_obj_set_style_text_align(lbl_news_msg, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(lbl_news_msg, LV_ALIGN_CENTER, 0, 0);
+  lv_label_set_text(lbl_news_msg, "获取中…");
+}
+
+// 「新浪科技 · 12 分钟前」；热搜榜没有时间，返回 false（列表样式里标题就占两行）
+static bool news_meta(const NewsItem &it, char *out, size_t size) {
+  char age[24];
+  time_t now = time(nullptr);
+  news_age_text(now > 1700000000 ? it.ts : 0, now, age, sizeof(age));
+  if (!age[0]) {
+    snprintf(out, size, "%s", it.source);
+    return false;
+  }
+  snprintf(out, size, it.source[0] ? "%s · %s" : "%s%s", it.source, age);
+  return true;
+}
+
+static int news_per_page() { return news_style == 1 ? 1 : kNewsRows; }
+
+static void render_news() {
+  const NewsChannel *ch = news && news->nch ? &news->ch[news_ch % news->nch] : nullptr;
+  bool has = ch && ch->count > 0;
+  lv_label_set_text_fmt(lbl_news_title, ch ? "资讯 · %s" : "资讯", ch ? ch->name : "");
+  for (NewsRow &r : news_rows) lv_obj_add_flag(r.row, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(news_card, LV_OBJ_FLAG_HIDDEN);
+  if (!has) {
+    lv_label_set_text(lbl_news_page, "");
+    if (!ch) lv_label_set_text(lbl_news_msg, "在网页设置的「服务 › 资讯」里\n选择想看的新闻");
+    else if (ch->error) lv_label_set_text_fmt(lbl_news_msg, "获取失败（%d），稍后重试", ch->error);
+    else lv_label_set_text(lbl_news_msg, "获取中…");
+    lv_obj_clear_flag(lbl_news_msg, LV_OBJ_FLAG_HIDDEN);
+    return;
+  }
+  lv_obj_add_flag(lbl_news_msg, LV_OBJ_FLAG_HIDDEN);
+  int per = news_per_page();
+  if (news_pos >= ch->count) news_pos = 0;
+  int pages = (ch->count + per - 1) / per;
+  lv_label_set_text_fmt(lbl_news_page, "%d/%d", news_pos / per + 1, pages);
+  lv_obj_align_to(lbl_news_page, dot_wifi[PAGE_NEWS], LV_ALIGN_OUT_LEFT_MID, -8, 0);
+  char meta[64];
+  if (news_style == 1) {
+    const NewsItem &it = ch->items[news_pos];
+    // 省略号要有固定的高度才知道在哪里截断：算出标题占几行，超过三行按三行。
+    // 要用原文算（设置后 LVGL 会把放不下的部分换成省略号）
+    char title[256];
+    news_fit_font(it.title, title, sizeof(title));
+    lv_point_t sz;
+    const lv_font_t *f = &font_cn_16;
+    lv_txt_get_size(&sz, title, f, 0, 4, SCREEN_W - 48, LV_TEXT_FLAG_NONE);
+    lv_coord_t max_h = 3 * lv_font_get_line_height(f) + 2 * 4;
+    lv_obj_set_height(lbl_nc_title, sz.y < max_h ? sz.y : max_h);
+    lv_label_set_text(lbl_nc_title, title);
+    bool has_sum = it.summary[0] && strcmp(it.summary, it.title) != 0;
+    set_label_fit(lbl_nc_summary, has_sum ? it.summary : "");
+    if (has_sum) {
+      lv_obj_clear_flag(nc_bar, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(nc_bar, LV_OBJ_FLAG_HIDDEN);
+    }
+    news_meta(it, meta, sizeof(meta));
+    set_label_fit(lbl_nc_meta, meta);
+    lv_obj_clear_flag(news_card, LV_OBJ_FLAG_HIDDEN);
+    return;
+  }
+  for (int i = 0; i < kNewsRows; i++) {
+    int k = news_pos + i;
+    if (k >= ch->count) break;
+    NewsRow &r = news_rows[i];
+    const NewsItem &it = ch->items[k];
+    lv_label_set_text_fmt(r.num, "%d", k + 1);
+    lv_obj_set_style_text_color(r.num, k < 3 ? lv_color_hex(kNewsOrange) : COLOR_SUBTLE, 0);
+    set_label_fit(r.title, it.title);
+    bool timed = news_meta(it, meta, sizeof(meta));
+    if (timed) {
+      lv_obj_set_height(r.title, 20);
+      set_label_fit(r.meta, meta);
+      lv_obj_clear_flag(r.meta, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_set_height(r.title, 42);  // 没有时间就不要第二行，标题能多显示一行
+      lv_obj_add_flag(r.meta, LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_obj_clear_flag(r.row, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+static int news_channel_count() { return news ? news->nch : 0; }
+
+void ui_set_news(const NewsData &d, uint8_t style) {
+  news = &d;
+  if (style != news_style) news_pos = 0;
+  news_style = style;
+  if (news_ch >= news_channel_count()) news_ch = 0;
+  render_news();
+}
+
+void ui_news_next() {
+  const NewsChannel *ch = news && news->nch ? &news->ch[news_ch % news->nch] : nullptr;
+  if (!ch) return;
+  news_pos += news_per_page();
+  if (news_pos >= ch->count) {
+    // 这个频道看完了，换下一个有新闻的频道
+    news_pos = 0;
+    for (int k = 1; k <= news->nch; k++) {
+      int c = (news_ch + k) % news->nch;
+      if (news->ch[c].count > 0) {
+        news_ch = c;
+        break;
+      }
+    }
+  }
+  render_news();
+}
+
+void ui_news_channel(int dir) {
+  int n = news_channel_count();
+  if (n == 0) return;
+  news_ch = ((news_ch + dir) % n + n) % n;
+  news_pos = 0;
+  render_news();
+}
+
+static void build_ticker() {
+  ticker_row = lv_obj_create(scr_main);
+  lv_obj_remove_style_all(ticker_row);
+  lv_obj_set_size(ticker_row, SCREEN_W - 24, 22);
+  lv_obj_align(ticker_row, LV_ALIGN_TOP_MID, 0, kSunAloneY - 2);
+  lv_obj_clear_flag(ticker_row, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_t *pill = lv_obj_create(ticker_row);
+  lv_obj_set_size(pill, 40, 20);
+  lv_obj_set_style_radius(pill, 4, 0);
+  lv_obj_set_style_border_width(pill, 0, 0);
+  lv_obj_set_style_pad_all(pill, 0, 0);
+  lv_obj_set_style_bg_color(pill, lv_color_hex(kNewsOrange), 0);
+  lv_obj_clear_flag(pill, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_align(pill, LV_ALIGN_LEFT_MID, 0, 0);
+  lv_obj_t *tag = make_label(pill, &font_cn_16, lv_color_hex(0xFFFFFF));
+  lv_label_set_text(tag, "要闻");
+  lv_obj_center(tag);
+  lbl_ticker = make_label(ticker_row, &font_cn_16, COLOR_TEXT);
+  lv_obj_set_size(lbl_ticker, SCREEN_W - 24 - 48, 20);
+  lv_label_set_long_mode(lbl_ticker, LV_LABEL_LONG_DOT);
+  lv_obj_align(lbl_ticker, LV_ALIGN_LEFT_MID, 48, 0);
+  lv_obj_add_flag(ticker_row, LV_OBJ_FLAG_HIDDEN);
+}
+
+bool ui_ticker_next() {
+  if (!news || news->nch == 0) return false;
+  // 各频道轮流出一条：第 1 轮是各频道的第 1 条，第 2 轮是第 2 条……
+  for (int tries = 0; tries < news->nch * 3; tries++) {
+    ticker_ch = (ticker_ch + 1) % news->nch;
+    if (ticker_ch == 0) ticker_idx = (ticker_idx + 1) % 3;
+    const NewsChannel &ch = news->ch[ticker_ch];
+    int k = ch.count > ticker_idx ? ticker_idx : 0;
+    if (ch.count > 0) {
+      set_label_fit(lbl_ticker, ch.items[k].title);
+      return true;
+    }
+  }
+  return false;
+}
+
+void ui_show_ticker(bool show) {
+  if (show == ticker_shown) return;
+  ticker_shown = show;
+  if (show) {
+    lv_obj_add_flag(sun_row, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(ticker_row, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(ticker_row, LV_OBJ_FLAG_HIDDEN);
+    update_sun_row();
+  }
+}
+
 static void build_github() {
   lv_obj_t *scr = make_screen();
   scr_pages[PAGE_GITHUB] = scr;
@@ -1168,6 +1477,8 @@ void ui_init() {
   build_main();
   scr_pages[PAGE_CLOCK] = scr_main;
   build_weather();
+  build_news();
+  build_ticker();
   build_github();
   build_stocks();
   build_pet();
@@ -1254,7 +1565,7 @@ static void update_sun_row() {
     snprintf(text + n, sizeof(text) - n, " · 日出 %02d:%02d · 日落 %02d:%02d", sun_rise / 60, sun_rise % 60,
              sun_set / 60, sun_set % 60);
   lv_label_set_text(lbl_sun, text);
-  lv_obj_clear_flag(sun_row, LV_OBJ_FLAG_HIDDEN);
+  if (!ticker_shown) lv_obj_clear_flag(sun_row, LV_OBJ_FLAG_HIDDEN);
 }
 
 void ui_set_sun(int sunrise, int sunset) {
@@ -1302,6 +1613,7 @@ void ui_set_room(float temp, float humidity, bool hot, bool humid) {
   lv_obj_align(lbl_room, LV_ALIGN_TOP_MID, 0, kRoomY);
   lv_obj_clear_flag(lbl_room, LV_OBJ_FLAG_HIDDEN);
   lv_obj_align(sun_row, LV_ALIGN_TOP_MID, 0, kSunY);
+  lv_obj_align(ticker_row, LV_ALIGN_TOP_MID, 0, kSunY - 2);
 }
 
 // 天气预报页
@@ -1640,6 +1952,7 @@ void ui_set_theme(bool light) {
   if (have_weather) ui_set_weather(last_weather);
   if (have_github) ui_set_github(last_github);
   if (have_stocks) ui_set_stocks(last_stocks);
+  if (news) render_news();
   lv_obj_invalidate(lv_scr_act());
 }
 

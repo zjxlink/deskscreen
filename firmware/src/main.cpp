@@ -27,6 +27,7 @@
 #include "screen_ctrl.h"
 #include "sensors.h"
 #include "settings.h"
+#include "news.h"
 #include "stock.h"
 #include "ui.h"
 #include "voice.h"
@@ -122,6 +123,13 @@ static uint32_t game_last = 0;
 // AI 聊天页：点一下开始连续对话，小橘在说时点一下打断
 static constexpr uint32_t kChatStayMs = 30000;  // 回答完后至少停留这么久，留时间看字
 static bool chat_has_key = false;
+// 资讯：数据放 PSRAM（几十 KB），资讯页和时钟页的要闻条都直接读它
+static NewsData *news_data = nullptr;
+static uint8_t news_style = 0;
+static bool news_ticker = false;
+static constexpr uint32_t kNewsFlipMs = 12000;    // 资讯页每隔这么久翻到下一批
+static constexpr uint32_t kTickerSwapMs = 10000;  // 时钟页要闻条和日出日落轮流显示
+static uint32_t news_flip_at = 0;
 static uint32_t chat_busy_at = 0;
 
 // 电子相册：照片在 TF 卡上，后台解码。在相册页时不自动轮播走；打开屏保后，空闲一段时间自动进相册，碰一下回到原来的页面
@@ -170,6 +178,12 @@ static void apply_settings() {
   c.away_min = s.away_min;
   if (!voice_available()) c.page_unavailable |= 1u << PAGE_CHAT;  // 没有麦克风
   if (!photos_supported()) c.page_unavailable |= 1u << PAGE_ALBUM;  // 没有 TF 卡槽
+  bool news_on = s.news_src.length() > 0 || s.news_rss.length() > 0;
+  c.page_enabled[PAGE_NEWS] = news_on;
+  if (!news_on) c.page_unavailable |= 1u << PAGE_NEWS;  // 没选新闻来源时不显示资讯页
+  news_style = s.news_style;
+  news_ticker = news_on && s.news_ticker;
+  if (news_data) ui_set_news(*news_data, news_style);
   chat_has_key = s.ai_key.length() > 0;
   screen.configure(c);  // 番茄钟页、AI 聊天页和相册页不参与轮播，番茄钟进行中时固定显示
   album_sec = s.album_sec;
@@ -600,6 +614,42 @@ static void update_theme() {
   last = millis();
   last_mode = screen_theme;
   ui_set_theme(theme_is_light(screen_theme, local_minutes(), sunrise_min, sunset_min));
+}
+
+// 资讯：收新数据、资讯页自动翻页、时钟页的要闻条
+static void update_news() {
+  if (!news_data) return;
+  uint32_t now = millis();
+  news_set_quiet(screen.night());
+  if (news_take_update(*news_data)) ui_set_news(*news_data, news_style);
+
+  // 资讯页：停在这一页时每 12 秒翻一批；轮播转回来时也从下一批开始，不总是同几条
+  static Page last_page = PAGE_CLOCK;
+  static bool seen = false;
+  Page p = screen.page();
+  if (p == PAGE_NEWS && last_page != PAGE_NEWS) {
+    if (seen) ui_news_next();
+    seen = true;
+    news_flip_at = now + kNewsFlipMs;
+  } else if (p == PAGE_NEWS && (int32_t)(now - news_flip_at) >= 0) {
+    ui_news_next();
+    news_flip_at = now + kNewsFlipMs;
+  }
+  last_page = p;
+
+  // 时钟页：要闻条和日出日落每 10 秒换一次，夜间只显示日出日落
+  static uint32_t swap_at = 0;
+  static bool showing = false;
+  bool want = news_ticker && !screen.night();
+  if (!want) {
+    if (showing) ui_show_ticker(false);
+    showing = false;
+    return;
+  }
+  if ((int32_t)(now - swap_at) < 0) return;
+  swap_at = now + kTickerSwapMs;
+  showing = !showing && ui_ticker_next();
+  ui_show_ticker(showing);
 }
 
 static void update_screen() {
@@ -1046,9 +1096,17 @@ static void check_touch() {
       open_quick(now);
     }
   } else if (!touched && was_touched && !long_done && moved) {
-    // 滑动：横着滑够远才翻页，竖着滑或者滑得太短什么也不做
+    // 滑动：横着滑够远才翻页；资讯页上竖着滑换频道（往上滑下一个），别的页面竖着滑什么也不做
     int dx = last_x - down_x;
-    if (!quick_on && abs(dx) >= kSwipePx && abs(dx) > abs(last_y - down_y)) on_tap(now, dx > 0);
+    int dy = last_y - down_y;
+    if (!quick_on && abs(dx) >= kSwipePx && abs(dx) > abs(dy)) {
+      on_tap(now, dx > 0);
+    } else if (!quick_on && abs(dy) >= kSwipePx && screen.page() == PAGE_NEWS && screen.started() && !screen.dimmed() &&
+               !ota_screen && !alert_on && !game_on) {
+      ui_news_channel(dy < 0 ? 1 : -1);
+      news_flip_at = now + kNewsFlipMs;
+      screen.stay(now);
+    }
   } else if (!touched && was_touched && !long_done) {
     if (on_ring) {
       pomo_command(PomoCmd::Toggle);
@@ -1108,6 +1166,11 @@ void setup() {
   ota_begin();
   ota_set_busy_hook(on_ota_busy);
   bing_begin();
+  news_data = (NewsData *)heap_caps_calloc(1, sizeof(NewsData), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (news_data) {
+    ui_set_news(*news_data, news_style);
+    news_begin();
+  }
   log_i("heap: internal %u (largest block %u), psram %u", heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
         heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL), heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
@@ -1153,6 +1216,7 @@ void loop() {
 
   if (github_take_update(github_data)) ui_set_github(github_data);
   if (stock_take_update(stock_data)) ui_set_stocks(stock_data);
+  update_news();
 
   static bool last_wifi = false;
   bool wifi = WiFi.isConnected();

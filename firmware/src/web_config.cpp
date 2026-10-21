@@ -9,6 +9,7 @@
 #include "display.h"
 #include "github.h"
 #include "net.h"
+#include "news.h"
 #include "night.h"
 #include "ota.h"
 #include "ota_util.h"
@@ -135,6 +136,13 @@ static void handle_api_settings() {
   doc["album_local"] = s.album_local;
   doc["album_bing"] = s.album_bing;
   doc["bing_caption"] = s.bing_caption;
+  for (int i = 0; i < kNewsSourceCount; i++) {
+    doc[String("ns_") + kNewsSources[i].id] = news_has_source(s.news_src.c_str(), kNewsSources[i].id);
+  }
+  doc["news_rss"] = s.news_rss;
+  doc["news_style"] = s.news_style;
+  doc["news_ticker"] = s.news_ticker;
+  doc["news_voice"] = s.news_voice;
   // 这块板子有没有这些硬件
   doc["audio"] = audio_available();
   doc["voice"] = voice_available();
@@ -335,12 +343,32 @@ static void handle_save() {
     s.stocks = server.arg("stocks");
     s.stocks.trim();
   }
+  if (server.hasArg("news_style")) {  // 确认是设置表单提交的，再更新资讯的勾选项
+    String src;
+    for (int i = 0; i < kNewsSourceCount; i++) {
+      if (!server.hasArg(String("ns_") + kNewsSources[i].id)) continue;
+      if (src.length()) src += ',';
+      src += kNewsSources[i].id;
+    }
+    s.news_src = src;
+    std::string urls[kNewsMaxRss];
+    int n = news_split_urls(server.arg("news_rss").c_str(), urls, kNewsMaxRss);
+    s.news_rss = "";
+    for (int i = 0; i < n; i++) {
+      if (i) s.news_rss += '\n';
+      s.news_rss += urls[i].c_str();
+    }
+    s.news_style = server.arg("news_style").toInt() == 1 ? 1 : 0;
+    s.news_ticker = server.hasArg("news_ticker");
+    s.news_voice = server.hasArg("news_voice");
+  }
 
   settings_save(s);
   changed = true;
   weather_request_refresh();
   github_request_refresh();
   stock_request_refresh();
+  news_request_refresh();
 
   send_ok();
 }
