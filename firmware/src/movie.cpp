@@ -420,6 +420,150 @@ bool movie_take_frame(const uint16_t *&px) {
   return true;
 }
 
+// ---- 设置网页：上传、删除 ----
+
+static constexpr const char *kUploadTmp = "/movies/.upload.tmp";
+static constexpr size_t kUploadBuf = 32 * 1024;  // 攒够一大块再写卡，比每次写 1.4KB 快得多
+static constexpr uint64_t kUploadSpare = 1024 * 1024;
+static constexpr const char *kNotAvi = "不是 .avi 文件。请先用电脑上的转换工具转好再传";
+static File upload_file;
+static uint8_t *upload_buf;
+static size_t upload_fill = 0;
+static uint64_t upload_total = 0;
+static bool upload_ok = false;
+static const char *upload_err = "";
+
+// 板子上在放就先停下来，等后台任务关好文件
+static void stop_playing() {
+  if (!st_open) return;
+  send(kCmdClose);
+  for (int i = 0; i < 300 && st_open; i++) delay(10);
+}
+
+void movie_rescan_now() {
+  if (task) scan();
+}
+
+bool movie_card_space(uint64_t &total, uint64_t &used) {
+  bool ok = photos_card_lock();
+  if (ok) {
+    total = SD_MMC.totalBytes();
+    used = SD_MMC.usedBytes();
+  }
+  photos_card_unlock();
+  return ok;
+}
+
+static bool upload_fail(const char *why) {
+  movie_upload_abort();
+  upload_err = why;
+  return false;
+}
+
+static bool upload_flush() {
+  if (upload_fill == 0) return true;
+  if (upload_total == upload_fill && !movie_is_avi_header(upload_buf, upload_fill)) return upload_fail(kNotAvi);
+  photos_card_lock();
+  bool ok = upload_file && upload_file.write(upload_buf, upload_fill) == upload_fill;
+  photos_card_unlock();
+  upload_fill = 0;
+  return ok || upload_fail("写入 TF 卡失败，可能是卡被拔了");
+}
+
+bool movie_upload_begin(uint64_t size) {
+  upload_ok = false;
+  upload_fill = 0;
+  upload_total = 0;
+  if (!task) {
+    upload_err = "这块板子没有 TF 卡槽";
+    return false;
+  }
+  if (size >= 0xFFFFFFFFull) {
+    upload_err = "文件超过 4GB，TF 卡（FAT32）存不下这么大的文件";
+    return false;
+  }
+  if (!upload_buf) upload_buf = (uint8_t *)heap_caps_malloc(kUploadBuf, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!upload_buf) {
+    upload_err = "板子内存不够";
+    return false;
+  }
+  stop_playing();
+  upload_err = "没有检测到 TF 卡";
+  if (photos_card_lock()) {
+    uint64_t free_bytes = SD_MMC.totalBytes() - SD_MMC.usedBytes();
+    if (free_bytes < size + kUploadSpare) {
+      upload_err = "TF 卡剩余空间不够";
+    } else {
+      if (!SD_MMC.exists(kDir)) SD_MMC.mkdir(kDir);
+      upload_file = SD_MMC.open(kUploadTmp, FILE_WRITE);
+      upload_ok = (bool)upload_file;
+      if (!upload_ok) upload_err = "写入 TF 卡失败";
+    }
+  }
+  photos_card_unlock();
+  return upload_ok;
+}
+
+bool movie_upload_write(const uint8_t *data, size_t len) {
+  while (upload_ok && len > 0) {
+    size_t n = std::min(len, kUploadBuf - upload_fill);
+    memcpy(upload_buf + upload_fill, data, n);
+    upload_fill += n;
+    upload_total += n;
+    data += n;
+    len -= n;
+    if (upload_fill == kUploadBuf) upload_flush();
+  }
+  return upload_ok;
+}
+
+bool movie_upload_end(const char *name, char *saved, size_t saved_size) {
+  if (upload_ok && upload_total < 12) upload_fail(kNotAvi);
+  if (upload_ok) upload_flush();
+  if (!upload_ok) return false;
+  char base[kMovieNameMax - 4];  // 留出重名时加 _2 的地方
+  movie_safe_name(name, String(millis()).c_str(), base, sizeof(base));
+  String stem = String(base).substring(0, strlen(base) - 4), file_name = base;
+  bool ok = photos_card_lock();
+  upload_file.close();
+  if (ok) {
+    for (int i = 2; SD_MMC.exists(path_of(file_name.c_str())) && i < 1000; i++) file_name = stem + "_" + i + ".avi";
+    ok = SD_MMC.rename(kUploadTmp, path_of(file_name.c_str()));
+    if (!ok) SD_MMC.remove(kUploadTmp);
+  }
+  photos_card_unlock();
+  upload_ok = false;
+  if (!ok) {
+    upload_err = "写入 TF 卡失败";
+    return false;
+  }
+  strlcpy(saved, file_name.c_str(), saved_size);
+  scan();
+  return true;
+}
+
+void movie_upload_abort() {
+  bool had = upload_file;
+  photos_card_lock();
+  if (upload_file) upload_file.close();
+  if (had) SD_MMC.remove(kUploadTmp);
+  photos_card_unlock();
+  upload_ok = false;
+  upload_fill = 0;
+}
+
+const char *movie_upload_error() { return upload_err; }
+
+bool movie_delete(const char *name) {
+  if (!task || !movie_is_file(name) || strchr(name, '/') || strchr(name, '\\')) return false;
+  stop_playing();
+  bool ok = photos_card_lock() && SD_MMC.remove(path_of(name));
+  photos_card_unlock();
+  if (ok) save_progress(name, 0);  // 看到哪里的记录也删掉
+  scan();
+  return ok;
+}
+
 #else  // 没有 TF 卡槽的板子
 
 void movie_begin() {}
@@ -438,5 +582,13 @@ void movie_close() {}
 MovieStatus movie_status() { return {}; }
 bool movie_playing() { return false; }
 bool movie_take_frame(const uint16_t *&) { return false; }
+void movie_rescan_now() {}
+bool movie_card_space(uint64_t &, uint64_t &) { return false; }
+bool movie_upload_begin(uint64_t) { return false; }
+bool movie_upload_write(const uint8_t *, size_t) { return false; }
+bool movie_upload_end(const char *, char *, size_t) { return false; }
+void movie_upload_abort() {}
+const char *movie_upload_error() { return "这块板子没有 TF 卡槽"; }
+bool movie_delete(const char *) { return false; }
 
 #endif

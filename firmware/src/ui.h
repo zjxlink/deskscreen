@@ -5,6 +5,7 @@
 #include "news.h"
 #include "pages.h"
 #include "pet.h"
+#include "player.h"
 #include "pomodoro.h"
 #include "runner.h"
 #include "stock.h"
@@ -65,7 +66,7 @@ void ui_pet_anim(int dx, int bob, int zzz);
 void ui_set_pet_music(const float *bands);
 
 // 全屏提醒（留言、久坐、喝水、闹钟），盖在当前页面上，关掉后用 ui_show_page 回到原来的页面
-enum class AlertIcon { Message, Sit, Water, Alarm, Climate, Rain };
+enum class AlertIcon { Message, Sit, Water, Alarm, Climate, Rain, Pair };
 void ui_show_alert(AlertIcon icon, const char *title, const char *body, const char *foot);
 
 // 快捷设置页（长按屏幕打开）：亮度、提示音、没人熄屏，以及打开网页设置的二维码。
@@ -81,8 +82,13 @@ struct QuickState {
   uint32_t page_hidden;       // 第 i 位：第 i 页被隐藏
   uint32_t page_unavailable;  // 第 i 位：板子上没有这页的硬件，不列出来
   uint32_t page_unset;        // 第 i 位：这页还没设置好（如没填 GitHub Token），格子上提示一下
+  bool music;                 // 有一首当前的歌：左上角的标题换成「上一首 播放/暂停 下一首」
+  bool music_playing;
 };
-enum class QuickHit { None, Close, BrightDown, BrightUp, VolumeDown, VolumeUp, Sound, Away, Pages, Back, PageTile };
+enum class QuickHit {
+  None, Close, BrightDown, BrightUp, VolumeDown, VolumeUp, Sound, Away, Pages, Back, PageTile,
+  MusicPrev, MusicPlay, MusicNext,
+};
 
 // 显示快捷设置页，或者在已经显示时刷新上面的状态
 void ui_show_quick(const QuickState &q);
@@ -208,6 +214,55 @@ void ui_set_movie_player(const MovieView &v);
 // 控制条上点到了什么（控制条藏着时总是 None）。点到进度条时 frac 是点的位置（0～1）
 enum class MovieHit { None, Back, Volume, Rewind, PlayPause, Forward, Progress };
 MovieHit ui_movie_hit(int x, int y, float *frac);
+// 音乐页：播放画面（封面、歌名、歌词、进度、按钮）和歌曲列表两屏
+struct MusicPageView {
+  PlayerCard card;
+  bool loaded;   // 有当前的歌（在放或者暂停着）
+  bool playing;
+  bool loading;
+  uint32_t pos_ms;
+  uint32_t dur_ms;
+  const char *title;
+  const char *artist;
+  const char *album;
+  const char *folder;  // 空字符串表示「全部」
+  int queue_pos;       // 从 0 开始
+  int queue_len;
+  PlayMode mode;
+  int sleep_left_s;    // 睡眠定时还剩几秒，0 表示没开
+  const char *error;
+  const char *lyric_cur;   // nullptr 表示没有歌词
+  const char *lyric_next;
+  const float *bands;      // kMusicBands 根频谱条（0～1），nullptr 表示不画
+};
+void ui_set_music(const MusicPageView &v);
+// 封面：kPlayerCover x kPlayerCover 的 RGB565，nullptr 表示用默认的音符图
+void ui_set_music_cover(const uint16_t *px);
+// 切换播放画面和歌曲列表
+void ui_music_show_list(bool on);
+bool ui_music_list_shown();
+
+static constexpr int kMusicRows = 4;
+struct MusicRow {
+  int num;           // 第几首（从 1 开始）
+  const char *title;
+  const char *artist;
+  uint32_t dur_ms;
+  bool playing;      // 正在放的这首，序号换成橙色的 ♪
+};
+// 列表：chips 是歌单名（第 0 个是「全部」），sel 是选中的，first 是最左边显示第几个（放不下时往右挪）；
+// msg 不为空时只显示提示（没插卡、没有歌）；count 是这个歌单一共几首，page、pages 是第几屏、一共几屏
+void ui_set_music_list(const char *msg, const char *const *chips, int nchips, int sel, int first, const MusicRow *rows,
+                       int n, int count, int page, int pages);
+enum class MusicHit { None, List, Sleep, Mode, Prev, PlayPause, Next, Progress, Back, Chip, ChipMore, Row };
+// 点到了什么：Progress 时 frac 是位置（0～1），Chip 时 index 是第几个歌单，Row 时 index 是这一屏的第几行
+MusicHit ui_music_hit(int x, int y, float *frac, int *index);
+
+// 时钟页上的迷你播放条（代替日出日落那一行）：show 为 false 时换回去
+void ui_set_music_bar(bool show, bool playing, const char *title, const char *artist);
+enum class MusicBarHit { None, Open, PlayPause, Next };
+MusicBarHit ui_music_bar_hit(int x, int y);
+
 // 触摸点是否落在番茄钟的圆环上（圆环居中，屏幕上下或左右翻转时判断结果也不变）
 bool ui_pomodoro_hit(int x, int y);
 void ui_set_wifi(bool connected);

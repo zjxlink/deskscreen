@@ -26,6 +26,12 @@ struct OtaStatus {
 // 当前固件版本，由编译脚本从 git 标签生成；开发版是提交号或 "dev"
 const char *ota_current_version();
 
+// 升级后自检：新固件启动后连续运行 30 秒才确认，在那之前重启就自动退回旧固件。主循环每轮调用
+void ota_confirm_tick(uint32_t now_ms);
+
+// 上次升级的固件没通过自检、已经退回到现在这个版本
+bool ota_rolled_back();
+
 // 启动后台任务：开机后检查一次，之后每 24 小时检查一次
 void ota_begin();
 

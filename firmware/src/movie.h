@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 // 影片页：放 TF 卡 movies 文件夹里的 MJPEG 视频（.avi，电脑上用 tools/movie 里的工具转好），带声音。
@@ -60,3 +61,17 @@ bool movie_playing();
 
 // 有新解码好的一帧时返回 true，px 是 320x240 的 RGB565，一直有效到下一次返回 true 后又过了一帧
 bool movie_take_frame(const uint16_t *&px);
+
+// 设置网页用：重新看一眼卡（等看完才返回）、卡的容量、上传和删除。都在网页服务器那个循环里调用。
+// 上传和删除前，板子上正在放的片子先停下来回到列表（记住看到哪里），免得列表变了对不上
+void movie_rescan_now();
+bool movie_card_space(uint64_t &total, uint64_t &used);
+// size 是浏览器说的文件大小，卡上放不下时直接拒绝
+bool movie_upload_begin(uint64_t size);
+bool movie_upload_write(const uint8_t *data, size_t len);
+// name 是浏览器给的文件名，存成的名字写到 saved（重名时加 _2、_3……）
+bool movie_upload_end(const char *name, char *saved, size_t saved_size);
+void movie_upload_abort();
+// 上传失败的原因
+const char *movie_upload_error();
+bool movie_delete(const char *name);

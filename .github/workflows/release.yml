@@ -127,3 +127,42 @@ jobs:
           # 手动运行时标签还不存在，--target 让 GitHub 在这次编译的提交上创建它
           gh release create "$VERSION" dist/* --target "${{ github.sha }}" \
             --title "$VERSION" --notes-file notes.md --generate-notes
+
+  # 网页刷机页面（flash/index.html）和最新固件一起部署到 GitHub Pages：https://zjxlink.github.io/test-repo/
+  # 第一次需要在仓库 Settings › Pages 里把 Source 选成 GitHub Actions
+  pages:
+    needs: release
+    runs-on: ubuntu-24.04
+    # Pages 没开时这一步会失败，但不影响已经发布好的 Release
+    continue-on-error: true
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-box3
+          path: dist
+      - name: Make flash site
+        run: |
+          mkdir -p site
+          cp flash/index.html site/
+          cp dist/firmware-box3-merged.bin site/
+          cat > site/manifest-box3.json <<JSON
+          {
+            "name": "桌面信息屏",
+            "version": "$VERSION",
+            "new_install_prompt_erase": true,
+            "builds": [{"chipFamily": "ESP32-S3", "parts": [{"path": "firmware-box3-merged.bin", "offset": 0}]}]
+          }
+          JSON
+          cat site/manifest-box3.json
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

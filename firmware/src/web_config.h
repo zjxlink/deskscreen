@@ -12,8 +12,20 @@ void web_config_loop();
 // 设置保存后由主循环处理（更新屏幕上的城市名和亮度）
 bool web_config_take_changed();
 
+// 配对登录：手机打开设置网页时设备生成 6 位配对码，回调里把它显示在屏幕上；
+// code 为 nullptr 表示配对完成或配对码失效，可以关掉显示
+void web_config_set_pair_hook(void (*hook)(const char *code));
+
+// 配对码是否还有效（主循环用它在过期后关掉屏幕上的配对码）
+bool web_config_pair_active();
+
 // 网页上传固件时主循环会被阻塞，上传处理每收到一段数据就调用这个回调刷新屏幕
 void web_config_set_progress_hook(void (*hook)());
+
+// 网页上传影片时每收一段调一次：done / total 是收到和一共的字节数，total 为 0 表示收完了（成功或失败）
+void web_config_set_movie_hook(void (*hook)(uint64_t done, uint64_t total));
+// 网页上传歌曲时的进度（和影片一样），total 为 0 表示收完了或者出错了
+void web_config_set_music_hook(void (*hook)(uint64_t done, uint64_t total));
 
 // 番茄钟：设置页面显示状态，并通过 cmd 回调发出开始/暂停、跳过、重置
 void web_config_set_pomodoro(const Pomodoro *p, void (*cmd)(PomoCmd));

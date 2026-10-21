@@ -1,6 +1,7 @@
 #include "ui.h"
 
 #include <Arduino.h>
+#include <esp_heap_caps.h>
 #include <lvgl.h>
 #include <string.h>
 #include <time.h>
@@ -171,6 +172,8 @@ static lv_obj_t *quick_qr;
 static lv_obj_t *lbl_quick_url;
 static String quick_url;
 static lv_obj_t *quick_pages;  // 「显示页面 ›」按钮
+static lv_obj_t *quick_title;
+static lv_obj_t *quick_music[3];  // 有当前的歌时代替标题：上一首、播放/暂停、下一首
 
 // 快捷设置的第二屏：选哪些页面参与翻页，3 列格子，放不下时上下滑动
 static constexpr int kTileW = 98, kTileH = 56, kTileGapX = 6, kTileGapY = 6, kTilesTop = 48;
@@ -471,6 +474,7 @@ static lv_obj_t *lbl_ticker;
 static bool ticker_shown = false;
 static int ticker_ch = 0, ticker_idx = 0;
 static void update_sun_row();
+static bool music_bar_shown = false;
 
 // 新闻里偶尔有字库里没有的字（生僻字、繁体、表情），直接去掉，免得显示成方块
 static void news_fit_font(const char *in, char *out, size_t size) {
@@ -764,6 +768,7 @@ bool ui_ticker_next() {
 void ui_show_ticker(bool show) {
   if (show == ticker_shown) return;
   ticker_shown = show;
+  if (music_bar_shown) return;  // 迷你播放条占着这一行，收起时再按 ticker_shown 换回来
   if (show) {
     lv_obj_add_flag(sun_row, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(ticker_row, LV_OBJ_FLAG_HIDDEN);
@@ -1542,6 +1547,524 @@ FriendAlertHit ui_friend_alert_hit(int x, int y) {
   return FriendAlertHit::None;
 }
 
+// ---- 音乐页：播放画面 + 歌曲列表 ----
+
+static constexpr int kMusicCoverX = 16, kMusicCoverY = 34;
+static constexpr int kMusicTextX = kMusicCoverX + kPlayerCover + 14;
+static constexpr int kMusicBars = 8;  // 16 根频谱两两合成一根，放在封面右边
+static constexpr int kMusicBarW = 6, kMusicBarGap = 3, kMusicBarMaxH = 18;
+static constexpr int kMusicBarsX = 226, kMusicBarsBase = 124;
+static constexpr int kMusicProgX = 58, kMusicProgY = 187, kMusicProgW = 204;
+static constexpr int kMusicBtnY = 214;  // 底下一排按钮的中心
+static constexpr int kMusicBtnX[5] = {40, 100, 160, 220, 280};  // 播放顺序、上一首、播放、下一首、列表
+static constexpr int kMusicRowTop = 66, kMusicRowH = 38, kMusicRowGap = 4;
+static constexpr int kMusicChipY = 34, kMusicChipH = 26;
+static constexpr int kMusicChips = 6;
+
+static lv_obj_t *music_player_box;  // 播放画面的东西都放在这里面
+static lv_obj_t *lbl_music_head;
+static lv_obj_t *lbl_music_queue;
+static lv_obj_t *music_sleep;
+static lv_obj_t *lbl_music_sleep;
+static lv_obj_t *music_cover_art;  // 没有封面时的音符图
+static lv_obj_t *music_cover_img;
+static lv_img_dsc_t music_cover_dsc;
+static uint16_t *music_cover_px;   // ui 自己留一份，播放器那边换歌也不影响
+static lv_obj_t *lbl_music_title;
+static lv_obj_t *lbl_music_artist;
+static lv_obj_t *lbl_music_album;
+static lv_obj_t *music_bars[kMusicBars];
+static lv_obj_t *lbl_music_lyric;
+static lv_obj_t *lbl_music_lyric_next;
+static lv_obj_t *lbl_music_pos;
+static lv_obj_t *lbl_music_dur;
+static lv_obj_t *music_prog_fill;
+static lv_obj_t *music_knob;
+static lv_obj_t *lbl_music_mode;
+static lv_obj_t *lbl_music_mode_one;  // 单曲循环时图标右下角的小「1」
+static lv_obj_t *lbl_music_play;
+static lv_obj_t *lbl_music_msg;       // 没插卡、没有歌时盖住整页的提示
+
+static lv_obj_t *music_list_box;
+static lv_obj_t *lbl_music_count;
+struct MusicChipUi {
+  lv_obj_t *box;
+  lv_obj_t *text;
+  int index;  // 第几个歌单，-1 表示「›」
+};
+static MusicChipUi music_chips[kMusicChips];
+static int music_chip_next = 0;  // 点「›」后最左边显示第几个歌单
+struct MusicRowUi {
+  lv_obj_t *row;
+  lv_obj_t *num;
+  lv_obj_t *title;
+  lv_obj_t *artist;
+  lv_obj_t *dur;
+};
+static MusicRowUi music_rows[kMusicRows];
+static lv_obj_t *lbl_music_list_msg;
+static bool music_list_on = false;
+
+// 迷你播放条（时钟页）
+static lv_obj_t *music_bar;
+static lv_obj_t *lbl_music_bar;
+static lv_obj_t *lbl_music_bar_play;
+
+static lv_obj_t *music_icon(lv_obj_t *parent, int cx, const lv_font_t *font, const char *sym, uint32_t color) {
+  lv_obj_t *l = make_label(parent, font, lv_color_hex(color));
+  lv_label_set_text(l, sym);
+  lv_obj_align(l, LV_ALIGN_TOP_LEFT, 0, 0);
+  lv_obj_update_layout(l);
+  lv_obj_set_pos(l, cx - lv_obj_get_width(l) / 2, kMusicBtnY - lv_obj_get_height(l) / 2);
+  return l;
+}
+
+static void build_music() {
+  lv_obj_t *scr = make_screen();
+  scr_pages[PAGE_MUSIC] = scr;
+  dot_wifi[PAGE_MUSIC] = make_wifi_dot(scr);
+
+  // 播放画面
+  music_player_box = make_box(scr, SCREEN_W, SCREEN_H, pal->bg, LV_OPA_TRANSP, 0);
+  lv_obj_t *note = make_label(music_player_box, &lv_font_montserrat_14, lv_color_hex(kMovieOrange));
+  lv_label_set_text(note, LV_SYMBOL_AUDIO);
+  lv_obj_set_pos(note, 16, 11);
+  lbl_music_head = make_label(music_player_box, &font_cn_16, COLOR_SUBTLE);
+  lv_label_set_long_mode(lbl_music_head, LV_LABEL_LONG_DOT);
+  lv_obj_set_size(lbl_music_head, 150, 20);
+  lv_obj_set_pos(lbl_music_head, 36, 8);
+  music_sleep = make_box(music_player_box, 64, 22, pal->flat, LV_OPA_COVER, 11);
+  lv_obj_set_pos(music_sleep, 182, 7);
+  lbl_music_sleep = make_label(music_sleep, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_center(lbl_music_sleep);
+  lbl_music_queue = make_label(music_player_box, &lv_font_montserrat_14, COLOR_SUBTLE);
+  lv_obj_align(lbl_music_queue, LV_ALIGN_TOP_RIGHT, -26, 11);
+
+  // 封面：默认是橙到紫的渐变上一个大音符
+  music_cover_art = make_box(music_player_box, kPlayerCover, kPlayerCover, 0xF2A65A, LV_OPA_COVER, 12);
+  lv_obj_set_style_bg_grad_color(music_cover_art, lv_color_hex(0x8A4FE0), 0);
+  lv_obj_set_style_bg_grad_dir(music_cover_art, LV_GRAD_DIR_VER, 0);
+  lv_obj_set_pos(music_cover_art, kMusicCoverX, kMusicCoverY);
+  lv_obj_t *big = make_label(music_cover_art, &lv_font_montserrat_48, lv_color_hex(0xFFFFFF));
+  lv_obj_set_style_text_opa(big, LV_OPA_80, 0);
+  lv_label_set_text(big, LV_SYMBOL_AUDIO);
+  lv_obj_center(big);
+  music_cover_px = (uint16_t *)heap_caps_malloc(kPlayerCover * kPlayerCover * 2, MALLOC_CAP_SPIRAM);
+  music_cover_dsc.header.always_zero = 0;
+  music_cover_dsc.header.cf = LV_IMG_CF_TRUE_COLOR;
+  music_cover_dsc.header.w = kPlayerCover;
+  music_cover_dsc.header.h = kPlayerCover;
+  music_cover_dsc.data_size = kPlayerCover * kPlayerCover * LV_COLOR_SIZE / 8;
+  music_cover_dsc.data = (const uint8_t *)music_cover_px;
+  music_cover_img = lv_img_create(music_player_box);
+  lv_obj_set_pos(music_cover_img, kMusicCoverX, kMusicCoverY);
+  lv_obj_add_flag(music_cover_img, LV_OBJ_FLAG_HIDDEN);
+
+  const int text_w = SCREEN_W - kMusicTextX - 14;
+  lbl_music_title = make_label(music_player_box, &font_cn_16, COLOR_TEXT);
+  lbl_music_artist = make_label(music_player_box, &font_cn_16, COLOR_SUBTLE);
+  lbl_music_album = make_label(music_player_box, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_t *lines[] = {lbl_music_title, lbl_music_artist, lbl_music_album};
+  for (int i = 0; i < 3; i++) {
+    lv_label_set_long_mode(lines[i], LV_LABEL_LONG_DOT);
+    lv_obj_set_size(lines[i], text_w, 20);
+    lv_obj_set_pos(lines[i], kMusicTextX, 40 + i * 23);
+  }
+  lv_obj_set_width(lbl_music_album, kMusicBarsX - kMusicTextX - 4);  // 别压住频谱
+
+  for (int i = 0; i < kMusicBars; i++) {
+    lv_obj_t *b = make_box(music_player_box, kMusicBarW, 2, 0xF28C3C, LV_OPA_COVER, 1);
+    lv_obj_set_style_bg_grad_color(b, lv_color_hex(0xFFD08A), 0);
+    lv_obj_set_style_bg_grad_dir(b, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_pos(b, kMusicBarsX + i * (kMusicBarW + kMusicBarGap), kMusicBarsBase - 2);
+    music_bars[i] = b;
+  }
+
+  lbl_music_lyric = make_label(music_player_box, &font_cn_16, lv_color_hex(kMovieOrange));
+  lbl_music_lyric_next = make_label(music_player_box, &font_cn_16, COLOR_SUBTLE);
+  for (lv_obj_t *l : {lbl_music_lyric, lbl_music_lyric_next}) {
+    lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+    lv_obj_set_size(l, SCREEN_W - 40, 20);
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+  }
+  lv_obj_set_pos(lbl_music_lyric, 20, 134);
+  lv_obj_set_pos(lbl_music_lyric_next, 20, 156);
+
+  lbl_music_pos = make_label(music_player_box, &lv_font_montserrat_14, COLOR_SUBTLE);
+  lv_obj_set_pos(lbl_music_pos, 16, kMusicProgY - 7);
+  lbl_music_dur = make_label(music_player_box, &lv_font_montserrat_14, COLOR_SUBTLE);
+  lv_obj_align(lbl_music_dur, LV_ALIGN_TOP_RIGHT, -16, kMusicProgY - 7);
+  lv_obj_t *track = make_box(music_player_box, kMusicProgW, 4, pal->flat, LV_OPA_COVER, 2);
+  lv_obj_set_pos(track, kMusicProgX, kMusicProgY);
+  music_prog_fill = make_box(track, 0, 4, kMovieOrange, LV_OPA_COVER, 2);
+  music_knob = make_box(music_player_box, 12, 12, 0xFFFFFF, LV_OPA_COVER, LV_RADIUS_CIRCLE);
+  lv_obj_set_style_border_width(music_knob, 1, 0);
+  lv_obj_set_style_border_color(music_knob, lv_color_hex(0xC9D1D9), 0);
+  lv_obj_set_pos(music_knob, kMusicProgX - 6, kMusicProgY - 4);
+
+  lbl_music_mode = music_icon(music_player_box, kMusicBtnX[0], &lv_font_montserrat_20, LV_SYMBOL_LOOP, kMovieOrange);
+  lbl_music_mode_one = make_label(music_player_box, &lv_font_montserrat_14, lv_color_hex(kMovieOrange));
+  lv_label_set_text(lbl_music_mode_one, "1");
+  lv_obj_set_pos(lbl_music_mode_one, kMusicBtnX[0] + 11, kMusicBtnY);
+  music_icon(music_player_box, kMusicBtnX[1], &lv_font_montserrat_20, LV_SYMBOL_PREV, pal->text);
+  lv_obj_t *play = make_box(music_player_box, 44, 44, kMovieOrange, LV_OPA_COVER, LV_RADIUS_CIRCLE);
+  lv_obj_set_pos(play, kMusicBtnX[2] - 22, kMusicBtnY - 22);
+  lbl_music_play = make_label(play, &lv_font_montserrat_20, lv_color_hex(0x1A1A1A));
+  lv_label_set_text(lbl_music_play, LV_SYMBOL_PLAY);
+  lv_obj_center(lbl_music_play);
+  music_icon(music_player_box, kMusicBtnX[3], &lv_font_montserrat_20, LV_SYMBOL_NEXT, pal->text);
+  music_icon(music_player_box, kMusicBtnX[4], &lv_font_montserrat_20, LV_SYMBOL_LIST, pal->subtle);
+
+  lbl_music_msg = make_label(scr, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_set_width(lbl_music_msg, SCREEN_W - 40);
+  lv_obj_set_style_text_align(lbl_music_msg, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_line_space(lbl_music_msg, 6, 0);
+  lv_label_set_recolor(lbl_music_msg, true);
+  lv_obj_align(lbl_music_msg, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_add_flag(lbl_music_msg, LV_OBJ_FLAG_HIDDEN);
+
+  // 歌曲列表
+  music_list_box = make_box(scr, SCREEN_W, SCREEN_H, pal->bg, LV_OPA_TRANSP, 0);
+  lv_obj_add_flag(music_list_box, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_t *back = make_label(music_list_box, &lv_font_montserrat_20, COLOR_SUBTLE);
+  lv_label_set_text(back, LV_SYMBOL_LEFT);
+  lv_obj_set_pos(back, 12, 8);
+  lv_obj_t *title = make_label(music_list_box, &font_cn_24, COLOR_TEXT);
+  lv_label_set_text(title, "音乐");
+  lv_obj_set_pos(title, 36, 3);
+  lbl_music_count = make_label(music_list_box, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_align(lbl_music_count, LV_ALIGN_TOP_RIGHT, -26, 9);
+  for (int i = 0; i < kMusicChips; i++) {
+    MusicChipUi &c = music_chips[i];
+    c.box = make_box(music_list_box, 40, kMusicChipH, pal->card, LV_OPA_COVER, kMusicChipH / 2);
+    c.text = make_label(c.box, &font_cn_16, COLOR_SUBTLE);
+    lv_obj_center(c.text);
+    lv_obj_add_flag(c.box, LV_OBJ_FLAG_HIDDEN);
+  }
+  for (int i = 0; i < kMusicRows; i++) {
+    MusicRowUi &r = music_rows[i];
+    r.row = make_card(music_list_box, 16, kMusicRowTop + i * (kMusicRowH + kMusicRowGap), SCREEN_W - 32, kMusicRowH);
+    lv_obj_set_style_radius(r.row, 10, 0);
+    lv_obj_clear_flag(r.row, LV_OBJ_FLAG_CLICKABLE);
+    r.num = make_label(r.row, &lv_font_montserrat_14, COLOR_SUBTLE);
+    lv_obj_set_width(r.num, 28);
+    lv_obj_set_style_text_align(r.num, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(r.num, LV_ALIGN_LEFT_MID, 4, 0);
+    r.title = make_label(r.row, &font_cn_16, COLOR_TEXT);
+    lv_label_set_long_mode(r.title, LV_LABEL_LONG_DOT);
+    lv_obj_set_size(r.title, 132, 20);
+    lv_obj_align(r.title, LV_ALIGN_LEFT_MID, 36, 0);
+    r.artist = make_label(r.row, &font_cn_16, COLOR_SUBTLE);
+    lv_label_set_long_mode(r.artist, LV_LABEL_LONG_DOT);
+    lv_obj_set_size(r.artist, 68, 20);
+    lv_obj_align(r.artist, LV_ALIGN_LEFT_MID, 174, 0);
+    r.dur = make_label(r.row, &lv_font_montserrat_14, COLOR_SUBTLE);
+    lv_obj_align(r.dur, LV_ALIGN_RIGHT_MID, -10, 0);
+    lv_obj_add_flag(r.row, LV_OBJ_FLAG_HIDDEN);
+  }
+  lbl_music_list_msg = make_label(music_list_box, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_set_width(lbl_music_list_msg, SCREEN_W - 40);
+  lv_obj_set_style_text_align(lbl_music_list_msg, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(lbl_music_list_msg, LV_ALIGN_CENTER, 0, 20);
+}
+
+// 时钟页的迷你播放条：和要闻条、日出日落在同一个位置，放歌时优先显示它
+static void build_music_bar() {
+  music_bar = make_box(scr_main, SCREEN_W - 24, 24, pal->card, LV_OPA_COVER, 12);
+  lv_obj_set_style_border_width(music_bar, 1, 0);
+  lv_obj_set_style_border_color(music_bar, lv_color_hex(0xB0743C), 0);
+  lv_obj_align(music_bar, LV_ALIGN_TOP_MID, 0, kSunAloneY - 3);
+  lv_obj_t *note = make_label(music_bar, &lv_font_montserrat_14, lv_color_hex(kMovieOrange));
+  lv_label_set_text(note, LV_SYMBOL_AUDIO);
+  lv_obj_align(note, LV_ALIGN_LEFT_MID, 10, 0);
+  lbl_music_bar = make_label(music_bar, &font_cn_16, COLOR_TEXT);
+  lv_label_set_long_mode(lbl_music_bar, LV_LABEL_LONG_DOT);
+  lv_obj_set_size(lbl_music_bar, SCREEN_W - 24 - 32 - 74, 20);
+  lv_obj_align(lbl_music_bar, LV_ALIGN_LEFT_MID, 30, 0);
+  lbl_music_bar_play = make_label(music_bar, &lv_font_montserrat_14, lv_color_hex(kMovieOrange));
+  lv_obj_align(lbl_music_bar_play, LV_ALIGN_RIGHT_MID, -44, 0);
+  lv_obj_t *next = make_label(music_bar, &lv_font_montserrat_14, lv_color_hex(kMovieOrange));
+  lv_label_set_text(next, LV_SYMBOL_NEXT);
+  lv_obj_align(next, LV_ALIGN_RIGHT_MID, -12, 0);
+  lv_obj_add_flag(music_bar, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void music_time(uint32_t ms, char *out, size_t n) {
+  uint32_t s = ms / 1000;
+  if (s >= 3600) snprintf(out, n, "%u:%02u:%02u", (unsigned)(s / 3600), (unsigned)(s / 60 % 60), (unsigned)(s % 60));
+  else snprintf(out, n, "%u:%02u", (unsigned)(s / 60), (unsigned)(s % 60));
+}
+
+void ui_set_music(const MusicPageView &v) {
+  const char *head = nullptr, *msg = nullptr;
+  switch (v.card) {
+    case PlayerCard::NoSlot: msg = "这块板子没有 TF 卡槽"; break;
+    case PlayerCard::Reading: msg = "正在读取 TF 卡…"; break;
+    case PlayerCard::NoCard:
+      head = "没有检测到 TF 卡";
+      msg = "插入 FAT32 格式的 TF 卡，把歌放进卡里的 music 文件夹";
+      break;
+    case PlayerCard::Empty:
+      head = "还没有歌";
+      msg = "把 MP3、FLAC、WAV 放进 TF 卡的 music 文件夹，或者在网页设置的「音乐管理」里上传";
+      break;
+    case PlayerCard::Ok: break;
+  }
+  if (v.loaded) msg = nullptr;  // 正在放的歌优先，读卡时也照常显示
+  set_hidden(lbl_music_msg, !msg || music_list_on);
+  if (msg && head) {
+    lv_label_set_text_fmt(lbl_music_msg, "#%06X %s#\n\n%s", (unsigned)pal->text, head, msg);  // 标题用正文颜色，换主题也看得清
+  } else if (msg) {
+    lv_label_set_text(lbl_music_msg, msg);
+  }
+  set_hidden(music_player_box, msg || music_list_on);
+  if (msg) return;
+
+  char t[64];
+  if (v.folder && v.folder[0]) snprintf(t, sizeof(t), "音乐 · %s", v.folder);
+  else snprintf(t, sizeof(t), "音乐 · 全部");
+  lv_label_set_text(lbl_music_head, t);
+  if (v.queue_len > 0 && v.loaded) lv_label_set_text_fmt(lbl_music_queue, "%d / %d", v.queue_pos + 1, v.queue_len);
+  else lv_label_set_text(lbl_music_queue, "");
+  if (v.sleep_left_s > 0) {
+    snprintf(t, sizeof(t), "%d分后停", (v.sleep_left_s + 59) / 60);
+    lv_obj_set_style_bg_color(music_sleep, lv_color_hex(kMovieOrange), 0);
+    lv_obj_set_style_text_color(lbl_music_sleep, lv_color_hex(0x1A1A1A), 0);
+  } else {
+    snprintf(t, sizeof(t), "定时");
+    lv_obj_set_style_bg_color(music_sleep, COLOR_FLAT, 0);
+    lv_obj_set_style_text_color(lbl_music_sleep, COLOR_SUBTLE, 0);
+  }
+  lv_label_set_text(lbl_music_sleep, t);
+  lv_obj_set_width(music_sleep, v.sleep_left_s > 0 ? 80 : 50);
+  lv_obj_center(lbl_music_sleep);
+  // 定时按钮挨着右边的「3 / 24」，左边的歌单名让出位置
+  lv_obj_align(lbl_music_queue, LV_ALIGN_TOP_RIGHT, -26, 11);
+  lv_obj_update_layout(lbl_music_queue);
+  int qx = lv_label_get_text(lbl_music_queue)[0] ? lv_obj_get_x(lbl_music_queue) : SCREEN_W - 26;
+  int sx = qx - 8 - lv_obj_get_width(music_sleep);
+  lv_obj_set_x(music_sleep, sx);
+  lv_obj_set_width(lbl_music_head, sx - 36 - 6);
+
+  if (v.loaded) {
+    lv_label_set_text(lbl_music_title, v.title);
+    lv_label_set_text(lbl_music_artist, v.error ? v.error : v.artist);
+    lv_obj_set_style_text_color(lbl_music_artist, v.error ? COLOR_ERR : COLOR_SUBTLE, 0);
+    lv_label_set_text(lbl_music_album, v.album);
+  } else {
+    lv_label_set_text(lbl_music_title, "还没放歌");
+    lv_label_set_text(lbl_music_artist, "点播放键开始");
+    lv_obj_set_style_text_color(lbl_music_artist, COLOR_SUBTLE, 0);
+    lv_label_set_text(lbl_music_album, "");
+  }
+
+  for (int i = 0; i < kMusicBars; i++) {
+    float h = v.bands && v.playing ? (v.bands[i * 2] + v.bands[i * 2 + 1]) / 2 : 0;
+    int px = 2 + (int)(h * (kMusicBarMaxH - 2));
+    if (px > kMusicBarMaxH) px = kMusicBarMaxH;
+    lv_obj_set_height(music_bars[i], px);
+    lv_obj_set_y(music_bars[i], kMusicBarsBase - px);
+  }
+
+  if (v.lyric_cur) {
+    lv_label_set_text(lbl_music_lyric, v.lyric_cur[0] ? v.lyric_cur : "· · ·");
+    lv_label_set_text(lbl_music_lyric_next, v.lyric_next ? v.lyric_next : "");
+  } else {
+    lv_label_set_text(lbl_music_lyric, "");
+    lv_label_set_text(lbl_music_lyric_next, v.loaded ? (v.loading ? "正在打开…" : "没有歌词") : "");
+  }
+
+  uint32_t pos = v.pos_ms > v.dur_ms && v.dur_ms ? v.dur_ms : v.pos_ms;
+  int w = v.dur_ms ? (int)((uint64_t)kMusicProgW * pos / v.dur_ms) : 0;
+  lv_obj_set_width(music_prog_fill, w);
+  lv_obj_set_x(music_knob, kMusicProgX + w - 6);
+  music_time(pos, t, sizeof(t));
+  lv_label_set_text(lbl_music_pos, t);
+  if (v.dur_ms) music_time(v.dur_ms, t, sizeof(t));
+  else snprintf(t, sizeof(t), "--:--");
+  lv_label_set_text(lbl_music_dur, t);
+  lv_obj_align(lbl_music_dur, LV_ALIGN_TOP_RIGHT, -16, kMusicProgY - 7);
+
+  lv_label_set_text(lbl_music_mode, v.mode == PlayMode::Shuffle ? LV_SYMBOL_SHUFFLE : LV_SYMBOL_LOOP);
+  set_hidden(lbl_music_mode_one, v.mode != PlayMode::One);
+  lv_label_set_text(lbl_music_play, v.playing ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
+}
+
+void ui_set_music_cover(const uint16_t *px) {
+  if (px && music_cover_px) {
+    memcpy(music_cover_px, px, kPlayerCover * kPlayerCover * 2);
+    lv_img_cache_invalidate_src(&music_cover_dsc);
+    lv_img_set_src(music_cover_img, &music_cover_dsc);
+    lv_obj_invalidate(music_cover_img);
+  }
+  bool show = px && music_cover_px;
+  set_hidden(music_cover_img, !show);
+  set_hidden(music_cover_art, show);
+}
+
+void ui_music_show_list(bool on) {
+  music_list_on = on;
+  set_hidden(music_list_box, !on);
+  if (on) {
+    lv_obj_add_flag(music_player_box, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(lbl_music_msg, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+bool ui_music_list_shown() { return music_list_on; }
+
+void ui_set_music_list(const char *msg, const char *const *chips, int nchips, int sel, int first, const MusicRow *rows,
+                       int n, int count, int page, int pages) {
+  // 歌单按钮从左往右排，放不下时最后放一个「›」
+  int x = 16;
+  int shown = 0;
+  for (int i = 0; i < kMusicChips; i++) music_chips[i].index = -2;
+  for (int k = first; k < nchips && shown < kMusicChips - 1; k++) {  // 留一个给「›」
+    MusicChipUi &c = music_chips[shown];
+    lv_label_set_long_mode(c.text, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(c.text, LV_SIZE_CONTENT);
+    lv_label_set_text(c.text, chips[k]);
+    lv_obj_update_layout(c.text);
+    int w = lv_obj_get_width(c.text) + 24;
+    if (w > 120) {
+      w = 120;
+      lv_label_set_long_mode(c.text, LV_LABEL_LONG_DOT);
+      lv_obj_set_width(c.text, w - 16);
+    }
+    bool last = k == nchips - 1;
+    if (x + w > SCREEN_W - 16 - (last ? 0 : 34) && shown > 0) break;
+    lv_obj_set_size(c.box, w, kMusicChipH);
+    lv_obj_set_pos(c.box, x, kMusicChipY);
+    lv_obj_center(c.text);
+    bool on = k == sel;
+    lv_obj_set_style_bg_color(c.box, on ? lv_color_hex(kMovieOrange) : COLOR_CARD, 0);
+    lv_obj_set_style_text_color(c.text, on ? lv_color_hex(0x1A1A1A) : COLOR_SUBTLE, 0);
+    lv_obj_clear_flag(c.box, LV_OBJ_FLAG_HIDDEN);
+    c.index = k;
+    x += w + 6;
+    shown++;
+  }
+  bool more = first > 0 || first + shown < nchips;
+  music_chip_next = first + shown < nchips ? first + shown : 0;
+  if (more && shown < kMusicChips) {
+    MusicChipUi &c = music_chips[shown];
+    lv_label_set_long_mode(c.text, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(c.text, LV_SIZE_CONTENT);
+    lv_label_set_text(c.text, "›");  // 点了往后挪，到头了回到最前面
+    lv_obj_set_size(c.box, 28, kMusicChipH);
+    lv_obj_set_pos(c.box, SCREEN_W - 16 - 28, kMusicChipY);
+    lv_obj_center(c.text);
+    lv_obj_set_style_bg_color(c.box, COLOR_CARD, 0);
+    lv_obj_set_style_text_color(c.text, COLOR_SUBTLE, 0);
+    lv_obj_clear_flag(c.box, LV_OBJ_FLAG_HIDDEN);
+    c.index = -1;
+    shown++;
+  }
+  for (int i = shown; i < kMusicChips; i++) lv_obj_add_flag(music_chips[i].box, LV_OBJ_FLAG_HIDDEN);
+
+  set_hidden(lbl_music_list_msg, !msg);
+  if (msg) lv_label_set_text(lbl_music_list_msg, msg);
+  for (int i = 0; i < kMusicRows; i++) {
+    MusicRowUi &r = music_rows[i];
+    set_hidden(r.row, msg || i >= n);
+    if (msg || i >= n) continue;
+    const MusicRow &m = rows[i];
+    if (m.playing) lv_label_set_text(r.num, LV_SYMBOL_AUDIO);
+    else lv_label_set_text_fmt(r.num, "%d", m.num);
+    lv_obj_set_style_text_color(r.num, m.playing ? lv_color_hex(kMovieOrange) : COLOR_SUBTLE, 0);
+    lv_label_set_text(r.title, m.title);
+    lv_obj_set_style_text_color(r.title, m.playing ? lv_color_hex(kMovieOrange) : COLOR_TEXT, 0);
+    lv_label_set_text(r.artist, m.artist);
+    char t[16] = "";
+    if (m.dur_ms) music_time(m.dur_ms, t, sizeof(t));
+    lv_label_set_text(r.dur, t);
+  }
+  char t[32];
+  if (pages > 1) snprintf(t, sizeof(t), "%d 首 · %d/%d", count, page + 1, pages);
+  else snprintf(t, sizeof(t), "%d 首", count);
+  lv_label_set_text(lbl_music_count, msg ? "" : t);
+  lv_obj_align(lbl_music_count, LV_ALIGN_TOP_RIGHT, -26, 9);
+}
+
+MusicHit ui_music_hit(int x, int y, float *frac, int *index) {
+  if (music_list_on) {
+    if (y < kMusicChipY - 2) return x < 120 ? MusicHit::Back : MusicHit::None;
+    if (y < kMusicChipY + kMusicChipH + 3) {
+      for (const MusicChipUi &c : music_chips) {
+        if (c.index < -1 || lv_obj_has_flag(c.box, LV_OBJ_FLAG_HIDDEN)) continue;
+        int cx = lv_obj_get_x(c.box), cw = lv_obj_get_width(c.box);
+        if (x >= cx - 3 && x < cx + cw + 3) {
+          if (index) *index = c.index < 0 ? music_chip_next : c.index;
+          return c.index < 0 ? MusicHit::ChipMore : MusicHit::Chip;
+        }
+      }
+      return MusicHit::None;
+    }
+    if (x < 16 || x >= SCREEN_W - 16) return MusicHit::None;
+    for (int i = 0; i < kMusicRows; i++) {
+      int top = kMusicRowTop + i * (kMusicRowH + kMusicRowGap);
+      if (y >= top - 2 && y < top + kMusicRowH + 2 && !lv_obj_has_flag(music_rows[i].row, LV_OBJ_FLAG_HIDDEN)) {
+        if (index) *index = i;
+        return MusicHit::Row;
+      }
+    }
+    return MusicHit::None;
+  }
+  if (lv_obj_has_flag(music_player_box, LV_OBJ_FLAG_HIDDEN)) return MusicHit::None;
+  if (y < 32) {
+    int sx = lv_obj_get_x(music_sleep);
+    if (x >= sx - 6 && x < sx + lv_obj_get_width(music_sleep) + 6) return MusicHit::Sleep;
+    if (x < sx - 6) return MusicHit::List;
+    return MusicHit::None;
+  }
+  if (y >= kMusicProgY - 14 && y < kMusicProgY + 12 && x >= kMusicProgX - 12 && x < kMusicProgX + kMusicProgW + 12) {
+    if (frac) {
+      float f = (float)(x - kMusicProgX) / kMusicProgW;
+      *frac = f < 0 ? 0 : f > 1 ? 1 : f;
+    }
+    return MusicHit::Progress;
+  }
+  if (y >= kMusicBtnY - 26) {
+    static const MusicHit kBtns[5] = {MusicHit::Mode, MusicHit::Prev, MusicHit::PlayPause, MusicHit::Next,
+                                      MusicHit::List};
+    for (int i = 0; i < 5; i++) {
+      if (abs(x - kMusicBtnX[i]) <= 28) return kBtns[i];
+    }
+  }
+  return MusicHit::None;
+}
+
+void ui_set_music_bar(bool show, bool playing, const char *title, const char *artist) {
+  if (show) {
+    char t[2 * kTagMax + 8];
+    if (artist && artist[0]) snprintf(t, sizeof(t), "%s · %s", title, artist);
+    else snprintf(t, sizeof(t), "%s", title);
+    lv_label_set_text(lbl_music_bar, t);
+    lv_label_set_text(lbl_music_bar_play, playing ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
+  }
+  if (show == music_bar_shown) return;
+  music_bar_shown = show;
+  set_hidden(music_bar, !show);
+  if (show) {
+    lv_obj_add_flag(sun_row, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(ticker_row, LV_OBJ_FLAG_HIDDEN);
+  } else if (ticker_shown) {
+    lv_obj_clear_flag(ticker_row, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    update_sun_row();
+  }
+}
+
+MusicBarHit ui_music_bar_hit(int x, int y) {
+  if (!music_bar_shown) return MusicBarHit::None;
+  lv_area_t a;
+  lv_obj_get_coords(music_bar, &a);
+  if (y < a.y1 - 8 || y > a.y2 + 8 || x < a.x1 || x > a.x2) return MusicBarHit::None;
+  if (x >= a.x2 - 30) return MusicBarHit::Next;
+  if (x >= a.x2 - 70) return MusicBarHit::PlayPause;
+  return MusicBarHit::Open;
+}
+
 static void build_alert() {
   scr_alert = make_screen();
 
@@ -1612,9 +2135,17 @@ static void set_toggle(lv_obj_t *t, bool on, bool enabled = true) {
 static void build_quick() {
   scr_quick = make_screen();
 
-  lv_obj_t *title = make_label(scr_quick, &font_cn_16, COLOR_SUBTLE);
-  lv_label_set_text(title, "快捷设置");
-  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 12, 10);
+  quick_title = make_label(scr_quick, &font_cn_16, COLOR_SUBTLE);
+  lv_label_set_text(quick_title, "快捷设置");
+  lv_obj_align(quick_title, LV_ALIGN_TOP_LEFT, 12, 10);
+  static const char *const kMusicSyms[3] = {LV_SYMBOL_PREV, LV_SYMBOL_PLAY, LV_SYMBOL_NEXT};
+  for (int i = 0; i < 3; i++) {
+    quick_music[i] = make_button(scr_quick, kMusicSyms[i]);
+    lv_obj_align(quick_music[i], LV_ALIGN_TOP_LEFT, 8 + i * 48, 4);
+    lv_obj_add_flag(quick_music[i], LV_OBJ_FLAG_HIDDEN);
+  }
+  lv_obj_set_style_bg_color(quick_music[1], lv_color_hex(kMovieOrange), 0);
+  lv_obj_set_style_text_color(lv_obj_get_child(quick_music[1], 0), lv_color_hex(0x1A1A1A), 0);
 
   quick_close = make_button(scr_quick, LV_SYMBOL_CLOSE);
   lv_obj_align(quick_close, LV_ALIGN_TOP_RIGHT, -8, 4);
@@ -1792,6 +2323,9 @@ void ui_show_quick(const QuickState &q) {
     show_qpages(q);
     return;
   }
+  set_hidden(quick_title, q.music);
+  for (lv_obj_t *b : quick_music) set_hidden(b, !q.music);
+  lv_label_set_text(lv_obj_get_child(quick_music[1], 0), q.music_playing ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
   lv_label_set_text_fmt(lbl_quick_bright, "%d%%", (q.brightness * 100 + 127) / 255);
   lv_label_set_text_fmt(lbl_quick_volume, "%d", q.volume);
   set_toggle(quick_sound, q.sound_on);
@@ -1837,6 +2371,15 @@ QuickHit ui_quick_hit(int x, int y, Page *page) {
   }
   lv_obj_update_layout(scr_quick);
   if (hit(quick_close, x, y)) return QuickHit::Close;
+  if (!lv_obj_has_flag(quick_music[0], LV_OBJ_FLAG_HIDDEN)) {
+    // 三个按钮挨着，只往上下放宽
+    static const QuickHit kMusic[3] = {QuickHit::MusicPrev, QuickHit::MusicPlay, QuickHit::MusicNext};
+    for (int i = 0; i < 3; i++) {
+      lv_area_t a;
+      lv_obj_get_coords(quick_music[i], &a);
+      if (x >= a.x1 - 2 && x <= a.x2 + 2 && y <= a.y2 + 4) return kMusic[i];
+    }
+  }
   // 「显示页面」按钮和下面的亮度按钮挨得近，不放宽
   lv_area_t pa;
   lv_obj_get_coords(quick_pages, &pa);
@@ -2345,6 +2888,8 @@ void ui_init() {
   build_chat();
   build_album();
   build_movie();
+  build_music();
+  build_music_bar();
   // 每个页面左右边缘加淡淡的 < >，提示点两边或左右滑动翻页
   for (int p = 0; p < PAGE_COUNT; p++) {
     for (int side = 0; side < 2; side++) {
@@ -2428,7 +2973,7 @@ static void update_sun_row() {
     snprintf(text + n, sizeof(text) - n, " · 日出 %02d:%02d · 日落 %02d:%02d", sun_rise / 60, sun_rise % 60,
              sun_set / 60, sun_set % 60);
   lv_label_set_text(lbl_sun, text);
-  if (!ticker_shown) lv_obj_clear_flag(sun_row, LV_OBJ_FLAG_HIDDEN);
+  if (!ticker_shown && !music_bar_shown) lv_obj_clear_flag(sun_row, LV_OBJ_FLAG_HIDDEN);
 }
 
 void ui_set_sun(int sunrise, int sunset) {
@@ -2478,6 +3023,7 @@ void ui_set_room(float temp, float humidity, bool hot, bool humid) {
   lv_obj_clear_flag(lbl_room, LV_OBJ_FLAG_HIDDEN);
   lv_obj_align(sun_row, LV_ALIGN_TOP_MID, 0, kSunY);
   lv_obj_align(ticker_row, LV_ALIGN_TOP_MID, 0, kSunY - 2);
+  lv_obj_align(music_bar, LV_ALIGN_TOP_MID, 0, kSunY - 1);
 }
 
 // 天气预报页
@@ -2753,6 +3299,10 @@ void ui_show_alert(AlertIcon icon, const char *title, const char *body, const ch
     case AlertIcon::Rain:
       lv_label_set_text(alert_icon, LV_SYMBOL_TINT);
       lv_obj_set_style_bg_color(alert_badge, lv_color_hex(0x0E7490), 0);
+      break;
+    case AlertIcon::Pair:
+      lv_label_set_text(alert_icon, LV_SYMBOL_SETTINGS);
+      lv_obj_set_style_bg_color(alert_badge, COLOR_ACCENT, 0);
       break;
   }
   lv_obj_center(alert_icon);
