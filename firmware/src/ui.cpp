@@ -666,6 +666,31 @@ void ui_news_next() {
   render_news();
 }
 
+void ui_news_prev() {
+  const NewsChannel *ch = news && news->nch ? &news->ch[news_ch % news->nch] : nullptr;
+  if (!ch) return;
+  int per = news_per_page();
+  if (news_pos >= per) {
+    news_pos -= per;
+  } else {
+    // 已经是这个频道的第一批：回到上一个有新闻的频道的最后一批
+    for (int k = 1; k <= news->nch; k++) {
+      int c = (news_ch - k + news->nch) % news->nch;
+      if (news->ch[c].count > 0) {
+        news_ch = c;
+        news_pos = (news->ch[c].count - 1) / per * per;
+        break;
+      }
+    }
+  }
+  render_news();
+}
+
+bool ui_news_header_hit(int x, int y) {
+  // 顶栏的「资讯 · 科技」，往下和往右都多留一点，好点中
+  return y < 36 && x < lv_obj_get_x(lbl_news_title) + lv_obj_get_width(lbl_news_title) + 24;
+}
+
 void ui_news_channel(int dir) {
   int n = news_channel_count();
   if (n == 0) return;

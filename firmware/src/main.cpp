@@ -1036,7 +1036,7 @@ static void check_button() {
 
 // 点一下屏幕切换页面（松手时触发）：点左半边回到上一页，点右半边到下一页；也可以左右滑动翻页
 // （手指往左滑到下一页，往右滑回上一页，和手机一样）；按住 2 秒打开快捷设置。
-// 番茄钟页的圆环例外：松手时开始/暂停，按住 1.5 秒重置。小猫页点小橘打开小游戏
+// 番茄钟页的圆环例外：松手时开始/暂停，按住 1.5 秒重置。小猫页点小橘打开小游戏，资讯页点顶栏的频道名换频道
 static void check_touch() {
   static bool was_touched = false;
   static bool on_ring = false;
@@ -1096,14 +1096,15 @@ static void check_touch() {
       open_quick(now);
     }
   } else if (!touched && was_touched && !long_done && moved) {
-    // 滑动：横着滑够远才翻页；资讯页上竖着滑换频道（往上滑下一个），别的页面竖着滑什么也不做
+    // 滑动：横着滑够远才翻页；资讯页上竖着滑翻新闻（往上滑下一批），别的页面竖着滑什么也不做
     int dx = last_x - down_x;
     int dy = last_y - down_y;
     if (!quick_on && abs(dx) >= kSwipePx && abs(dx) > abs(dy)) {
       on_tap(now, dx > 0);
     } else if (!quick_on && abs(dy) >= kSwipePx && screen.page() == PAGE_NEWS && screen.started() && !screen.dimmed() &&
                !ota_screen && !alert_on && !game_on) {
-      ui_news_channel(dy < 0 ? 1 : -1);
+      if (dy < 0) ui_news_next();
+      else ui_news_prev();
       news_flip_at = now + kNewsFlipMs;
       screen.stay(now);
     }
@@ -1115,6 +1116,11 @@ static void check_touch() {
     } else if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && screen.page() == PAGE_PET &&
                ui_pet_hit(down_x, down_y)) {
       open_game(now);
+    } else if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && screen.page() == PAGE_NEWS &&
+               ui_news_header_hit(down_x, down_y)) {
+      ui_news_channel(1);  // 点顶栏的频道名换下一个频道
+      news_flip_at = now + kNewsFlipMs;
+      screen.stay(now);
     } else {
       on_tap(now, down_x < SCREEN_W / 2);
     }
