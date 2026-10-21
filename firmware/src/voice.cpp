@@ -301,6 +301,8 @@ struct Session {
   bool ready = false;
   bool closed = false;
   std::string close_reason;   // 服务器断开时说的原因
+  int close_code = 0;         // 服务器断开时给的关闭码
+  std::string last_error;     // 服务器最近一次报的错，断开时没给原因就显示它
   bool playing = false;       // 喇叭被这次聊天占着
   bool finishing = false;     // 回答已经收完，等喇叭放完
   bool drop_next = false;     // 还没开始的那次回答不要了（在想的时候被点了打断）
@@ -415,6 +417,7 @@ static void on_event(Session &s, RtEvent ev) {
       break;
     case RtEvent::Error:
       log_w("voice: server error %s %s", s.parser.error_code().c_str(), s.parser.error().c_str());
+      s.last_error = s.parser.error();
       if (!s.ready) {
         s.fatal = s.parser.error_code() == "Arrearage" ? "百炼账户欠费了" : s.parser.error();
       } else if (s.drop_id.empty() && !s.drop_next) {
@@ -435,11 +438,12 @@ static void on_message(uint8_t opcode, std::string &payload, void *ctx) {
     ws_send(s.client, kWsPong, parts, sizes, 1);
   } else if (opcode == kWsClose) {
     s.closed = true;
-    if (payload.size() > 2) {
-      s.close_reason.assign(payload, 2, 120);
-      log_w("voice: server closed: %s", s.close_reason.c_str());
-    }
+    if (payload.size() >= 2) s.close_code = (uint8_t)payload[0] << 8 | (uint8_t)payload[1];
+    if (payload.size() > 2) s.close_reason.assign(payload, 2, 120);
+    log_w("voice: server closed %d: %s", s.close_code, s.close_reason.c_str());
   } else if (opcode == kWsText) {
+    // 除了语音和逐字的文字，服务器发来的事件都记到日志里，出问题时好查
+    if (payload.find(".delta\"") == std::string::npos) log_i("voice: <- %.200s", payload.c_str());
     on_event(s, s.parser.feed(payload));
   }
 }
@@ -604,9 +608,20 @@ static std::string converse(bool &idle, bool &retry) {
     }
     if (s.closed || (!s.client.connected() && s.client.available() <= 0)) {
       retry = model_rejected(s, s.close_reason);
-      // 还没开始就被断开时，把服务器说的原因显示出来，方便查
-      why = !s.ready && !s.close_reason.empty() ? "百炼：" + s.close_reason : "和百炼的连接断了";
-      net_report(NetService::Voice, -5, why.c_str());
+      // 把服务器说的原因显示出来，方便查：断开原因、断开前最后一次报错、关闭码；服务器没打招呼就是网络断了
+      if (!s.close_reason.empty()) {
+        why = "百炼：" + s.close_reason;
+      } else if (s.closed && !s.last_error.empty()) {
+        why = "百炼：" + s.last_error;
+      } else if (s.closed) {
+        why = "百炼断开了连接（" + std::to_string(s.close_code) + "）";
+      } else {
+        why = "和百炼的连接断了";
+      }
+      log_w("voice: disconnected %u ms after connecting, state %d: %s", (unsigned)(now - start), (int)get_state(),
+            why.c_str());
+      // 服务器没打招呼就断了时，附上 TLS 层的错误
+      net_report(NetService::Voice, -5, s.client, s.closed ? why.c_str() : nullptr);
       break;
     }
     VoiceState st = get_state();
