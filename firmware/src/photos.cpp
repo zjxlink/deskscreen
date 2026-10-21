@@ -15,6 +15,7 @@
 
 #include "album.h"
 #include "avi.h"
+#include "avplay.h"
 #include "bing.h"
 #include "gif.h"
 
@@ -25,8 +26,6 @@ static constexpr size_t kMaxFileBytes = 8 * 1024 * 1024;  // 再大的照片、�
 static constexpr uint64_t kMinFreeBytes = 1024 * 1024;    // 卡快满时不再接收上传和下载
 static constexpr int kMaxTries = 5;  // 一次最多试几张，都读不出来就等下一次
 static constexpr size_t kCaptionMax = 160;
-static constexpr int kVideoMaxBadFrames = 10;     // 视频开头连着这么多帧解不出来就跳过
-static constexpr size_t kVideoMaxFrameBytes = 512 * 1024;  // 一帧 JPG 再大就不是正常的 320x240 视频了
 
 struct PhotoFile {
   String name;
@@ -58,6 +57,7 @@ static volatile bool frame_ready = false;
 static volatile int failed = 0;
 static volatile bool stop_req = false;  // 离开相册页时停止放动图、视频
 static volatile uint32_t gif_min_ms = 10000;
+static volatile bool video_sound = true;  // 视频带声音时放出来
 
 // 没插卡时内存里的当天必应图片
 static uint8_t *mem_data = nullptr;
@@ -348,6 +348,7 @@ static bool play_gif(const uint8_t *data, size_t len) {
   return ok;
 }
 
+// AviReader 的读回调：调用的地方已经拿着锁
 static size_t avi_read(void *ctx, uint32_t off, uint8_t *buf, size_t len) {
   File &f = *(File *)ctx;
   if (!f.seek(off)) return 0;
@@ -360,7 +361,23 @@ static size_t avi_read(void *ctx, uint32_t off, uint8_t *buf, size_t len) {
   return got;
 }
 
-// 边读边放一个 MJPEG 视频，放到结尾或者被停止。打不开或者开头的帧都解不出来时返回 false
+static bool video_show(void *, const uint8_t *jpg, size_t len, uint32_t) {
+  if (!wait_taken()) return true;  // 要停了，下一轮就会退出
+  int back = back_frame();
+  if (!draw_still(frames[back], jpg, len, false)) return false;
+  uint32_t now = millis();
+  publish(back, "", true, now);
+  return true;
+}
+
+static bool video_stop(void *) { return stop_req; }
+
+static void video_lock(void *, bool take) {
+  if (take) xSemaphoreTake(lock, portMAX_DELAY);
+  else xSemaphoreGive(lock);
+}
+
+// 边读边放一个 MJPEG 视频（有声音时一起放），放到结尾或者被停止。打不开或者开头的帧都解不出来时返回 false
 static bool play_video(const String &path) {
   File f;
   AviReader avi;
@@ -368,49 +385,16 @@ static bool play_video(const String &path) {
   if (mounted) f = SD_MMC.open(path);
   bool ok = f && avi.open(avi_read, &f, f.size());
   xSemaphoreGive(lock);
-  if (!ok) {
-    xSemaphoreTake(lock, portMAX_DELAY);
-    if (f) f.close();
-    xSemaphoreGive(lock);
-    log_w("can't open video %s", path.c_str());
-    return false;
+  int shown = 0;
+  if (ok) {
+    AvPlayHooks hooks = {video_show, video_stop, video_lock, nullptr};
+    shown = avplay_run(avi, hooks, video_sound).shown;
   }
-  static uint8_t *buf = nullptr;  // 一帧 JPG，按最大的一帧留着
-  static size_t buf_size = 0;
-  uint32_t interval = avi.frame_us() / 1000, due = millis();
-  int shown = 0, bad = 0;
-  while (wait_taken()) {
-    uint32_t off, len;
-    xSemaphoreTake(lock, portMAX_DELAY);
-    bool more = avi.next(off, len) && len <= kVideoMaxFrameBytes;
-    if (more && len > buf_size) {
-      free(buf);
-      buf_size = len + 16 * 1024;
-      buf = (uint8_t *)psram_alloc(buf_size);
-      if (!buf) buf_size = 0;
-    }
-    more = more && buf && avi_read(&f, off, buf, len) == len;
-    xSemaphoreGive(lock);
-    if (!more) break;
-    if ((int32_t)(millis() - due) > (int32_t)interval && shown > 0) {
-      due += interval;  // 解码跟不上时跳过这一帧
-      continue;
-    }
-    int back = back_frame();
-    if (!draw_still(frames[back], buf, len, false)) {
-      if (shown == 0 && ++bad >= kVideoMaxBadFrames) break;
-      due += interval;
-      continue;
-    }
-    publish(back, "", true, due);
-    due += interval;
-    shown++;
-  }
-  if (shown > 0) wait_until(due);  // 最后一帧也放够它的时间
   xSemaphoreTake(lock, portMAX_DELAY);
-  f.close();
+  if (f) f.close();
   xSemaphoreGive(lock);
-  if (shown == 0) log_w("can't decode video %s", path.c_str());
+  if (!ok) log_w("can't open video %s", path.c_str());
+  else if (shown == 0) log_w("can't decode video %s", path.c_str());
   return shown > 0;
 }
 
@@ -508,6 +492,19 @@ PhotoStatus photos_status() {
 void photos_set_sources(bool local, bool bing) {
   use_local = local;
   use_bing = bing;
+}
+
+void photos_set_video_sound(bool on) {
+  video_sound = on;
+}
+
+bool photos_card_lock() {
+  xSemaphoreTake(lock, portMAX_DELAY);
+  return mount_locked();
+}
+
+void photos_card_unlock() {
+  xSemaphoreGive(lock);
 }
 
 void photos_request_next(bool shuffle, uint32_t gif_ms) {
@@ -775,6 +772,9 @@ void photos_begin() {}
 bool photos_supported() { return false; }
 PhotoStatus photos_status() { return {PhotoCard::NoSlot, 0, 0, 0, 0}; }
 void photos_set_sources(bool, bool) {}
+void photos_set_video_sound(bool) {}
+bool photos_card_lock() { return false; }
+void photos_card_unlock() {}
 void photos_request_next(bool, uint32_t) {}
 bool photos_busy() { return false; }
 void photos_stop() {}

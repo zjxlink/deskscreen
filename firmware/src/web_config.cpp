@@ -35,7 +35,7 @@ static constexpr int kMessageMaxChars = 60;
 // 板子上有没有这一页的硬件，和 main.cpp 的 page_unavailable 一致
 static bool page_available(int p) {
   if (p == PAGE_CHAT) return voice_available();
-  if (p == PAGE_ALBUM) return photos_supported();
+  if (p == PAGE_ALBUM || p == PAGE_MOVIE) return photos_supported();
   return true;
 }
 
@@ -154,6 +154,7 @@ static void handle_api_settings() {
   doc["album_local"] = s.album_local;
   doc["album_bing"] = s.album_bing;
   doc["bing_caption"] = s.bing_caption;
+  doc["album_sound"] = s.album_sound;
   for (int i = 0; i < kNewsSourceCount; i++) {
     doc[String("ns_") + kNewsSources[i].id] = news_has_source(s.news_src.c_str(), kNewsSources[i].id);
   }
@@ -366,6 +367,7 @@ static void handle_save() {
     s.album_local = server.hasArg("album_local");
     s.album_bing = server.hasArg("album_bing");
     s.bing_caption = server.hasArg("bing_caption");
+    s.album_sound = server.hasArg("album_sound");
   }
   int rs = night_parse_hhmm(server.arg("remind_start").c_str());
   int re = night_parse_hhmm(server.arg("remind_end").c_str());

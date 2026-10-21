@@ -283,6 +283,7 @@ const CARDS=[
  {type:'sw',k:'album_local',label:'放自己的照片',sub:'TF 卡的 photos 文件夹，可以用手机上传'},
  {type:'sw',k:'album_bing',label:'放必应每日一图',sub:'每天自动下载一张风景壁纸，单独存在 TF 卡的 bing 文件夹'},
  {type:'sw',k:'bing_caption',label:'必应图片显示标题和地点',sub:'照片底部一行淡淡的小字'},
+ {type:'sw',k:'album_sound',label:'视频放出声音',sub:'手机上传的视频带着声音；关掉就只放画面'},
  {type:'num',k:'album_sec',label:'每张照片显示',unit:'秒'},
  {type:'sw',k:'album_shuffle',label:'随机顺序'},
  {type:'sw',k:'saver_on',label:'空闲时播放相册（屏保）'},
@@ -621,7 +622,7 @@ async function shrink(file){
 }
 // 中文的出错原因，显示在上传结果里
 function err(m){const e=new Error(m);e.cn=m;return e;}
-const VFPS=15, VMAX=300;  // 视频转成每秒 15 帧，最长 5 分钟
+const VFPS=15, VMAX=300, ARATE=16000;  // 视频转成每秒 15 帧，最长 5 分钟；声音 16kHz 单声道
 const isVideo=f=>f.type.startsWith('video/')||/\.(mp4|mov|m4v|webm|mkv|3gp|avi)$/i.test(f.name);
 const isGif=f=>f.type==='image/gif'||/\.gif$/i.test(f.name);
 // GIF 原样上传，板子最大放 640x480、8 MB
@@ -712,30 +713,61 @@ async function videoToAvi(file,onp){
   const s=Math.min(1,320/W,240/H),w=Math.max(2,Math.round(W*s)),h=Math.max(2,Math.round(H*s));
   const [c,x]=canvas(w,h),n=Math.max(1,Math.floor(dur*VFPS));
   const frames='requestVideoFrameCallback' in v?await grabPlaying(v,c,x,w,h,n,onp):await grabSeeking(v,c,x,w,h,n,onp);
-  return {blob:aviBlob(frames,w,h,VFPS),cut:v.duration>VMAX};
+  onp(1,true);
+  const pcm=await videoAudio(file,frames.length/VFPS);
+  return {blob:aviBlob(frames,w,h,VFPS,pcm),cut:v.duration>VMAX,mute:!pcm};
  }finally{v.pause();v.remove();URL.revokeObjectURL(u);if(lock)lock.release().catch(()=>{});}
 }
-// 写 AVI 文件：文件头 + 每帧一个 00dc 块 + idx1 索引，电脑上的播放器也能放
-function aviBlob(frames,w,h,fps){
- const n=frames.length;let max=0,movi=4;
- for(const f of frames){max=Math.max(max,f.size);movi+=8+f.size+(f.size&1);}
- const b=new DataView(new ArrayBuffer(224)),idx=new DataView(new ArrayBuffer(8+n*16));let p=0;
- const s=(v,t)=>{for(const ch of t)v.setUint8(p++,ch.charCodeAt(0));},u32=(v,x)=>{v.setUint32(p,x,true);p+=4;},u16=(v,x)=>{v.setUint16(p,x,true);p+=2;};
- s(b,'RIFF');u32(b,4+200+8+movi+8+n*16);s(b,'AVI ');
- s(b,'LIST');u32(b,192);s(b,'hdrl');
- s(b,'avih');u32(b,56);for(const x of [Math.round(1e6/fps),max*fps,0,0x10,n,0,1,max,w,h,0,0,0,0])u32(b,x);
- s(b,'LIST');u32(b,116);s(b,'strl');
- s(b,'strh');u32(b,56);s(b,'vids');s(b,'MJPG');u32(b,0);u16(b,0);u16(b,0);for(const x of [0,1,fps,0,n,max,0xFFFFFFFF,0])u32(b,x);u16(b,0);u16(b,0);u16(b,w);u16(b,h);
- s(b,'strf');u32(b,40);u32(b,40);u32(b,w);u32(b,h);u16(b,1);u16(b,24);s(b,'MJPG');for(const x of [w*h*3,0,0,0,0])u32(b,x);
- s(b,'LIST');u32(b,movi);s(b,'movi');
- const parts=[b.buffer];p=0;s(idx,'idx1');u32(idx,n*16);let off=4;
- for(const f of frames){
-  const hd=new DataView(new ArrayBuffer(8));hd.setUint32(0,0x63643030,true);hd.setUint32(4,f.size,true);  // "00dc"
-  parts.push(hd.buffer,f);if(f.size&1)parts.push(new Uint8Array(1));
-  s(idx,'00dc');u32(idx,0x10);u32(idx,off);u32(idx,f.size);off+=8+f.size+(f.size&1);
+// 读出视频里的声音，转成 16kHz 单声道（板子的喇叭就是这个格式），最多 dur 秒。
+// 浏览器读不了这个视频的声音、或者视频太大怕手机内存不够时返回 null，只放画面
+async function videoAudio(file,dur){
+ try{
+  const AC=window.OfflineAudioContext||window.webkitOfflineAudioContext;
+  if(!AC||file.size>150*1048576)return null;
+  const n=Math.max(1,Math.ceil(dur*ARATE)),ctx=new AC(1,n,ARATE);
+  const buf=await file.arrayBuffer();
+  const ab=await new Promise((ok,no)=>{const p=ctx.decodeAudioData(buf,ok,no);if(p&&p.catch)p.catch(no);});  // 解出来就是 16kHz
+  const chs=[];for(let i=0;i<ab.numberOfChannels;i++)chs.push(ab.getChannelData(i));
+  const m=Math.min(n,ab.length),out=new Int16Array(m);
+  for(let i=0;i<m;i++){let v=0;for(const c of chs)v+=c[i];v=v/chs.length*32767;out[i]=v>32767?32767:v<-32768?-32768:v;}
+  return out;
+ }catch(e){return null;}
+}
+// 写 AVI 文件：文件头 + 每帧一个 00dc 块（有声音时后面跟一个 01wb 块，是这一帧那段时间的声音）+ idx1 索引，
+// 电脑上的播放器也能放
+function aviBlob(frames,w,h,fps,pcm){
+ const n=frames.length;
+ const enc=(id,len)=>{const d=new DataView(new ArrayBuffer(8));for(let i=0;i<4;i++)d.setUint8(i,id.charCodeAt(i));d.setUint32(4,len,true);return d.buffer;};
+ const le=a=>{const d=new DataView(new ArrayBuffer(a.length*4));a.forEach((x,i)=>d.setUint32(i*4,x>>>0,true));return new Uint8Array(d.buffer);};
+ const fcc=t=>new Uint8Array([...t].map(ch=>ch.charCodeAt(0)));
+ const cat=(...p)=>{const out=new Uint8Array(p.reduce((s,x)=>s+x.length,0));let o=0;for(const x of p){out.set(x,o);o+=x.length;}return out;};
+ const chunk=(id,body)=>cat(new Uint8Array(enc(id,body.length)),body,body.length&1?new Uint8Array(1):new Uint8Array(0));
+ const list=(type,...p)=>chunk('LIST',cat(fcc(type),...p));
+ // 第 i 帧那段时间的声音：[at(i), at(i+1)) 个采样
+ const at=i=>pcm?Math.min(pcm.length,Math.round(i*ARATE/fps)):0;
+ let max=0;for(const f of frames)max=Math.max(max,f.size);
+ const amax=pcm?Math.ceil(ARATE/fps)*2+2:0;
+ const strh=(type,handler,scale,rate,len,buf,sample)=>chunk('strh',cat(fcc(type),handler?fcc(handler):le([0]),le([0,0,0,scale,rate,0,len,buf,0xFFFFFFFF,sample,0,0])));
+ const v16=x=>new Uint8Array([x&255,x>>8&255]);
+ let hdrl=[chunk('avih',le([Math.round(1e6/fps),max*fps+(pcm?ARATE*2:0),0,0x10,n,0,pcm?2:1,max,w,h,0,0,0,0])),
+  list('strl',strh('vids','MJPG',1,fps,n,max,0),
+   chunk('strf',cat(le([40,w,h]),v16(1),v16(24),fcc('MJPG'),le([w*h*3,0,0,0,0]))))];
+ if(pcm)hdrl.push(list('strl',strh('auds','',2,ARATE*2,pcm.length,amax,2),
+   chunk('strf',cat(v16(1),v16(1),le([ARATE,ARATE*2]),v16(2),v16(16),v16(0)))));
+ const head=list('hdrl',...hdrl);
+ // movi 和 idx1：帧数据是 Blob，不复制，只写块头
+ const parts=[],idx=[];let off=4,movi=4;
+ const add=(id,blob,size)=>{
+  parts.push(enc(id,size),blob);if(size&1)parts.push(new Uint8Array(1));
+  idx.push(cat(fcc(id),le([id==='00dc'?0x10:0,off,size])));off+=8+size+(size&1);movi+=8+size+(size&1);
+ };
+ for(let i=0;i<n;i++){
+  add('00dc',frames[i],frames[i].size);
+  if(pcm){const a=pcm.subarray(at(i),at(i+1));add('01wb',new Uint8Array(a.buffer,a.byteOffset,a.byteLength),a.byteLength);}
  }
- parts.push(idx.buffer);
- return new Blob(parts,{type:'video/x-msvideo'});
+ const idx1=chunk('idx1',cat(...idx));
+ const riffLen=4+head.length+8+movi+idx1.length;
+ return new Blob([enc('RIFF',riffLen),fcc('AVI '),head,enc('LIST',movi),fcc('movi'),...parts,idx1],{type:'video/x-msvideo'});
 }
 // 上传一个文件，onp 收到上传进度（0～1）
 function upload(blob,name,onp){
@@ -756,7 +788,7 @@ $('files').addEventListener('cancel',()=>mark());
 $('files').onchange=async()=>{
  const files=[...$('files').files];if(!files.length){mark();return;}
  const show=(t,p)=>{$('upMsg').textContent=t;$('upBar').hidden=p===undefined;if(p!==undefined)$('upBar').firstChild.style.width=Math.round(p*100)+'%';};
- let ok=0;const bad=[],cut=[];
+ let ok=0;const bad=[],cut=[],mute=[];
  for(let i=0;i<files.length;i++){
   const f=files[i],tag=files.length>1?'（'+(i+1)+' / '+files.length+'）':'',stem=f.name.replace(/\.[^.]*$/,'');
   try{
@@ -764,8 +796,8 @@ $('files').onchange=async()=>{
    if(isVideo(f)){
     mark('video',f.name);
     show('正在读取视频'+tag+'…',0);
-    const r=await videoToAvi(f,p=>show('正在转换视频'+tag+' '+Math.round(p*100)+'%，请不要锁屏或离开这个页面…',p));
-    blob=r.blob;name=stem+'.avi';if(r.cut)cut.push(f.name);
+    const r=await videoToAvi(f,(p,snd)=>show(snd?'正在读取视频的声音'+tag+'…':'正在转换视频'+tag+' '+Math.round(p*100)+'%，请不要锁屏或离开这个页面…',p));
+    blob=r.blob;name=stem+'.avi';if(r.cut)cut.push(f.name);if(r.mute)mute.push(f.name);
    }else if(isGif(f)){await checkGif(f);blob=f;name=stem+'.gif';}
    else{show('正在上传'+tag+'…');blob=await shrink(f);name=stem+'.jpg';}
    const j=await upload(blob,name,p=>{if(blob.size>262144)show('正在上传'+tag+' '+Math.round(p*100)+'%…',p);});
@@ -773,7 +805,7 @@ $('files').onchange=async()=>{
   }catch(e){bad.push(f.name+'（'+(e.cn||'浏览器打不开这个文件')+'）');}
  }
  mark();
- show('上传了 '+ok+' 个'+(cut.length?'，'+cut.join('、')+' 超过 5 分钟，只保留了前 5 分钟':'')+(bad.length?'，失败：'+bad.join('，'):''));
+ show('上传了 '+ok+' 个'+(cut.length?'，'+cut.join('、')+' 超过 5 分钟，只保留了前 5 分钟':'')+(mute.length?'，'+mute.join('、')+' 没读出声音，只有画面':'')+(bad.length?'，失败：'+bad.join('，'):''));
  $('files').value='';loadAlbum();
 };
 

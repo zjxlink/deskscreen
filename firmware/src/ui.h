@@ -132,6 +132,36 @@ void ui_set_album_caption(const char *text);
 // 相册页左右边缘的 < > 提示，当屏保时不显示
 void ui_set_album_arrows(bool show);
 
+// 影片页：列表一屏 kMovieRows 部，msg 不为空时只显示提示（没插卡、没有片子）。page、pages 是第几屏、一共几屏
+static constexpr int kMovieRows = 4;
+struct MovieRow {
+  const char *name;
+  uint32_t dur_ms;
+  uint32_t pos_ms;  // 上次看到哪里，0 表示没看过
+};
+void ui_set_movie_list(const char *msg, const MovieRow *rows, int n, int page, int pages);
+// 列表这一屏的第几行（0～kMovieRows-1），没点到时返回 -1
+int ui_movie_list_hit(int x, int y);
+// 切换列表和全屏播放
+void ui_movie_show_player(bool on);
+// 播放画面：px 为 320x240 的 RGB565（movie_take_frame 给的）
+void ui_set_movie_frame(const uint16_t *px);
+struct MovieView {
+  const char *title;
+  bool overlay;      // 显示控制条（点一下屏幕出来，几秒后自动藏起来）；暂停、放完时一直显示
+  bool paused;
+  bool loading;
+  bool ended;
+  bool sound;        // 片子有声音
+  int volume;        // 0～100
+  uint32_t pos_ms;
+  uint32_t dur_ms;
+  const char *error;
+};
+void ui_set_movie_player(const MovieView &v);
+// 控制条上点到了什么（控制条藏着时总是 None）。点到进度条时 frac 是点的位置（0～1）
+enum class MovieHit { None, Back, Volume, Rewind, PlayPause, Forward, Progress };
+MovieHit ui_movie_hit(int x, int y, float *frac);
 // 触摸点是否落在番茄钟的圆环上（圆环居中，屏幕上下或左右翻转时判断结果也不变）
 bool ui_pomodoro_hit(int x, int y);
 void ui_set_wifi(bool connected);

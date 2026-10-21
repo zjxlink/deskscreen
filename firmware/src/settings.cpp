@@ -63,6 +63,7 @@ void settings_begin() {
   current.saver_min = prefs.getUChar("saver_min", 5);
   current.album_local = prefs.getBool("alb_local", true);
   current.album_bing = prefs.getBool("alb_bing", true);
+  current.album_sound = prefs.getBool("alb_sound", true);
   current.bing_caption = prefs.getBool("bing_cap", true);
   current.news_src = prefs.getString("news_src", "");
   current.news_rss = prefs.getString("news_rss", "");
@@ -134,6 +135,7 @@ void settings_save(const Settings &s) {
   prefs.putUChar("saver_min", s.saver_min);
   prefs.putBool("alb_local", s.album_local);
   prefs.putBool("alb_bing", s.album_bing);
+  prefs.putBool("alb_sound", s.album_sound);
   prefs.putBool("bing_cap", s.bing_caption);
   prefs.putString("news_src", s.news_src);
   prefs.putString("news_rss", s.news_rss);
