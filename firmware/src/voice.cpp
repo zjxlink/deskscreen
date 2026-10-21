@@ -644,6 +644,9 @@ static std::string converse(bool &idle, bool &retry) {
     }
 
     size_t got = pump(s, reader, 8192);
+    // 收到的事件会把 last_activity、stopped_at 设成现在，比循环开头的 now 晚，不更新的话减出来是负数（无符号就是很大），
+    // 一接通就当成 20 秒没说话挂断
+    now = millis();
 
     if (!s.ready && now - start > kReadyMs) {
       why = "百炼服务器没有回应";

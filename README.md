@@ -53,7 +53,7 @@
 ### 设置 AI 语音聊天
 
 1. 打开 [阿里云百炼控制台](https://bailian.console.aliyun.com/)（北京地域），在「API Key」里创建一个 Key。按用量计费，新用户有免费额度
-2. 在设置网页「服务 › AI 语音聊天」里粘贴 Key 并保存。模型默认 `qwen3-omni-flash`，音色默认 `Cherry`（女声），也可以填 `Ethan`（男声）等
+2. 在设置网页「服务 › AI 语音聊天」里粘贴 Key 并保存。模型默认 `qwen3.8-omni-flash-realtime`，音色默认 `Cherry`（女声），也可以填 `Ethan`（男声）等
 
 Key 只保存在设备上，设置网页不会显示它。
 

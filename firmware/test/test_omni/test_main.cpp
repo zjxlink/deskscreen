@@ -181,9 +181,10 @@ static void test_ws_too_big() {
 }
 
 static void test_rt_model() {
-  TEST_ASSERT_EQUAL_STRING("qwen3-omni-flash-realtime", rt_model("qwen3-omni-flash").c_str());
+  TEST_ASSERT_EQUAL_STRING("qwen3.8-omni-flash-realtime", rt_model("qwen3-omni-flash").c_str());
   TEST_ASSERT_EQUAL_STRING("qwen-omni-turbo-realtime", rt_model("qwen-omni-turbo-realtime").c_str());
-  TEST_ASSERT_EQUAL_STRING("qwen3-omni-flash-realtime", rt_model("").c_str());
+  TEST_ASSERT_EQUAL_STRING("qwen3.5-omni-flash-realtime", rt_model("qwen3.5-omni-flash").c_str());
+  TEST_ASSERT_EQUAL_STRING("qwen3.8-omni-flash-realtime", rt_model("").c_str());
 }
 
 static void test_rt_session_update() {

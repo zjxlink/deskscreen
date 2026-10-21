@@ -7,7 +7,9 @@ const char kRtAppendHead[] = "{\"type\":\"input_audio_buffer.append\",\"audio\":
 const char kRtAppendTail[] = "\"}";
 
 std::string rt_model(const char *model) {
-  std::string m = model && model[0] ? model : "qwen3-omni-flash";
+  std::string m = model && model[0] ? model : kRtDefaultModel;
+  // 以前的默认值，百炼上已经没有它的实时版（Model not exist），换成现在的
+  if (m == "qwen3-omni-flash") m = kRtDefaultModel;
   if (m.find("realtime") == std::string::npos) m += "-realtime";
   return m;
 }

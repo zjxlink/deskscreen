@@ -47,7 +47,7 @@ struct Settings {
   uint8_t away_min;          // 多少分钟没人算离开，默认 5
   // AI 语音聊天（阿里云百炼）
   String ai_key;             // 百炼 API Key，空表示不用
-  String ai_model;           // 默认 qwen3-omni-flash
+  String ai_model;           // 默认 qwen3.8-omni-flash-realtime
   String ai_voice;           // 音色，默认 Cherry
   bool wake_on;              // 喊「喵喵同学」开始聊天
   bool barge_on;             // 小橘说话时主人开口就打断（回声消除）
