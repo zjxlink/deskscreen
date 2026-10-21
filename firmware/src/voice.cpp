@@ -13,6 +13,7 @@ void voice_set_options(bool, bool) {}
 void voice_tap() {}
 void voice_cancel() {}
 void voice_pause(bool) {}
+void voice_set_desk_info(const char *) {}
 bool voice_take_wake() { return false; }
 VoiceStatus voice_status() {
   VoiceStatus s = {};
@@ -65,7 +66,8 @@ static volatile bool woke = false;       // 刚被唤醒词叫醒，主循环要
 static volatile bool wake_on = true;
 static volatile bool barge_on = true;
 static volatile bool paused = false;    // 正在升级固件：不听唤醒词、不聊天，CPU 留给写 Flash
-static volatile uint32_t session_from = 0;  // 这次聊天从缓冲里第几个采样开始上传
+static volatile uint32_t session_from = 0;
+static std::string desk_info;  // 桌面信息，开聊时放进给小橘的说明里（lock 保护）  // 这次聊天从缓冲里第几个采样开始上传
 
 // 要上传的声音（PSRAM）：采集任务（或回声消除后的输出）写，聊天任务读。计数只增不减，相减就是缓冲里的采样数
 static int16_t *ring;
@@ -258,7 +260,8 @@ static String system_prompt() {
   String p =
       "你是小橘，一只住在桌面信息屏里的像素橘猫，性格活泼、有点调皮，说话亲切。"
       "你在和主人连续语音聊天，像打电话一样一来一回：用口语回答，简短自然，一般不超过 60 个字，"
-      "不要用列表、表情符号、括号或星号描述动作，只说要念出来的话。主人用什么语言就用什么语言回答。";
+      "不要用列表、表情符号、括号或星号描述动作，只说要念出来的话。主人用什么语言就用什么语言回答。"
+      "主人说拜拜、再见时，简短道个别就好。";
   struct tm t;
   if (getLocalTime(&t, 0) && t.tm_year >= 2024 - 1900) {
     static const char *const days[] = {"日", "一", "二", "三", "四", "五", "六"};
@@ -268,6 +271,13 @@ static String system_prompt() {
     p += buf;
   }
   if (s.city.length()) p += "主人在" + s.city + "。";
+  xSemaphoreTake(lock, portMAX_DELAY);
+  std::string desk = desk_info;
+  xSemaphoreGive(lock);
+  if (!desk.empty()) {
+    p += "下面是桌面信息屏上现在显示的内容，主人问到天气、番茄钟、股票这些时直接用，没问就不要主动念：\n";
+    p += desk.c_str();
+  }
   if (s.news_voice) {
     std::string brief = news_voice_brief();
     if (!brief.empty()) {
@@ -339,6 +349,7 @@ struct Session {
   uint32_t last_activity = 0; // 最近一次有人说话或小橘说完的时间，用来判断要不要挂断
   uint32_t stopped_at = 0;    // 主人一句话说完的时间，用来算回应用了多久
   uint32_t speak_at = 0;      // 小橘这次开口（收到第一段语音）的时间
+  bool bye = false;           // 主人道别了，小橘回完这句就挂断
   std::string fatal;          // 非空表示要结束这次聊天
 
   explicit Session(RtParser::AudioFn fn) : parser(fn, this) {}
@@ -421,6 +432,10 @@ static void on_event(Session &s, RtEvent ev) {
       break;
     case RtEvent::Heard:
       set_text(status.heard, sizeof(status.heard), s.parser.heard());
+      if (rt_is_goodbye(s.parser.heard())) {
+        log_i("voice: goodbye heard");
+        s.bye = true;
+      }
       break;
     case RtEvent::Response:
       s.resampler = Resampler(kRtOutRate, kRate);
@@ -718,6 +733,7 @@ static std::string converse(bool &idle, bool &retry) {
       break;
     }
     st = get_state();
+    if (s.bye && st == VoiceState::Listening) break;  // 小橘道完别了，当成主人自己挂断
     if (st == VoiceState::Listening) {
       uint32_t quiet = now - s.last_activity;
       xSemaphoreTake(lock, portMAX_DELAY);
@@ -858,6 +874,13 @@ void voice_cancel() {
 void voice_pause(bool on) {
   paused = on;
   if (on) voice_cancel();
+}
+
+void voice_set_desk_info(const char *text) {
+  if (!lock) return;
+  xSemaphoreTake(lock, portMAX_DELAY);
+  desk_info = text;
+  xSemaphoreGive(lock);
 }
 
 bool voice_take_wake() {

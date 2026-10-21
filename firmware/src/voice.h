@@ -44,6 +44,8 @@ void voice_set_options(bool wake, bool barge);
 // 升级固件期间暂停：挂断正在进行的聊天，也不再听唤醒词。回声消除和唤醒词很吃 CPU，
 // 写 Flash 时会把网页上传拖垮
 void voice_pause(bool on);
+// 桌面信息（天气、番茄钟、股票……，见 desk_brief），下次开聊时告诉小橘。主循环有新数据时调用
+void voice_set_desk_info(const char *text);
 // 刚被唤醒词叫醒时返回一次 true，主循环据此点亮屏幕、切到聊天页
 bool voice_take_wake();
 

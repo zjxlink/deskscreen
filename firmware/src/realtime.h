@@ -27,6 +27,9 @@ std::string rt_session_update(const char *voice, const char *instructions, int s
 // 只有类型的事件，比如 response.cancel
 std::string rt_event(const char *type);
 
+// 主人这句话是不是在道别（「拜拜」「再见」「先这样吧」……）。只认短句，免得「再见是什么意思」也挂断
+bool rt_is_goodbye(const std::string &heard);
+
 // input_audio_buffer.append：JSON 被 base64 音频分成前后两段，边编码边发
 extern const char kRtAppendHead[];
 extern const char kRtAppendTail[];
