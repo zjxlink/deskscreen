@@ -258,7 +258,8 @@ const SUBS={album:['相册','display']};
 const CARDS=[
 {t:'display',title:'屏幕',icon:'sun',f:[
  {type:'range',k:'brightness',label:'亮度',min:10,max:255},
- {type:'num',k:'page_sec',label:'自动翻页',sub:'0 表示不自动切换',unit:'秒'}]},
+ {type:'num',k:'page_sec',label:'自动翻页',sub:'0 表示不自动切换',unit:'秒'},
+ {type:'seg',k:'theme',label:'屏幕主题',sub:'自动：日出到日落用浅色，日落后换深色',opts:[['2','自动'],['1','浅色'],['0','深色']]}]},
 {t:'display',title:'夜间模式',icon:'moon',sw:'night_on',f:[
  {type:'sw',k:'night_sun',label:'日落时开始',sub:'按天气预报里当地的日落时间，每天自动跟着变'},
  {type:'time',k:'night_start',label:'开始',sub:'关掉「日落时开始」或者还没拿到天气预报时用'},
@@ -339,6 +340,7 @@ function field(f){
  case 'secret':return `<div class="fld"><label class="lab" for="f_${f.k}">${f.label}（留空表示不修改）</label><div class="inl"><input class="txt" type="password" id="f_${f.k}" name="${f.k}" data-ph="${f.ph}"><button type="button" class="btn g" data-clear="${f.clear}">清除</button></div><input type="checkbox" name="${f.clear}" hidden></div>`;
  case 'chips':return `<div class="fld"><div class="chips" data-chips="${f.k}" data-max="${f.max}"><input class="chipin" placeholder="+ 添加" aria-label="添加股票代码" enterkeyhint="done"></div><input type="hidden" name="${f.k}"></div>`;
  case 'days':return `<div class="days" role="group" aria-label="重复">${[1,2,3,4,5,6,0].map(d=>`<label class="day"><input type="checkbox" name="ad${d}" aria-label="周${'日一二三四五六'[d]}">${'日一二三四五六'[d]}</label>`).join('')}</div>`;
+ case 'seg':return `<div class="row">${lab(f)}</div><div class="seg" role="radiogroup" aria-label="${f.label}">${f.opts.map(([v,t])=>`<label><input type="radio" name="${f.k}" value="${v}">${t}</label>`).join('')}</div>`;
  case 'html':return f.html;
  }
 }
@@ -377,7 +379,7 @@ async function post(url,body){
 
 // ---- 设置：读取、改动计数、保存 ----
 let S={}, base={};
-function snap(){const m={};for(const el of F.elements)if(el.name&&el.name[0]!=='_')m[el.name]=el.type==='checkbox'?el.checked:el.value;return m;}
+function snap(){const m={};for(const el of F.elements)if(el.name&&el.name[0]!=='_'&&(el.type!=='radio'||el.checked))m[el.name]=el.type==='checkbox'?el.checked:el.value;return m;}
 function dirty(){
  const now=snap();let n=0;for(const k in now)if(now[k]!==base[k])n++;
  $('save').hidden=!n;$('dirty').textContent='改了 '+n+' 项，还没保存';
@@ -389,6 +391,7 @@ function fill(s){
   if(!el.name||el.name[0]==='_')continue;
   const v=s[el.name];
   if(el.type==='checkbox')el.checked=/^ad\d$/.test(el.name)?!!(s.alarm_days>>el.name[2]&1):!!v;
+  else if(el.type==='radio')el.checked=String(v)===el.value;
   else if(el.type==='password'){el.value='';const has=s[el.name==='gh_token'?'has_token':'has_ai'];el.placeholder=has?'已保存，留空则不修改':el.dataset.ph;el.nextElementSibling.hidden=!has;el.nextElementSibling.textContent='清除';}
   else if(v!==undefined)el.value=v;
   if(el.type==='range')rangeOut(el);

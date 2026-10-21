@@ -140,6 +140,8 @@ static Page saver_return = PAGE_CLOCK;
 
 // 夜间模式跟着日落开始：今天的日落时间（当天第几分钟），还没拿到天气预报时为 -1
 static int sunset_min = -1;
+static int sunrise_min = -1;  // 屏幕主题「自动」用
+static uint8_t screen_theme;
 static ScreenConfig screen_cfg;
 
 static int night_start_of(const Settings &s) {
@@ -149,6 +151,7 @@ static int night_start_of(const Settings &s) {
 static void apply_settings() {
   Settings s = settings_get();
   ui_set_city(s.city.c_str());
+  screen_theme = s.screen_theme;
 
   ScreenConfig &c = screen_cfg;
   c = ScreenConfig();
@@ -363,6 +366,7 @@ static void on_weather(const WeatherData &w) {
   Settings s = settings_get();
   // 日落时间每天变一点，夜间模式的开始时间跟着改
   int sunset = !w.error && w.ndays > 0 ? w.days[0].sunset : -1;
+  if (!w.error && w.ndays > 0) sunrise_min = w.days[0].sunrise;
   if (sunset >= 0 && sunset != sunset_min) {
     sunset_min = sunset;
     screen_cfg.night_start = night_start_of(s);
@@ -588,6 +592,16 @@ static void update_pet() {
 }
 
 // 把 ScreenCtrl 的状态同步到屏幕：亮度和当前页面
+// 屏幕主题：设置改了立刻换，「自动」时到了日出、日落换
+static void update_theme() {
+  static uint32_t last = 0;
+  static uint8_t last_mode = 0xFF;
+  if (screen_theme == last_mode && millis() - last < 1000) return;
+  last = millis();
+  last_mode = screen_theme;
+  ui_set_theme(theme_is_light(screen_theme, local_minutes(), sunrise_min, sunset_min));
+}
+
 static void update_screen() {
   static int last_brightness = -1;
   screen.tick(millis(), local_minutes());
@@ -1139,6 +1153,7 @@ void loop() {
     ui_set_wifi(wifi);
   }
 
+  update_theme();
   ui_tick_clock();
   delay(5);
 }

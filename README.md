@@ -224,6 +224,7 @@ python3 tools/gen_fonts.py node_modules/@expo-google-fonts/noto-sans-sc/400Regul
 - [x] 必应每日一图
 - [x] 小橘对动作有反应（姿态传感器）
 - [x] 设置网页改版（分区和底部导航）
+- [x] 屏幕浅色主题（可按日出日落自动切换）
 - [ ] 量产板加蜂鸣器
 - [ ] 待办事项
 - [x] OTA 在线升级

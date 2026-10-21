@@ -92,6 +92,7 @@ static void handle_api_settings() {
   put_time("night_start", s.night_start);
   doc["night_sun"] = s.night_sun;
   put_time("night_end", s.night_end);
+  doc["theme"] = s.screen_theme;
   doc["night_bright"] = s.night_brightness;
   doc["stocks"] = s.stocks;
   doc["has_token"] = s.github_token.length() > 0;  // Token 和 Key 不发给网页，只告诉有没有
@@ -273,6 +274,8 @@ static void handle_save() {
   if (end >= 0) s.night_end = end;
   long nb = server.arg("night_bright").toInt();
   if (server.hasArg("night_bright") && nb >= 0 && nb <= 255) s.night_brightness = nb;
+  long theme = server.arg("theme").toInt();
+  if (server.hasArg("theme") && theme >= THEME_DARK && theme <= THEME_AUTO) s.screen_theme = theme;
 
   // 番茄钟时长：1~180 分钟，长休息间隔 1~8 个；留空或不合法就保持原值
   auto minutes_arg = [](const char *name, uint8_t &field, int lo, int hi) {

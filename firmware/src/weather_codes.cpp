@@ -43,3 +43,12 @@ uint32_t weather_color(int code) {
   if (code >= 95) return 0xCE93D8;                 // 雷：紫
   return 0x4FC3F7;                                 // 雨：蓝
 }
+
+uint32_t weather_color_light(int code) {
+  if (code <= 1) return 0xE07B00;
+  if (code <= 3) return 0x5B6B78;
+  if (code == 45 || code == 48) return 0x78858F;
+  if ((code >= 71 && code <= 77) || code == 85 || code == 86) return 0x3A9BC6;
+  if (code >= 95) return 0x8E44AD;
+  return 0x1E88D6;
+}

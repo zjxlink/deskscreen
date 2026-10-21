@@ -49,6 +49,7 @@ bool weather_take_update(WeatherData &out);
 
 const char *weather_text(int code);
 uint32_t weather_color(int code);  // 0xRRGGBB
+uint32_t weather_color_light(int code);  // 浅色主题用，白底上调深一点
 
 // 以下不依赖硬件，可在电脑上测试（weather_parse.cpp）
 

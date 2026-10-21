@@ -20,6 +20,7 @@ void settings_begin() {
   current.night_start = prefs.getUShort("night_start", 23 * 60);
   current.night_sun = prefs.getBool("night_sun", true);
   current.night_end = prefs.getUShort("night_end", 7 * 60);
+  current.screen_theme = prefs.getUChar("theme", 0);
   current.night_brightness = prefs.getUChar("night_bright", 10);
   current.auto_update = prefs.getBool("auto_upd", true);
   current.ota_url = prefs.getString("ota_url", "");
@@ -84,6 +85,7 @@ void settings_save(const Settings &s) {
   prefs.putUShort("night_start", s.night_start);
   prefs.putBool("night_sun", s.night_sun);
   prefs.putUShort("night_end", s.night_end);
+  prefs.putUChar("theme", s.screen_theme);
   prefs.putUChar("night_bright", s.night_brightness);
   prefs.putBool("auto_upd", s.auto_update);
   prefs.putString("ota_url", s.ota_url);
