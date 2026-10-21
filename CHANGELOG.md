@@ -2,7 +2,7 @@
 
 只记录 v0.6.0 之后的版本。每个版本的固件在 [Releases](https://github.com/zjxlink/test-repo/releases) 下载，开了自动升级的设备会在凌晨 3～5 点自己装上。
 
-## 未发布
+## v0.17.1
 
 - 修复：AI 聊天一接通就提示「好久没听到声音，先挂了喵」
 - AI 聊天的默认模型改成 `qwen3.8-omni-flash-realtime`。原来的 qwen3-omni-flash 在百炼上已经没有实时版（报 Model not exist），设置里还是旧默认值的会自动换成新的
