@@ -40,3 +40,13 @@ String net_status_html();
 
 // 开机后还没成功过时，重试间隔从 10 秒开始翻倍，最多到 max_ms，免得刚开机等太久
 uint32_t net_retry_ms(int failures, uint32_t max_ms);
+
+// 天气、GitHub、股票、必应、在线升级共用一个后台联网任务。每个任务的栈要 12~16KB，
+// 合成一个能省出约 50KB 内部 RAM 给 TLS 和语音；HTTPS 本来就一次只连一个，合起来不会变慢。
+// job 跑一轮，返回多久后再跑（毫秒）；返回 kNetJobIdle 表示等 net_job_kick 再跑
+using NetJob = uint32_t (*)();
+static constexpr uint32_t kNetJobIdle = UINT32_MAX;
+// 注册一个 job，first_ms 后第一次跑；返回编号，给 net_job_kick 用
+int net_job_add(const char *name, NetJob job, uint32_t first_ms = 0);
+// 让这个 job 尽快再跑一轮（设置改了、手动刷新）
+void net_job_kick(int id);

@@ -130,3 +130,68 @@ uint32_t net_retry_ms(int failures, uint32_t max_ms) {
   for (int i = 1; i < failures && ms < max_ms; i++) ms *= 2;
   return ms < max_ms ? ms : max_ms;
 }
+
+// ---------- 共用的后台联网任务 ----------
+
+struct NetJobSlot {
+  const char *name;
+  NetJob fn;
+  uint32_t wait;  // 上次返回的等待时间
+  uint32_t due;   // 下次该跑的时间（millis）
+  volatile bool kicked;
+};
+
+static constexpr int kMaxNetJobs = 8;
+static NetJobSlot net_jobs[kMaxNetJobs];
+static volatile int net_job_count = 0;
+static TaskHandle_t net_worker = nullptr;
+
+static void net_worker_task(void *) {
+  UBaseType_t min_stack = UINT32_MAX;
+  for (;;) {
+    uint32_t wait = 60000;
+    for (int i = 0; i < net_job_count; i++) {
+      NetJobSlot &j = net_jobs[i];
+      uint32_t now = millis();
+      if (j.kicked || (j.wait != kNetJobIdle && (int32_t)(now - j.due) >= 0)) {
+        j.kicked = false;
+        j.wait = j.fn();
+        now = millis();
+        j.due = now + j.wait;
+        UBaseType_t free_stack = uxTaskGetStackHighWaterMark(nullptr);  // 字节
+        if (free_stack < min_stack) {
+          min_stack = free_stack;
+          log_i("net worker: %u bytes of stack left after %s", (unsigned)free_stack, j.name);
+        }
+      }
+      if (j.wait != kNetJobIdle) {
+        int32_t left = (int32_t)(j.due - now);
+        if (left < 0) left = 0;
+        if ((uint32_t)left < wait) wait = left;
+      }
+    }
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait));
+  }
+}
+
+int net_job_add(const char *name, NetJob job, uint32_t first_ms) {
+  int id = net_job_count;
+  if (id >= kMaxNetJobs) return -1;
+  NetJobSlot &j = net_jobs[id];
+  j.name = name;
+  j.fn = job;
+  j.wait = first_ms;
+  j.due = millis() + first_ms;
+  j.kicked = false;
+  net_job_count = id + 1;
+  // TLS 握手和解析 GitHub 的回应比较吃栈，和原来最大的那个任务一样给 16KB
+  if (!net_worker) xTaskCreate(net_worker_task, "net", 16384, nullptr, 1, &net_worker);
+  xTaskNotifyGive(net_worker);
+  return id;
+}
+
+void net_job_kick(int id) {
+  if (id < 0 || id >= net_job_count) return;
+  net_jobs[id].kicked = true;
+  if (net_worker) xTaskNotifyGive(net_worker);
+}

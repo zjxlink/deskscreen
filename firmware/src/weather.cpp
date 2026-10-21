@@ -12,7 +12,7 @@
 static constexpr uint32_t kRefreshMs = 15 * 60 * 1000;
 static constexpr uint32_t kRetryMs = 60 * 1000;
 
-static TaskHandle_t task_handle;
+static int job = -1;
 static SemaphoreHandle_t lock;
 static WeatherData latest;
 static bool fresh = false;
@@ -62,37 +62,30 @@ static void publish(const WeatherData &d) {
   xSemaphoreGive(lock);
 }
 
-static void weather_task(void *) {
-  bool ever_ok = false;
-  int failures = 0;
-  for (;;) {
-    uint32_t wait_ms = 5000;
-    if (WiFi.isConnected()) {
-      WeatherData d = {};
-      d.error = fetch(d);
-      if (d.error == 0) {
-        ever_ok = true;
-        failures = 0;
-        publish(d);
-        wait_ms = kRefreshMs;
-      } else {
-        // 失败时保留上次的天气，只有从没成功过才在屏幕上显示错误
-        if (!ever_ok) publish(d);
-        wait_ms = net_retry_ms(++failures, kRetryMs);
-      }
-    }
-    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait_ms));
+static uint32_t weather_step() {
+  static bool ever_ok = false;
+  static int failures = 0;
+  if (!WiFi.isConnected()) return 5000;
+  WeatherData d = {};
+  d.error = fetch(d);
+  if (d.error == 0) {
+    ever_ok = true;
+    failures = 0;
+    publish(d);
+    return kRefreshMs;
   }
+  // 失败时保留上次的天气，只有从没成功过才在屏幕上显示错误
+  if (!ever_ok) publish(d);
+  return net_retry_ms(++failures, kRetryMs);
 }
 
 void weather_begin() {
   lock = xSemaphoreCreateMutex();
-  // TLS 握手比较吃栈，给足 16KB
-  xTaskCreate(weather_task, "weather", 16384, nullptr, 1, &task_handle);
+  job = net_job_add("weather", weather_step);
 }
 
 void weather_request_refresh() {
-  if (task_handle) xTaskNotifyGive(task_handle);
+  net_job_kick(job);
 }
 
 bool weather_take_update(WeatherData &out) {
