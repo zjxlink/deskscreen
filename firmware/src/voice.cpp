@@ -12,6 +12,7 @@ void voice_begin() {}
 void voice_set_options(bool, bool) {}
 void voice_tap() {}
 void voice_cancel() {}
+void voice_pause(bool) {}
 bool voice_take_wake() { return false; }
 VoiceStatus voice_status() {
   VoiceStatus s = {};
@@ -60,6 +61,7 @@ static volatile bool interrupt = false;  // 主人要打断小橘
 static volatile bool woke = false;       // 刚被唤醒词叫醒，主循环要切到聊天页
 static volatile bool wake_on = true;
 static volatile bool barge_on = true;
+static volatile bool paused = false;    // 正在升级固件：不听唤醒词、不聊天，CPU 留给写 Flash
 static volatile uint32_t session_from = 0;  // 这次聊天从缓冲里第几个采样开始上传
 
 // 要上传的声音（PSRAM）：采集任务（或回声消除后的输出）写，聊天任务读。计数只增不减，相减就是缓冲里的采样数
@@ -128,6 +130,12 @@ static void on_wake();
 
 // 采集任务里调用：每次 256 个采样
 static void on_capture(const int16_t *mic, const int16_t *ref, size_t n, void *) {
+  if (paused) {
+#ifdef HAS_SR
+    feed_fill = 0;
+#endif
+    return;
+  }
 #ifdef HAS_SR
   if (afe) {
     if (!wake_on && !running) {
@@ -788,6 +796,11 @@ void voice_cancel() {
   }
   xSemaphoreGive(lock);
   if (running) hangup = true;
+}
+
+void voice_pause(bool on) {
+  paused = on;
+  if (on) voice_cancel();
 }
 
 bool voice_take_wake() {

@@ -616,6 +616,13 @@ static void update_screen() {
     ui_show_page(p, animate, back);
 }
 
+// 写固件期间暂停唤醒词、回声消除和音乐律动：它们一直在算，会拖慢上传，以前上传到一半板子会重启。
+// 在网页上传的处理函数或联网任务里调用，所以只改标志，不碰界面
+static void on_ota_busy(bool busy) {
+  voice_pause(busy);
+  listen_set_enabled(!busy && settings_get().music_on);
+}
+
 // 在线升级或网页上传固件时显示进度；成功后重启，失败时提示几秒再回到原来的页面
 static void update_ota_screen() {
   static int last_progress = -1;
@@ -1099,6 +1106,7 @@ void setup() {
   github_begin();
   stock_begin();
   ota_begin();
+  ota_set_busy_hook(on_ota_busy);
   bing_begin();
   log_i("heap: internal %u (largest block %u), psram %u", heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
         heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL), heap_caps_get_free_size(MALLOC_CAP_SPIRAM));

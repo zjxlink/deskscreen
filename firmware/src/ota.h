@@ -41,3 +41,7 @@ bool ota_upload_begin(const uint8_t *first, size_t len, size_t total);
 bool ota_upload_write(const uint8_t *data, size_t len);
 bool ota_upload_end();
 void ota_upload_abort();
+
+// 开始写固件（在线升级或网页上传）时以 true 调用，失败或中断时以 false 调用；成功会直接重启。
+// 用来在升级期间暂停唤醒词这类吃 CPU 的后台功能
+void ota_set_busy_hook(void (*hook)(bool busy));

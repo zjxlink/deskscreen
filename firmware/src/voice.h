@@ -41,6 +41,9 @@ void voice_tap();
 void voice_cancel();
 // 设置：wake 打开唤醒词，barge 允许说话打断（都要 esp-sr 才有用）
 void voice_set_options(bool wake, bool barge);
+// 升级固件期间暂停：挂断正在进行的聊天，也不再听唤醒词。回声消除和唤醒词很吃 CPU，
+// 写 Flash 时会把网页上传拖垮
+void voice_pause(bool on);
 // 刚被唤醒词叫醒时返回一次 true，主循环据此点亮屏幕、切到聊天页
 bool voice_take_wake();
 
