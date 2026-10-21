@@ -37,7 +37,7 @@ static FrStatus *status;  // PSRAM
 static uint32_t status_ver = 0, status_seen = 0;
 static FrEvent *inbox;    // 收到还没交给主循环的消息，PSRAM
 static int inbox_n = 0;
-static Action actions[kMaxActions];
+static Action *actions;  // PSRAM
 static int action_n = 0;
 static FrSync *sync_buf;  // PSRAM
 static uint16_t *thumbs[kThumbSlots];
@@ -420,7 +420,8 @@ void friends_begin() {
   status = (FrStatus *)psram(sizeof(FrStatus));
   inbox = (FrEvent *)psram(sizeof(FrEvent) * kInboxMax);
   sync_buf = (FrSync *)psram(sizeof(FrSync));
-  if (!status || !inbox || !sync_buf) return;
+  actions = (Action *)psram(sizeof(Action) * kMaxActions);
+  if (!status || !inbox || !sync_buf || !actions) return;
   tls.setCACert(ROOT_CA_BUNDLE);
   tls.setHandshakeTimeout(kTlsHandshakeTimeoutS);
   job = net_job_add("friends", friends_step, 8000);
@@ -473,7 +474,7 @@ const uint16_t *friends_thumb(int slot, uint32_t gen) {
 }
 
 static void queue(ActKind kind, const char *circle, const char *to, const char *text) {
-  if (!status) return;
+  if (!status || !actions) return;
   xSemaphoreTake(lock, portMAX_DELAY);
   if (status->configured && action_n < kMaxActions) {
     Action &a = actions[action_n++];

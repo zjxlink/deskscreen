@@ -1271,9 +1271,12 @@ static FrStatus *fr = nullptr;           // 最近的状态（PSRAM）
 static int fr_circle = 0;               // 好友页显示第几个圈子
 static int fr_page = 0;                 // 成员多时第几屏
 static bool fr_dirty = true;
-static FrEvent fr_pending[kFrPending];  // 还没弹出来的
+// 消息缓冲都放 PSRAM（一条约 440 字节），内部内存留给网络和 TLS
+static FrEvent *fr_pending = nullptr;   // 还没弹出来的，kFrPending 条
 static int fr_pending_n = 0;
-static FrEvent fr_shown;                // 正在显示的留言 / 最后一个戳的人
+static FrEvent *fr_shown = nullptr;     // 正在显示的留言 / 最后一个戳的人
+static FrEvent *fr_evs = nullptr;       // 从后台取新消息用，kFrTake 条
+static constexpr int kFrTake = 4;
 static char poke_names[96];
 static int poke_count = 0;
 static char ph_circle[kFrIdLen], ph_to[kFrIdLen];  // 选好句子发给谁
@@ -1362,7 +1365,7 @@ static void show_poke(const FrEvent &e, bool merge) {
     poke_count = 0;
   }
   friends_add_name(poke_names, sizeof(poke_names), poke_count, e.from_name);
-  fr_shown = e;
+  *fr_shown = e;
   begin_overlay(FrOverlay::Poke, kPokeShowMs);
   char title[128], foot[96];
   friends_names_text(poke_names, poke_count, title, sizeof(title));
@@ -1378,7 +1381,7 @@ static void show_poke(const FrEvent &e, bool merge) {
 }
 
 static void show_text(const FrEvent &e) {
-  fr_shown = e;
+  *fr_shown = e;
   begin_overlay(FrOverlay::Text, 0);
   char title[96], foot[64];
   if (e.to_me) snprintf(title, sizeof(title), "%s", e.from_name);
@@ -1434,13 +1437,13 @@ static bool friend_overlay_tap(int x, int y) {
   if (h != FriendAlertHit::Action) return false;
   if (fr_overlay == FrOverlay::Poke) {
     // 一个人戳的就戳回去给 TA，好几个人戳的就戳整个圈子
-    friends_poke(fr_shown.circle, poke_count > 1 ? "" : fr_shown.from);
+    friends_poke(fr_shown->circle, poke_count > 1 ? "" : fr_shown->from);
     set_fr_note("正在戳回去…");
     close_alert();
   } else if (fr_overlay == FrOverlay::Text) {
     char title[64];
-    snprintf(title, sizeof(title), "回复 %s", fr_shown.from_name);
-    open_phrases(fr_shown.circle, fr_shown.from, title);
+    snprintf(title, sizeof(title), "回复 %s", fr_shown->from_name);
+    open_phrases(fr_shown->circle, fr_shown->from, title);
   }
   return true;
 }
@@ -1492,10 +1495,9 @@ static void update_friends() {
   }
 
   // 新消息：已读、成员变化只在好友页底部说一声；戳一戳和留言排队弹出来
-  FrEvent evs[4];
-  int n = friends_take_events(evs, 4);
+  int n = friends_take_events(fr_evs, kFrTake);
   for (int i = 0; i < n; i++) {
-    const FrEvent &e = evs[i];
+    const FrEvent &e = fr_evs[i];
     char note[96];
     if (e.type == FrEventType::Read) {
       snprintf(note, sizeof(note), "%s 看了你的留言", e.from_name);
@@ -1514,10 +1516,10 @@ static void update_friends() {
     }
   }
   if (fr_pending_n > 0 && fr_can_show(fr_pending[0].type == FrEventType::Poke)) {
-    FrEvent e = fr_pending[0];
+    fr_evs[0] = fr_pending[0];
     fr_pending_n--;
     memmove(fr_pending, fr_pending + 1, sizeof(FrEvent) * fr_pending_n);
-    fr_handle(e);
+    fr_handle(fr_evs[0]);
   }
   if (!alert_on) fr_overlay = FrOverlay::None;
 
@@ -2056,7 +2058,12 @@ void setup() {
     ui_set_news(*news_data, news_style);
     news_begin();
   }
-  fr = (FrStatus *)heap_caps_calloc(1, sizeof(FrStatus), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  fr_pending = (FrEvent *)heap_caps_calloc(kFrPending + 1 + kFrTake, sizeof(FrEvent), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (fr_pending) {
+    fr_shown = fr_pending + kFrPending;
+    fr_evs = fr_shown + 1;
+    fr = (FrStatus *)heap_caps_calloc(1, sizeof(FrStatus), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  }
   friends_begin();
   log_i("heap: internal %u (largest block %u), psram %u", heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
         heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL), heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
