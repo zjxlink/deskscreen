@@ -41,7 +41,8 @@ static constexpr uint32_t kOutRing = 1 << 19;             // 待播放的声音�
 static constexpr uint32_t kRefRing = 16384;               // 放过的声音（回声消除的参考信号），1 秒
 static constexpr uint32_t kListenRing = 4096;             // 给音乐律动的麦克风声音
 static constexpr int32_t kRefLead = 320;  // 参考信号比回声早 20ms 给，量偏移的误差不会让回声跑到参考信号前面
-static constexpr uint32_t kPrebuffer = kRate * 3 / 10;  // 语音回答攒够 300ms 再放
+static constexpr uint32_t kPrebufferMin = kRate * 3 / 10;  // 语音回答先攒 300ms 再放
+static constexpr uint32_t kPrebufferMax = kRate * 3 / 2;   // 网络再慢也最多攒 1.5 秒
 
 static QueueHandle_t queue;
 static SemaphoreHandle_t out_lock;  // 提示音和语音回答轮流用喇叭
@@ -57,6 +58,8 @@ static volatile uint32_t out_w = 0, out_r = 0;
 static volatile bool out_flush = false;
 static volatile bool out_streaming = false;  // 语音回答还在下载
 static volatile bool out_hold = false;       // 在攒声音，先不放
+static volatile uint32_t out_target = kPrebufferMin;  // 要攒够多少采样才放：放空一次就多攒一点，一直顺就慢慢减回来
+static volatile uint32_t out_underruns = 0;           // 这次回答中途放空了几次
 static int16_t *ref_ring;
 static volatile uint32_t tx_count = 0;  // 已经交给 I2S 的采样数
 
@@ -225,13 +228,19 @@ static void speaker_task(void *) {
   for (;;) {
     if (out_flush) {
       out_r = out_w;
+      out_hold = true;  // 打断扔掉的不算放空
       out_flush = false;
     }
     uint32_t r = out_r;
     uint32_t avail = out_w - r;
     // 语音回答边下边放：放空了就停下来攒，攒够或者下载完了再接着放，免得一卡一卡的
-    if (out_streaming && avail == 0) out_hold = true;
-    if (out_hold && (avail >= kPrebuffer || !out_streaming)) out_hold = false;
+    if (out_streaming && avail == 0 && !out_hold) {
+      out_hold = true;
+      out_underruns = out_underruns + 1;
+      uint32_t t = out_target + kPrebufferMin;
+      out_target = t < kPrebufferMax ? t : kPrebufferMax;
+    }
+    if (out_hold && (avail >= out_target || !out_streaming)) out_hold = false;
     if (out_hold) avail = 0;
     size_t n = avail < (uint32_t)kDmaLen ? avail : kDmaLen;
     for (size_t i = 0; i < n; i++) mono[i] = out_ring[(r + i) & (kOutRing - 1)];
@@ -362,6 +371,7 @@ void audio_stream_begin() {
   if (!ready) return;
   xSemaphoreTake(out_lock, portMAX_DELAY);
   out_hold = true;
+  out_underruns = 0;
   out_streaming = true;
 }
 
@@ -397,6 +407,10 @@ void audio_stream_end() {
   if (!ready) return;
   out_streaming = false;
   out_drain();
+  uint32_t t = out_target;
+  if (out_underruns == 0 && t > kPrebufferMin) out_target = t - kRate / 10;
+  log_i("audio: answer done, ran dry %u times, now buffering %u ms", (unsigned)out_underruns,
+        (unsigned)(out_target * 1000 / kRate));
   xSemaphoreGive(out_lock);
 }
 
