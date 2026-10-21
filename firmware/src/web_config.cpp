@@ -13,6 +13,7 @@
 #include "night.h"
 #include "ota.h"
 #include "ota_util.h"
+#include "pages.h"
 #include "photos.h"
 #include "settings.h"
 #include "stock.h"
@@ -30,6 +31,13 @@ static int (*today)() = nullptr;
 static void (*message_hook)(const String &, bool) = nullptr;
 static void (*room_info)(RoomInfo &) = nullptr;
 static constexpr int kMessageMaxChars = 60;
+
+// 板子上有没有这一页的硬件，和 main.cpp 的 page_unavailable 一致
+static bool page_available(int p) {
+  if (p == PAGE_CHAT) return voice_available();
+  if (p == PAGE_ALBUM) return photos_supported();
+  return true;
+}
 
 static String ota_text(const OtaStatus &s) {
   switch (s.state) {
@@ -89,6 +97,16 @@ static void handle_api_settings() {
   doc["lon"] = serialized(String(s.lon, 4));
   doc["brightness"] = s.brightness;
   doc["page_sec"] = s.page_seconds;
+  // 页面开关：只列这块板子有的页面，时钟页一直显示也列出来（网页上灰着）
+  uint32_t hidden = pages_parse_hidden(s.pages_off.c_str());
+  JsonArray pages = doc["pages"].to<JsonArray>();
+  for (int p = 0; p < PAGE_COUNT; p++) {
+    if (!page_available(p)) continue;
+    JsonObject o = pages.add<JsonObject>();
+    o["k"] = kPageInfo[p].key;
+    o["n"] = kPageInfo[p].name;
+    o["on"] = !(hidden & (1u << p));
+  }
   doc["night_on"] = s.night_on;
   put_time("night_start", s.night_start);
   doc["night_sun"] = s.night_sun;
@@ -239,6 +257,21 @@ static void handle_save() {
   String sec = server.arg("page_sec");
   sec.trim();
   if (sec.length() > 0 && sec.toInt() >= 0 && sec.toInt() <= 255) s.page_seconds = sec.toInt();
+
+  if (server.hasArg("pg_form")) {  // 确认是设置表单提交的，再更新页面开关；没勾的复选框不会提交
+    uint32_t hidden = pages_parse_hidden(s.pages_off.c_str());
+    for (int p = PAGE_CLOCK + 1; p < PAGE_COUNT; p++) {
+      if (!page_available(p)) continue;  // 网页上没列出来的保持原样
+      if (server.hasArg(String("pg_") + kPageInfo[p].key)) {
+        hidden &= ~(1u << p);
+      } else {
+        hidden |= 1u << p;
+      }
+    }
+    char list[96];
+    pages_format_hidden(hidden, list, sizeof(list));
+    s.pages_off = list;
+  }
 
   String token = server.arg("gh_token");
   token.trim();

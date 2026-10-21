@@ -68,7 +68,8 @@ void ui_set_pet_music(const float *bands);
 enum class AlertIcon { Message, Sit, Water, Alarm, Climate, Rain };
 void ui_show_alert(AlertIcon icon, const char *title, const char *body, const char *foot);
 
-// 快捷设置页（长按屏幕打开）：亮度、提示音、没人熄屏，以及打开网页设置的二维码
+// 快捷设置页（长按屏幕打开）：亮度、提示音、没人熄屏，以及打开网页设置的二维码。
+// 点「显示页面」进入第二屏，选哪些页面参与翻页；页面多了放不下时上下滑动
 struct QuickState {
   uint8_t brightness;  // 白天亮度 10~255
   bool sound_on;
@@ -76,14 +77,23 @@ struct QuickState {
   bool has_dock;       // 插了 SENSOR 底座，「没人熄屏」才有用
   bool away_off;
   const char *url;     // 网页设置地址，空字符串表示还没连上 WiFi
+  bool pages_view;     // 显示「显示页面」那一屏
+  uint32_t page_hidden;       // 第 i 位：第 i 页被隐藏
+  uint32_t page_unavailable;  // 第 i 位：板子上没有这页的硬件，不列出来
+  uint32_t page_unset;        // 第 i 位：这页还没设置好（如没填 GitHub Token），格子上提示一下
 };
-enum class QuickHit { None, Close, BrightDown, BrightUp, VolumeDown, VolumeUp, Sound, Away };
+enum class QuickHit { None, Close, BrightDown, BrightUp, VolumeDown, VolumeUp, Sound, Away, Pages, Back, PageTile };
 
 // 显示快捷设置页，或者在已经显示时刷新上面的状态
 void ui_show_quick(const QuickState &q);
 
-// 快捷设置页上点到了什么（按钮周围留了一圈余量，好点中）
-QuickHit ui_quick_hit(int x, int y);
+// 快捷设置页上点到了什么（按钮周围留了一圈余量，好点中）；点到页面格子时 page 为哪一页
+QuickHit ui_quick_hit(int x, int y, Page *page = nullptr);
+
+// 「显示页面」那一屏上下滑动：dy 为手指从按下到现在往上移动的像素数，跟着手指滚动；
+// 松手时调用 ui_quick_drag_end，对齐到整行。不在那一屏时什么也不做
+void ui_quick_drag(int dy);
+void ui_quick_drag_end();
 
 // 小橘跑酷：打开游戏画面；每帧用游戏状态刷新画面，best 为最高分
 void ui_show_game();

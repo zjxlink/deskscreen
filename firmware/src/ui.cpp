@@ -164,6 +164,19 @@ static lv_obj_t *lbl_quick_away;
 static lv_obj_t *quick_qr;
 static lv_obj_t *lbl_quick_url;
 static String quick_url;
+static lv_obj_t *quick_pages;  // 「显示页面 ›」按钮
+
+// 快捷设置的第二屏：选哪些页面参与翻页，3 列格子，放不下时上下滑动
+static constexpr int kTileW = 98, kTileH = 56, kTileGapX = 6, kTileGapY = 6, kTilesTop = 48;
+static lv_obj_t *scr_qpages;
+static lv_obj_t *qp_back;
+static lv_obj_t *lbl_qp_count;
+static lv_obj_t *qp_list;
+struct PageTile {
+  lv_obj_t *box, *name, *hint, *check, *mark;
+};
+static PageTile qp_tiles[PAGE_COUNT];
+static int qp_drag_base = -1;  // 开始拖动时的滚动位置，-1 表示没在拖
 
 // 小橘跑酷
 static lv_obj_t *scr_game;
@@ -1062,6 +1075,12 @@ static void build_quick() {
 
   quick_close = make_button(scr_quick, LV_SYMBOL_CLOSE);
   lv_obj_align(quick_close, LV_ALIGN_TOP_RIGHT, -8, 4);
+  quick_pages = make_button(scr_quick, "");
+  lv_obj_set_width(quick_pages, 96);
+  lv_obj_align(quick_pages, LV_ALIGN_TOP_RIGHT, -60, 4);
+  lv_obj_t *pl = lv_obj_get_child(quick_pages, 0);
+  lv_obj_set_style_text_font(pl, &font_cn_16, 0);
+  lv_label_set_text(pl, "显示页面 ›");
 
   // 左边：二维码
   // 二维码外面留一圈白边，手机才扫得出来
@@ -1113,7 +1132,123 @@ static void build_quick() {
   lv_obj_align(quick_away, LV_ALIGN_TOP_RIGHT, -10, 184);
 }
 
+static void build_qpages() {
+  scr_qpages = make_screen();
+  qp_back = make_button(scr_qpages, LV_SYMBOL_LEFT);
+  lv_obj_align(qp_back, LV_ALIGN_TOP_LEFT, 8, 4);
+  lv_obj_t *title = make_label(scr_qpages, &font_cn_16, COLOR_TEXT);
+  lv_label_set_text(title, "显示哪些页面");
+  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 62, 13);
+  lbl_qp_count = make_label(scr_qpages, &font_cn_16, COLOR_SUBTLE);
+  lv_obj_align(lbl_qp_count, LV_ALIGN_TOP_RIGHT, -12, 13);
+
+  // 滚动由 main.cpp 的触摸代码通过 ui_quick_drag 驱动（没有接 LVGL 的输入设备）
+  qp_list = lv_obj_create(scr_qpages);
+  lv_obj_set_size(qp_list, SCREEN_W, SCREEN_H - kTilesTop);
+  lv_obj_set_pos(qp_list, 0, kTilesTop);
+  lv_obj_set_style_bg_opa(qp_list, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(qp_list, 0, 0);
+  lv_obj_set_style_radius(qp_list, 0, 0);
+  lv_obj_set_style_pad_all(qp_list, 0, 0);
+  lv_obj_set_style_pad_bottom(qp_list, 8, 0);
+  lv_obj_set_scroll_dir(qp_list, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(qp_list, LV_SCROLLBAR_MODE_AUTO);
+  lv_obj_set_style_width(qp_list, 3, LV_PART_SCROLLBAR);
+  lv_obj_set_style_pad_right(qp_list, 1, LV_PART_SCROLLBAR);
+  lv_obj_set_style_bg_color(qp_list, COLOR_SUBTLE, LV_PART_SCROLLBAR);
+  lv_obj_set_style_bg_opa(qp_list, LV_OPA_60, LV_PART_SCROLLBAR);
+
+  for (int p = 0; p < PAGE_COUNT; p++) {
+    PageTile &t = qp_tiles[p];
+    t.box = lv_obj_create(qp_list);
+    lv_obj_set_size(t.box, kTileW, kTileH);
+    lv_obj_set_style_radius(t.box, 10, 0);
+    lv_obj_set_style_pad_all(t.box, 0, 0);
+    lv_obj_clear_flag(t.box, LV_OBJ_FLAG_SCROLLABLE);
+    t.name = make_label(t.box, &font_cn_16, COLOR_TEXT);
+    lv_label_set_text(t.name, kPageInfo[p].name);
+    t.hint = make_label(t.box, &font_cn_16, COLOR_SUBTLE);
+    lv_obj_align(t.hint, LV_ALIGN_TOP_LEFT, 10, 29);
+    t.check = lv_obj_create(t.box);
+    lv_obj_set_size(t.check, 20, 20);
+    lv_obj_set_style_radius(t.check, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_pad_all(t.check, 0, 0);
+    lv_obj_clear_flag(t.check, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(t.check, LV_ALIGN_TOP_RIGHT, -6, 6);
+    t.mark = make_label(t.check, &lv_font_montserrat_14, lv_color_hex(0xFFFFFF));
+    lv_label_set_text(t.mark, LV_SYMBOL_OK);
+    lv_obj_center(t.mark);
+  }
+}
+
+// 打开的格子：卡片底色、蓝边、蓝色勾；关掉的：透明底、灰边、空心圈、灰字。时钟页一直开着，勾是灰的
+static void show_qpages(const QuickState &q) {
+  int shown = 0, total = 0;
+  for (int p = 0; p < PAGE_COUNT; p++) {
+    PageTile &t = qp_tiles[p];
+    if (q.page_unavailable & (1u << p)) {
+      lv_obj_add_flag(t.box, LV_OBJ_FLAG_HIDDEN);
+      continue;
+    }
+    lv_obj_clear_flag(t.box, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_pos(t.box, 8 + (total % 3) * (kTileW + kTileGapX), (total / 3) * (kTileH + kTileGapY));
+    total++;
+    bool locked = p == PAGE_CLOCK;
+    bool on = locked || !(q.page_hidden & (1u << p));
+    if (on) shown++;
+    const char *hint = locked ? "始终显示" : (q.page_unset & (1u << p)) ? "未设置" : "";
+    lv_label_set_text(t.hint, hint);
+    lv_obj_align(t.name, LV_ALIGN_TOP_LEFT, 10, hint[0] ? 7 : 17);
+    lv_obj_set_style_bg_color(t.box, on ? COLOR_CARD : COLOR_BG, 0);
+    lv_obj_set_style_border_width(t.box, on ? 2 : 1, 0);
+    lv_obj_set_style_border_color(t.box, on ? COLOR_ACCENT : COLOR_FLAT, 0);
+    lv_obj_set_style_text_color(t.name, on ? COLOR_TEXT : COLOR_SUBTLE, 0);
+    lv_obj_set_style_bg_color(t.check, !on ? COLOR_BG : locked ? COLOR_FLAT : COLOR_ACCENT, 0);
+    lv_obj_set_style_border_width(t.check, on ? 0 : 2, 0);
+    lv_obj_set_style_border_color(t.check, COLOR_FLAT, 0);
+    lv_obj_set_style_text_color(t.mark, locked ? COLOR_SUBTLE : lv_color_hex(0xFFFFFF), 0);
+    if (on) {
+      lv_obj_clear_flag(t.mark, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(t.mark, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+  lv_label_set_text_fmt(lbl_qp_count, "%d/%d", shown, total);
+  if (lv_scr_act() != scr_qpages) {
+    qp_drag_base = -1;
+    lv_obj_scroll_to_y(qp_list, 0, LV_ANIM_OFF);
+    screen_load(scr_qpages, false);
+  }
+}
+
+static int qp_max_scroll() {
+  lv_obj_update_layout(qp_list);
+  int m = lv_obj_get_scroll_y(qp_list) + lv_obj_get_scroll_bottom(qp_list);
+  return m > 0 ? m : 0;
+}
+
+void ui_quick_drag(int dy) {
+  if (lv_scr_act() != scr_qpages) return;
+  if (qp_drag_base < 0) qp_drag_base = lv_obj_get_scroll_y(qp_list);
+  int y = qp_drag_base + dy;
+  int m = qp_max_scroll();
+  lv_obj_scroll_to_y(qp_list, y < 0 ? 0 : y > m ? m : y, LV_ANIM_OFF);
+}
+
+void ui_quick_drag_end() {
+  qp_drag_base = -1;
+  if (lv_scr_act() != scr_qpages) return;
+  const int row = kTileH + kTileGapY;
+  int y = (lv_obj_get_scroll_y(qp_list) + row / 2) / row * row;
+  int m = qp_max_scroll();
+  lv_obj_scroll_to_y(qp_list, y > m ? m : y, LV_ANIM_ON);
+}
+
 void ui_show_quick(const QuickState &q) {
+  if (q.pages_view) {
+    show_qpages(q);
+    return;
+  }
   lv_label_set_text_fmt(lbl_quick_bright, "%d%%", (q.brightness * 100 + 127) / 255);
   lv_label_set_text_fmt(lbl_quick_volume, "%d", q.volume);
   set_toggle(quick_sound, q.sound_on);
@@ -1141,9 +1276,28 @@ static bool hit(lv_obj_t *o, int x, int y) {
   return x >= a.x1 - 8 && x <= a.x2 + 8 && y >= a.y1 - 8 && y <= a.y2 + 8;
 }
 
-QuickHit ui_quick_hit(int x, int y) {
+QuickHit ui_quick_hit(int x, int y, Page *page) {
+  if (lv_scr_act() == scr_qpages) {
+    lv_obj_update_layout(scr_qpages);
+    if (hit(qp_back, x, y)) return QuickHit::Back;
+    if (y < kTilesTop) return QuickHit::None;  // 滚到上面去的格子被标题栏挡住了
+    for (int p = 0; p < PAGE_COUNT; p++) {
+      if (lv_obj_has_flag(qp_tiles[p].box, LV_OBJ_FLAG_HIDDEN)) continue;
+      lv_area_t a;
+      lv_obj_get_coords(qp_tiles[p].box, &a);
+      if (x >= a.x1 - 3 && x <= a.x2 + 3 && y >= a.y1 - 3 && y <= a.y2 + 3) {
+        if (page) *page = (Page)p;
+        return QuickHit::PageTile;
+      }
+    }
+    return QuickHit::None;
+  }
   lv_obj_update_layout(scr_quick);
   if (hit(quick_close, x, y)) return QuickHit::Close;
+  // 「显示页面」按钮和下面的亮度按钮挨得近，不放宽
+  lv_area_t pa;
+  lv_obj_get_coords(quick_pages, &pa);
+  if (x >= pa.x1 && x <= pa.x2 && y >= pa.y1 - 4 && y <= pa.y2 + 2) return QuickHit::Pages;
   if (hit(quick_minus, x, y)) return QuickHit::BrightDown;
   if (hit(quick_plus, x, y)) return QuickHit::BrightUp;
   if (hit(quick_vol_minus, x, y)) return QuickHit::VolumeDown;
@@ -1524,6 +1678,7 @@ void ui_init() {
   }
   build_alert();
   build_quick();
+  build_qpages();
   build_game();
   Pomodoro idle;
   ui_set_pomodoro(idle, 0, nullptr, 0);
@@ -1971,7 +2126,7 @@ void ui_set_theme(bool light) {
   for (lv_obj_t *scr : scr_pages) {
     if (scr != scr_pages[PAGE_ALBUM]) recolor(scr, from, *pal);
   }
-  for (lv_obj_t *scr : {scr_alert, scr_quick, scr_game}) recolor(scr, from, *pal);
+  for (lv_obj_t *scr : {scr_alert, scr_quick, scr_qpages, scr_game}) recolor(scr, from, *pal);
   for (int lv = 0; lv < 5; lv++) lv_obj_set_style_bg_color(gh_legend[lv], lv_color_hex(pal->level[lv]), 0);
   if (moon_now >= 0) draw_moon(moon_now);
   if (have_weather) ui_set_weather(last_weather);

@@ -16,6 +16,8 @@ struct ScreenConfig {
   uint8_t page_seconds = 15;       // 自动轮播间隔，0 表示不轮播
   bool page_enabled[PAGE_COUNT] = {true};  // 自动轮播只轮到已设置好的页面，默认只有时钟页
   uint32_t page_unavailable = 0;   // 第 i 位表示这块板子没有第 i 页的硬件（如没麦克风就没有 AI 聊天），手动切换也跳过
+  uint32_t page_hidden = 0;        // 第 i 位表示用户把第 i 页隐藏了，手动切换和自动轮播都跳过（时钟页除外）。
+                                   // 番茄钟、唤醒词、屏保等用 go_to/pin 跳过去的不受影响
   bool away_off = false;           // 有人体感应时：没人一段时间后熄屏，有人回来再亮
   uint8_t away_min = 5;            // 多久没人算离开
 };
@@ -26,6 +28,9 @@ class ScreenCtrl {
   static constexpr uint32_t kFadeStepMs = 30;  // 亮度渐变的步进间隔，整个渐变约 1 秒
 
   void configure(const ScreenConfig &cfg) { cfg_ = cfg; }
+
+  // 翻页时会不会跳过这一页（没有硬件或者被隐藏了）
+  bool skipped(Page p) const;
 
   // 开机提示页结束后调用，从时钟页开始；在此之前的操作都忽略
   void start(uint32_t now_ms);

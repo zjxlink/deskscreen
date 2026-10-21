@@ -9,6 +9,11 @@ void ScreenCtrl::start(uint32_t now_ms) {
   show(PAGE_CLOCK, now_ms, false, true);  // 此前屏幕上是开机提示页，必须切过来
 }
 
+bool ScreenCtrl::skipped(Page p) const {
+  if (p == PAGE_CLOCK) return false;
+  return (cfg_.page_unavailable | cfg_.page_hidden) & (1u << p);
+}
+
 bool ScreenCtrl::woken(uint32_t now_ms) const {
   return woken_until_ && (int32_t)(now_ms - woken_until_) < 0;
 }
@@ -76,7 +81,7 @@ void ScreenCtrl::auto_rotate(uint32_t now_ms) {
   if (cfg_.page_seconds == 0 || (uint32_t)(now_ms - page_shown_at_) < interval) return;
   for (int k = 1; k <= PAGE_COUNT; k++) {
     Page p = (Page)((page_ + k) % PAGE_COUNT);
-    if (cfg_.page_enabled[p] && !(cfg_.page_unavailable & (1u << p))) {
+    if (cfg_.page_enabled[p] && !skipped(p)) {
       if (p == page_) {
         page_shown_at_ = now_ms;  // 只有当前页可轮播，原地不动
       } else {
@@ -108,11 +113,11 @@ bool ScreenCtrl::on_input(uint32_t now_ms, bool back) {
     dimmed_ = false;
     return false;
   }
-  // 手动切换时轮流显示所有页面（没设置的页面也能看到提示），只跳过板子上没有硬件的页面
+  // 手动切换时轮流显示所有页面（没设置的页面也能看到提示），只跳过板子上没有硬件的和用户隐藏的页面
   Page next = page_;
   for (int k = 1; k <= PAGE_COUNT; k++) {
     next = (Page)((page_ + (back ? PAGE_COUNT - k : k)) % PAGE_COUNT);
-    if (!(cfg_.page_unavailable & (1u << next))) break;
+    if (!skipped(next)) break;
   }
   show(next, now_ms, true, false, back);
   return true;
