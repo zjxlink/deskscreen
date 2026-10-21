@@ -2,7 +2,7 @@
 
 只记录 v0.6.0 之后的版本。每个版本的固件在 [Releases](https://github.com/zjxlink/test-repo/releases) 下载，开了自动升级的设备会在凌晨 3～5 点自己装上。
 
-## 未发布
+## v0.19.1
 
 - 修复：AI 聊天说完话就断开（百炼：Voice 'Cherry' is not supported）。现在的实时模型不支持 Cherry 音色，音色改成留空用模型默认的 Tina；以前保存的 Cherry 会自动换掉。想换声音可以在「服务 › AI 语音聊天 › 音色」里填 Ethan（男声）等
 - AI 聊天的回答先攒 0.3 秒再开始放，中途网络慢了也会停下来攒一下再接着放，不再一卡一卡的
