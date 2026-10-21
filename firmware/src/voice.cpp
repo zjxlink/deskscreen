@@ -31,6 +31,7 @@ VoiceStatus voice_status() {
 
 #include "dashscope_ca.h"
 #include "net.h"
+#include "news.h"
 #include "omni.h"
 #include "realtime.h"
 #include "settings.h"
@@ -249,6 +250,14 @@ static String system_prompt() {
     p += buf;
   }
   if (s.city.length()) p += "主人在" + s.city + "。";
+  if (s.news_voice) {
+    std::string brief = news_voice_brief();
+    if (!brief.empty()) {
+      p += "下面是桌面信息屏刚拉到的新闻标题，按频道分组。主人问新闻时就从这里挑着念，一次念三五条，"
+           "每条用一句话说清楚，可以补一句简短的背景，但不要编造这里没有的新闻；主人没问就不要主动提：\n";
+      p += brief.c_str();
+    }
+  }
   return p;
 }
 

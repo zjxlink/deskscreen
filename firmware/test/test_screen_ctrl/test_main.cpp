@@ -160,6 +160,7 @@ static void test_morning_restores_day() {
 static void test_day_rotation_skips_unconfigured_pages() {
   ScreenConfig c = night_cfg();
   c.page_enabled[PAGE_GITHUB] = false;  // 没填 Token
+  c.page_unavailable = 1u << PAGE_NEWS;  // 没选新闻来源：资讯页手动切换也跳过
   Sim s(c);
   s.take_page();
   s.run(15500);

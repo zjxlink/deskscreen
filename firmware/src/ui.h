@@ -2,6 +2,7 @@
 
 #include "github.h"
 #include "music.h"
+#include "news.h"
 #include "pages.h"
 #include "pet.h"
 #include "pomodoro.h"
@@ -37,6 +38,19 @@ void ui_set_sun(int sunrise, int sunset);
 void ui_set_weather(const WeatherData &w);
 void ui_set_github(const GithubData &g);
 void ui_set_stocks(const StockData &s);
+
+// 资讯页：d 要一直有效（主循环里那份，放在 PSRAM），新数据来了再调用一次；style 0 列表，1 一屏一条
+void ui_set_news(const NewsData &d, uint8_t style);
+// 翻到下一批（自动翻页、往上滑），这个频道看完了换下一个频道；往下滑翻回上一批
+void ui_news_next();
+void ui_news_prev();
+// 换频道（点顶栏的频道名），dir 为 1 或 -1
+void ui_news_channel(int dir);
+// 触摸点是否落在资讯页顶栏的频道名上
+bool ui_news_header_hit(int x, int y);
+// 时钟页的要闻条：换下一条标题，没有新闻时返回 false；show 为 true 时显示要闻条，否则显示日出日落
+bool ui_ticker_next();
+void ui_show_ticker(bool show);
 
 // 番茄钟页：msg 不为空时在顶栏显示提示（如"专注完成，休息一下吧"）；done_today 为今日完成数（来自统计，重启不丢）
 void ui_set_pomodoro(const Pomodoro &p, uint32_t now_ms, const char *msg, int done_today);

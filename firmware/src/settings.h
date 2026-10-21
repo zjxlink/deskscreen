@@ -60,6 +60,12 @@ struct Settings {
   bool album_local;          // 图片来源：自己的照片（TF 卡 photos 文件夹）
   bool album_bing;           // 图片来源：必应每日一图（TF 卡 bing 文件夹）。两个都开时交替播放
   bool bing_caption;         // 必应图片底部显示标题和地点
+  // 资讯
+  String news_src;           // 选中的内置来源（news.h 的 kNewsSources 的 id），逗号分隔，空表示不用
+  String news_rss;           // 自定义 RSS 地址，一行一个，最多 3 条
+  uint8_t news_style;        // 资讯页样式：0 列表（一屏 4 条），1 一屏一条带摘要
+  bool news_ticker;          // 时钟页显示一行要闻，和日出日落轮流
+  bool news_voice;           // AI 聊天时把最新标题告诉小橘，让它能念新闻
 };
 
 // 时区固定为北京时间，POSIX 格式

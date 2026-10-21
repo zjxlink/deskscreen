@@ -61,6 +61,11 @@ void settings_begin() {
   current.album_local = prefs.getBool("alb_local", true);
   current.album_bing = prefs.getBool("alb_bing", true);
   current.bing_caption = prefs.getBool("bing_cap", true);
+  current.news_src = prefs.getString("news_src", "");
+  current.news_rss = prefs.getString("news_rss", "");
+  current.news_style = prefs.getUChar("news_style", 0);
+  current.news_ticker = prefs.getBool("news_ticker", true);
+  current.news_voice = prefs.getBool("news_voice", true);
 }
 
 Settings settings_get() {
@@ -126,6 +131,11 @@ void settings_save(const Settings &s) {
   prefs.putBool("alb_local", s.album_local);
   prefs.putBool("alb_bing", s.album_bing);
   prefs.putBool("bing_cap", s.bing_caption);
+  prefs.putString("news_src", s.news_src);
+  prefs.putString("news_rss", s.news_rss);
+  prefs.putUChar("news_style", s.news_style);
+  prefs.putBool("news_ticker", s.news_ticker);
+  prefs.putBool("news_voice", s.news_voice);
 }
 
 void settings_load_pomo_stats(PomoStatsData &d) {
