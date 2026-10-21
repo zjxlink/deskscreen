@@ -113,6 +113,17 @@ static void test_reaction_faces() {
   }
 }
 
+static void test_chat_mood() {
+  TEST_ASSERT_EQUAL(PetMood::Happy, chat_mood("今天天气不错。", PetMood::Happy));
+  TEST_ASSERT_EQUAL(PetMood::Normal, chat_mood(nullptr, PetMood::Normal));
+  TEST_ASSERT_EQUAL(PetMood::Sad, chat_mood("抱歉，我没查到。", PetMood::Happy));
+  TEST_ASSERT_EQUAL(PetMood::Startled, chat_mood("哇，你今天提交了二十次！", PetMood::Happy));
+  TEST_ASSERT_EQUAL(PetMood::Sleep, chat_mood("那就早点睡吧，晚安喵。", PetMood::Happy));
+  // 跟着说到哪儿变：最后出现的词算数
+  TEST_ASSERT_EQUAL(PetMood::Happy, chat_mood("可惜下雨了。不过明天就晴了，太好了！", PetMood::Normal));
+  TEST_ASSERT_EQUAL(PetMood::Sad, chat_mood("哈哈，不过明天会下雨，有点可惜。", PetMood::Normal));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_mood_priority);
@@ -122,5 +133,6 @@ int main() {
   RUN_TEST(test_sprite_is_symmetric_and_in_bounds);
   RUN_TEST(test_frames_differ);
   RUN_TEST(test_reaction_faces);
+  RUN_TEST(test_chat_mood);
   return UNITY_END();
 }

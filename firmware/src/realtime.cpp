@@ -1,6 +1,7 @@
 #include "realtime.h"
 
 #include <ArduinoJson.h>
+#include <ctype.h>
 #include <string.h>
 
 const char kRtAppendHead[] = "{\"type\":\"input_audio_buffer.append\",\"audio\":\"";
@@ -41,6 +42,32 @@ std::string rt_event(const char *type) {
   std::string out;
   serializeJson(doc, out);
   return out;
+}
+
+bool rt_is_goodbye(const std::string &heard) {
+  // 去掉标点和空格，数一下有几个字
+  std::string s;
+  size_t chars = 0;
+  for (size_t i = 0; i < heard.size();) {
+    unsigned char c = heard[i];
+    size_t len = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+    std::string ch = heard.substr(i, len);
+    i += len;
+    if (len == 1) {
+      if (!isalnum(c)) continue;
+      s += (char)tolower(c);
+    } else {
+      if (ch == "，" || ch == "。" || ch == "！" || ch == "？" || ch == "、" || ch == "～" || ch == "…") continue;
+      s += ch;
+    }
+    chars++;
+  }
+  if (chars == 0 || chars > 10) return false;
+  static const char *const kBye[] = {"拜拜", "再见", "白白", "不聊了", "先这样", "退下", "挂了", "挂断", "bye"};
+  for (const char *b : kBye) {
+    if (s.find(b) != std::string::npos) return true;
+  }
+  return false;
 }
 
 // 消息里某个字符串字段的值（不处理转义），找不到返回 false

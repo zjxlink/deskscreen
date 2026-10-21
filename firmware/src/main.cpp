@@ -8,6 +8,7 @@
 #include "audio.h"
 #include "board.h"
 #include "climate.h"
+#include "desk_brief.h"
 #include "clock_events.h"
 #include "display.h"
 #include "github.h"
@@ -105,6 +106,8 @@ static constexpr uint32_t kStartledMs = 2500;
 // 最近一次的 GitHub 和自选股数据，小猫要看
 static GithubData github_data;
 static StockData stock_data;
+static WeatherData weather_data;
+static bool weather_valid = false;
 
 // 全屏提醒（留言、久坐、喝水）：盖在页面上，点屏幕或按 BOOT 键关掉
 static bool alert_on = false;
@@ -425,6 +428,26 @@ static void update_clock_events() {
     audio_play(SoundId::Alarm);
     alarm_next_ring = now + kAlarmRepeatMs;
   }
+}
+
+// 聊天时告诉小橘的桌面信息，每 30 秒更新一次（番茄钟剩余时间在变）
+static void update_voice_desk() {
+  static uint32_t last = 0;
+  uint32_t now = millis();
+  if (last && now - last < 30000) return;
+  last = now;
+  DeskInfo d;
+  d.weather = weather_valid ? &weather_data : nullptr;
+  d.room_valid = room_valid;
+  d.room_temp = room_temp;
+  d.room_humidity = room_humidity;
+  d.pomo = &pomo;
+  d.now_ms = now;
+  int day = local_day();
+  d.pomo_today = day >= 0 ? pomo_stats.count(day) : pomo.done_today();
+  d.stocks = &stock_data;
+  d.github = &github_data;
+  voice_set_desk_info(desk_brief(d).c_str());
 }
 
 // SENSOR 底座：雷达决定屏幕亮灭，温湿度显示在时钟页，太热太闷时提醒。没有底座时什么也不做
@@ -873,8 +896,10 @@ static void update_chat() {
   v.level = st.level;
   v.latency_ms = st.latency_ms;
   v.idle_left_ms = st.idle_left_ms;
-  v.heard = st.heard;
-  v.reply = st.reply;
+  static ChatLog chat_log;  // 气泡显示的聊天记录，变了才从语音任务复制过来
+  voice_chat_log(chat_log);
+  v.log = &chat_log;
+  v.spoken = st.spoken;
   v.error = st.error;
   v.has_key = chat_has_key;
   v.wake = st.wake_word;
@@ -1429,11 +1454,16 @@ void loop() {
   if (weather_take_update(w)) {
     ui_set_weather(w);
     on_weather(w);
+    if (!w.error || !weather_valid) {
+      weather_data = w;
+      weather_valid = !w.error;
+    }
   }
 
   if (github_take_update(github_data)) ui_set_github(github_data);
   if (stock_take_update(stock_data)) ui_set_stocks(stock_data);
   update_news();
+  update_voice_desk();
 
   static bool last_wifi = false;
   bool wifi = WiFi.isConnected();
