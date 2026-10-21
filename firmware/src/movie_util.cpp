@@ -91,3 +91,42 @@ void movie_format_time(uint32_t ms, char *out, size_t out_size) {
     snprintf(out, out_size, "%u:%02u", (unsigned)(s / 60), (unsigned)(s % 60));
   }
 }
+
+// 把 s 截到不超过 max 字节，不切在一个汉字中间
+static size_t utf8_cut(const char *s, size_t len, size_t max) {
+  if (len <= max) return len;
+  size_t n = max;
+  while (n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80) n--;
+  return n;
+}
+
+void movie_safe_name(const char *in, const char *fallback, char *out, size_t out_size) {
+  if (out_size == 0) return;
+  out[0] = '\0';
+  if (out_size < 6) return;  // 连「x.avi」都放不下
+  char stem[256];
+  size_t n = 0;
+  for (const char *p = in ? in : ""; *p && n < sizeof(stem) - 1; p++) {
+    unsigned char c = *p;
+    if (c < 0x20 || c == 0x7F || strchr("\\/:*?\"<>|", c)) continue;
+    if (n == 0 && (c == '.' || c == ' ')) continue;
+    stem[n++] = c;
+  }
+  stem[n] = '\0';
+  // 去掉扩展名（.avi 或者别的，比如 .AVI、.mp4.avi 只去最后一个）
+  if (n > 4 && stem[n - 4] == '.' && tolower((unsigned char)stem[n - 3]) == 'a' &&
+      tolower((unsigned char)stem[n - 2]) == 'v' && tolower((unsigned char)stem[n - 1]) == 'i')
+    n -= 4;
+  n = utf8_cut(stem, n, out_size - 5);
+  while (n > 0 && (stem[n - 1] == ' ' || stem[n - 1] == '.')) n--;  // FAT 不认结尾的空格和点
+  if (n == 0) {
+    snprintf(stem, sizeof(stem), "%s", fallback && *fallback ? fallback : "movie");
+    n = utf8_cut(stem, strlen(stem), out_size - 5);
+  }
+  memcpy(out, stem, n);
+  memcpy(out + n, ".avi", 5);
+}
+
+bool movie_is_avi_header(const uint8_t *p, size_t len) {
+  return len >= 12 && memcmp(p, "RIFF", 4) == 0 && memcmp(p + 8, "AVI ", 4) == 0;
+}

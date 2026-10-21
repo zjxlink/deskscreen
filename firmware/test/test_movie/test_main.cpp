@@ -60,11 +60,54 @@ static void test_display_name() {
   TEST_ASSERT_EQUAL_STRING("a.b", t);
 }
 
+static void test_safe_name() {
+  char out[96];
+  movie_safe_name("千与千寻.avi", "x", out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("千与千寻.avi", out);
+  movie_safe_name("Movie.AVI", "x", out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("Movie.avi", out);
+  movie_safe_name("a/b\\c:d*e?f\"g<h>i|j\tk.avi", "x", out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("abcdefghijk.avi", out);
+  movie_safe_name(".. 隐藏 .avi", "x", out, sizeof(out));  // 开头的点和空格、结尾的空格都去掉
+  TEST_ASSERT_EQUAL_STRING("隐藏.avi", out);
+  movie_safe_name("龙猫", "x", out, sizeof(out));  // 没有扩展名时加上
+  TEST_ASSERT_EQUAL_STRING("龙猫.avi", out);
+  movie_safe_name(" . ", "12345", out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("12345.avi", out);
+  movie_safe_name("", "12345", out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("12345.avi", out);
+  movie_safe_name(nullptr, nullptr, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("movie.avi", out);
+  // 太长时截短，不切坏汉字：「一」是 3 个字节，12 字节的 out 放得下 2 个字加 .avi
+  char small[12];
+  movie_safe_name("一二三四五.avi", "x", small, sizeof(small));
+  TEST_ASSERT_EQUAL_STRING("一二.avi", small);
+  movie_safe_name("一二三四五.avi", "x", out, sizeof(out));
+  TEST_ASSERT_TRUE(movie_is_file(out));
+  // 截出来的名字一定能被列表认出来
+  char longname[300];
+  memset(longname, 'a', 250);
+  strcpy(longname + 250, ".avi");
+  movie_safe_name(longname, "x", out, sizeof(out));
+  TEST_ASSERT_EQUAL(95, strlen(out));
+  TEST_ASSERT_TRUE(movie_is_file(out));
+}
+
+static void test_avi_header() {
+  const uint8_t ok[] = {'R', 'I', 'F', 'F', 1, 2, 3, 4, 'A', 'V', 'I', ' '};
+  const uint8_t wav[] = {'R', 'I', 'F', 'F', 1, 2, 3, 4, 'W', 'A', 'V', 'E'};
+  TEST_ASSERT_TRUE(movie_is_avi_header(ok, sizeof(ok)));
+  TEST_ASSERT_FALSE(movie_is_avi_header(ok, 11));
+  TEST_ASSERT_FALSE(movie_is_avi_header(wav, sizeof(wav)));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_is_file);
   RUN_TEST(test_progress);
   RUN_TEST(test_format_time);
   RUN_TEST(test_display_name);
+  RUN_TEST(test_safe_name);
+  RUN_TEST(test_avi_header);
   return UNITY_END();
 }

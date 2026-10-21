@@ -13,11 +13,14 @@
 #include "display.h"
 #include "github.h"
 #include "net.h"
+#include "movie.h"
+#include "movie_util.h"
 #include "news.h"
 #include "night.h"
 #include "ota.h"
 #include "ota_util.h"
 #include "pages.h"
+#include "player.h"
 #include "photos.h"
 #include "settings.h"
 #include "stock.h"
@@ -29,6 +32,8 @@
 static WebServer server(80);
 static bool changed = false;
 static void (*progress_hook)() = nullptr;
+static void (*movie_hook)(uint64_t done, uint64_t total) = nullptr;
+static void (*music_hook)(uint64_t done, uint64_t total) = nullptr;
 static const Pomodoro *pomodoro = nullptr;
 static void (*pomo_cmd)(PomoCmd) = nullptr;
 static const PomoStats *pomo_stats = nullptr;
@@ -129,6 +134,7 @@ static void handle_pair_forget() {
 static bool page_available(int p) {
   if (p == PAGE_CHAT) return voice_available();
   if (p == PAGE_ALBUM || p == PAGE_MOVIE) return photos_supported();
+  if (p == PAGE_MUSIC) return player_supported();
   return true;
 }
 
@@ -632,6 +638,104 @@ static void handle_photo_file() {
   if (!ok) server.send(404, "text/plain", "Not found");
 }
 
+// 影片：TF 卡 movies 文件夹的列表、上传、删除。电脑转好的 .avi 原样传，几百 MB 到几 GB，
+// 收的时候网页服务器一直占着主循环，所以每收一段调一次 movie_hook，让屏幕上显示进度
+static bool movie_ok = false;
+static uint64_t movie_size = 0;
+static char movie_saved[kMovieNameMax];
+
+static void handle_movie_list() {
+  movie_rescan_now();  // 刚用读卡器拷进去的片子也能看到
+  JsonDocument doc;
+  MovieCard c = movie_card();
+  doc["card"] = c == MovieCard::NoSlot ? "noslot" : c == MovieCard::NoCard ? "none" : "ok";
+  uint64_t total = 0, used = 0;
+  if (c != MovieCard::NoSlot && c != MovieCard::NoCard && movie_card_space(total, used)) {
+    doc["total"] = (double)total;  // 字节数可能超过 32 位
+    doc["used"] = (double)used;
+  }
+  JsonArray arr = doc["movies"].to<JsonArray>();
+  MovieInfo m;
+  for (int i = 0; movie_info(i, m); i++) {
+    JsonObject o = arr.add<JsonObject>();
+    o["n"] = m.name;
+    o["d"] = m.dur_ms / 1000;
+    o["p"] = m.pos_ms / 1000;
+  }
+  send_doc(doc);
+}
+
+static void handle_movie_chunk() {
+  HTTPUpload &up = server.upload();
+  if (up.status == UPLOAD_FILE_START) {
+    // 整个请求比文件多出几百字节的表单头，当文件大小用足够了
+    movie_size = strtoull(server.header("Content-Length").c_str(), nullptr, 10);
+    movie_saved[0] = '\0';
+    movie_ok = movie_upload_begin(movie_size);
+    if (movie_hook) movie_hook(0, movie_size);
+  } else if (up.status == UPLOAD_FILE_WRITE && movie_ok) {
+    movie_ok = movie_upload_write(up.buf, up.currentSize);
+    static size_t last_hook = 0;
+    if (movie_hook && (up.totalSize - last_hook >= 256 * 1024 || up.totalSize < last_hook)) {
+      last_hook = up.totalSize;
+      movie_hook(up.totalSize, movie_size);
+    }
+  } else if (up.status == UPLOAD_FILE_END && movie_ok) {
+    movie_ok = movie_upload_end(up.filename.c_str(), movie_saved, sizeof(movie_saved));
+    if (movie_hook) movie_hook(0, 0);
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    if (movie_ok) movie_upload_abort();
+    movie_ok = false;
+    if (movie_hook) movie_hook(0, 0);
+  }
+}
+
+static void handle_movie_done() {
+  if (movie_hook) movie_hook(0, 0);  // 出错时没走到 END，这里也收起进度画面
+  JsonDocument doc;
+  doc["ok"] = movie_ok;
+  if (movie_ok) doc["name"] = movie_saved;
+  else doc["error"] = movie_upload_error();
+  send_doc(doc);
+}
+
+// 音乐：TF 卡 music 文件夹的列表、上传（可以选歌单文件夹）、删除、新建歌单。
+// 一首歌几 MB 到几十 MB，收的时候和影片一样在屏幕上显示进度
+static bool music_ok = false;
+static uint64_t music_size = 0;
+static char music_saved[kTrackPathMax];
+
+static void handle_music_chunk() {
+  HTTPUpload &up = server.upload();
+  if (up.status == UPLOAD_FILE_START) {
+    music_size = strtoull(server.header("Content-Length").c_str(), nullptr, 10);
+    music_saved[0] = '\0';
+    music_ok = player_upload_begin(server.arg("folder").c_str(), music_size);
+    if (music_hook) music_hook(0, music_size);
+  } else if (up.status == UPLOAD_FILE_WRITE && music_ok) {
+    music_ok = player_upload_write(up.buf, up.currentSize);
+    static size_t last_hook = 0;
+    if (music_hook && (up.totalSize - last_hook >= 128 * 1024 || up.totalSize < last_hook)) {
+      last_hook = up.totalSize;
+      music_hook(up.totalSize, music_size);
+    }
+  } else if (up.status == UPLOAD_FILE_END && music_ok) {
+    music_ok = player_upload_end(up.filename.c_str(), music_saved, sizeof(music_saved));
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    if (music_ok) player_upload_abort();
+    music_ok = false;
+  }
+}
+
+static void handle_music_done() {
+  if (music_hook) music_hook(0, 0);  // 收完、出错都收起进度画面
+  JsonDocument doc;
+  doc["ok"] = music_ok;
+  if (music_ok) doc["name"] = music_saved;
+  else doc["error"] = player_upload_error();
+  send_doc(doc);
+}
+
 static void handle_reset_wifi() {
   send_ok();
   delay(500);
@@ -679,6 +783,35 @@ void web_config_begin() {
     photo_name = "";
     send_json(photos_delete(source_arg(), server.arg("name")), "删除失败");
   }));
+  server.on("/movies/list", HTTP_GET, guard(handle_movie_list));
+  server.on("/movies/upload", HTTP_POST, guard(handle_movie_done), guard_upload(handle_movie_chunk));
+  server.on("/movies/delete", HTTP_POST, guard([] {
+    JsonDocument doc;
+    bool ok = movie_delete(server.arg("name").c_str());
+    doc["ok"] = ok;
+    if (!ok) doc["error"] = "删除失败";
+    send_doc(doc);
+  }));
+  server.on("/music/list", HTTP_GET, guard([] {
+    String out;
+    player_list_json(out);
+    server.send(200, "application/json", out);
+  }));
+  server.on("/music/upload", HTTP_POST, guard(handle_music_done), guard_upload(handle_music_chunk));
+  server.on("/music/delete", HTTP_POST, guard([] {
+    JsonDocument doc;
+    bool ok = player_delete(server.arg("name").c_str());
+    doc["ok"] = ok;
+    if (!ok) doc["error"] = "删除失败";
+    send_doc(doc);
+  }));
+  server.on("/music/mkdir", HTTP_POST, guard([] {
+    JsonDocument doc;
+    bool ok = player_mkdir(server.arg("name").c_str());
+    doc["ok"] = ok;
+    if (!ok) doc["error"] = "建不了这个歌单，换个名字试试";
+    send_doc(doc);
+  }));
   const char *headers[] = {"Content-Length", "Cookie", "X-Auth-Token"};
   server.collectHeaders(headers, 3);
   server.onNotFound([] { server.send(404, "text/plain", "Not found"); });
@@ -717,6 +850,14 @@ bool web_config_pair_active() {
 
 void web_config_set_progress_hook(void (*hook)()) {
   progress_hook = hook;
+}
+
+void web_config_set_movie_hook(void (*hook)(uint64_t done, uint64_t total)) {
+  movie_hook = hook;
+}
+
+void web_config_set_music_hook(void (*hook)(uint64_t done, uint64_t total)) {
+  music_hook = hook;
 }
 
 bool web_config_take_changed() {
