@@ -9,6 +9,8 @@
 #include "display.h"
 #include "github.h"
 #include "net.h"
+#include "movie.h"
+#include "movie_util.h"
 #include "news.h"
 #include "night.h"
 #include "ota.h"
@@ -24,6 +26,7 @@
 static WebServer server(80);
 static bool changed = false;
 static void (*progress_hook)() = nullptr;
+static void (*movie_hook)(uint64_t done, uint64_t total) = nullptr;
 static const Pomodoro *pomodoro = nullptr;
 static void (*pomo_cmd)(PomoCmd) = nullptr;
 static const PomoStats *pomo_stats = nullptr;
@@ -538,6 +541,67 @@ static void handle_photo_file() {
   if (!ok) server.send(404, "text/plain", "Not found");
 }
 
+// 影片：TF 卡 movies 文件夹的列表、上传、删除。电脑转好的 .avi 原样传，几百 MB 到几 GB，
+// 收的时候网页服务器一直占着主循环，所以每收一段调一次 movie_hook，让屏幕上显示进度
+static bool movie_ok = false;
+static uint64_t movie_size = 0;
+static char movie_saved[kMovieNameMax];
+
+static void handle_movie_list() {
+  movie_rescan_now();  // 刚用读卡器拷进去的片子也能看到
+  JsonDocument doc;
+  MovieCard c = movie_card();
+  doc["card"] = c == MovieCard::NoSlot ? "noslot" : c == MovieCard::NoCard ? "none" : "ok";
+  uint64_t total = 0, used = 0;
+  if (c != MovieCard::NoSlot && c != MovieCard::NoCard && movie_card_space(total, used)) {
+    doc["total"] = (double)total;  // 字节数可能超过 32 位
+    doc["used"] = (double)used;
+  }
+  JsonArray arr = doc["movies"].to<JsonArray>();
+  MovieInfo m;
+  for (int i = 0; movie_info(i, m); i++) {
+    JsonObject o = arr.add<JsonObject>();
+    o["n"] = m.name;
+    o["d"] = m.dur_ms / 1000;
+    o["p"] = m.pos_ms / 1000;
+  }
+  send_doc(doc);
+}
+
+static void handle_movie_chunk() {
+  HTTPUpload &up = server.upload();
+  if (up.status == UPLOAD_FILE_START) {
+    // 整个请求比文件多出几百字节的表单头，当文件大小用足够了
+    movie_size = strtoull(server.header("Content-Length").c_str(), nullptr, 10);
+    movie_saved[0] = '\0';
+    movie_ok = movie_upload_begin(movie_size);
+    if (movie_hook) movie_hook(0, movie_size);
+  } else if (up.status == UPLOAD_FILE_WRITE && movie_ok) {
+    movie_ok = movie_upload_write(up.buf, up.currentSize);
+    static size_t last_hook = 0;
+    if (movie_hook && (up.totalSize - last_hook >= 256 * 1024 || up.totalSize < last_hook)) {
+      last_hook = up.totalSize;
+      movie_hook(up.totalSize, movie_size);
+    }
+  } else if (up.status == UPLOAD_FILE_END && movie_ok) {
+    movie_ok = movie_upload_end(up.filename.c_str(), movie_saved, sizeof(movie_saved));
+    if (movie_hook) movie_hook(0, 0);
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    if (movie_ok) movie_upload_abort();
+    movie_ok = false;
+    if (movie_hook) movie_hook(0, 0);
+  }
+}
+
+static void handle_movie_done() {
+  if (movie_hook) movie_hook(0, 0);  // 出错时没走到 END，这里也收起进度画面
+  JsonDocument doc;
+  doc["ok"] = movie_ok;
+  if (movie_ok) doc["name"] = movie_saved;
+  else doc["error"] = movie_upload_error();
+  send_doc(doc);
+}
+
 static void handle_reset_wifi() {
   send_ok();
   delay(500);
@@ -580,6 +644,15 @@ void web_config_begin() {
     photo_name = "";
     send_json(photos_delete(source_arg(), server.arg("name")), "删除失败");
   });
+  server.on("/movies/list", HTTP_GET, handle_movie_list);
+  server.on("/movies/upload", HTTP_POST, handle_movie_done, handle_movie_chunk);
+  server.on("/movies/delete", HTTP_POST, [] {
+    JsonDocument doc;
+    bool ok = movie_delete(server.arg("name").c_str());
+    doc["ok"] = ok;
+    if (!ok) doc["error"] = "删除失败";
+    send_doc(doc);
+  });
   const char *headers[] = {"Content-Length"};
   server.collectHeaders(headers, 1);
   server.onNotFound([] { server.send(404, "text/plain", "Not found"); });
@@ -610,6 +683,10 @@ void web_config_set_room_info(void (*hook)(RoomInfo &info)) {
 
 void web_config_set_progress_hook(void (*hook)()) {
   progress_hook = hook;
+}
+
+void web_config_set_movie_hook(void (*hook)(uint64_t done, uint64_t total)) {
+  movie_hook = hook;
 }
 
 bool web_config_take_changed() {

@@ -24,3 +24,10 @@ void movie_format_time(uint32_t ms, char *out, size_t out_size);
 
 // 看到哪里的记录离结尾不到这么久，就算看完了，下次从头放
 static constexpr uint32_t kMovieEndSlackMs = 30000;
+
+// 网页上传的影片存成什么文件名：保留中文，去掉 FAT 不认的字符（\ / : * ? " < > | 和控制字符）、开头的点和空格，
+// 统一以 .avi 结尾，整个名字不超过 out_size - 1 字节（不切坏汉字）。去完什么都不剩时用 fallback 当片名
+void movie_safe_name(const char *in, const char *fallback, char *out, size_t out_size);
+
+// 文件开头是不是 AVI（「RIFF」+ 4 字节长度 +「AVI 」）
+bool movie_is_avi_header(const uint8_t *p, size_t len);

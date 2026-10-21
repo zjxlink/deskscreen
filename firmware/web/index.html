@@ -114,6 +114,9 @@ textarea.txt{height:76px;padding:10px 12px;resize:none}
 .drop svg{width:28px;height:28px;color:var(--ink)}
 .drop input{position:absolute;inset:0;opacity:0;cursor:pointer}
 .ch ~ .drop,.ch ~ .bar{border-top:0}
+.mvl .row + .row{border-top:1px solid var(--line)}
+.mvl small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mvl b{overflow-wrap:anywhere}
 .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;padding:4px 16px 16px}
 .ph{position:relative;aspect-ratio:4/3;border-radius:10px;background:var(--field);overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--sub);text-align:center;word-break:break-all;padding:4px}
 .ph img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
@@ -215,6 +218,24 @@ nav a.on{color:var(--ink);font-weight:600}
 </section>
 </section>
 
+<section class="panel" id="p_movies" hidden>
+<section class="card">
+<div class="ch"><h2>TF 卡</h2><span class="meta" id="mvUse"></span></div>
+<div class="bar" id="mvBar"><i></i></div>
+<p class="hint" id="mvNote"></p>
+</section>
+<section class="card" id="mvUp" hidden>
+<div class="ch"><h2>上传影片</h2></div>
+<label class="drop"><span data-ic="film"></span><b>选择转好的 .avi 文件</b><span>一次能选多个，原样传到 movies 文件夹</span><input type="file" id="mvFiles" accept=".avi,video/x-msvideo,video/avi" multiple></label>
+<div class="bar" id="mvUpBar" hidden><i></i></div>
+<p class="hint" id="mvMsg">只收电脑上用转换工具转好的 .avi（MJPEG 画面 + 16kHz 声音），别的格式板子放不了。<br>走 WiFi 传比较慢，一部一两 GB 的电影可能要十几到几十分钟；传的时候板子屏幕显示进度，别的功能先停着。请保持这个页面打开、手机或电脑别休眠。片子很大时用读卡器直接拷更快。</p>
+</section>
+<section class="card" id="mvCard" hidden>
+<div class="ch"><h2 id="mvCount"></h2></div>
+<div class="mvl" id="mvList"></div>
+</section>
+</section>
+
 </main>
 </form>
 <div class="dock">
@@ -249,13 +270,14 @@ theme:'<circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 0 0 16z" fill="curr
 pulse:'<path d="M3 12h4l3-8 4 16 3-8h4"/>',
 music:'<path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>',
 news:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/>',
-left:'<path d="M15 5l-7 7 7 7"/>'};
+left:'<path d="M15 5l-7 7 7 7"/>',
+film:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/>'};
 const ic=n=>P+ICONS[n]+'</svg>';
 
 // 底部导航的分区。超过 5 个时手机上会挤，到时候加一个「应用」分区收纳
 const TABS=[['home','概览','home'],['display','显示','screen'],['services','服务','cloud'],['remind','提醒','bell'],['system','系统','sliders']];
 // 不在导航里的子页面：[id, 标题, 返回到哪个分区]
-const SUBS={album:['相册','display']};
+const SUBS={album:['相册','display'],movies:['影片','display']};
 
 // 设置卡片：t 放在哪个分区，sw 标题栏右边的总开关，f 字段（k 是提交给 /save 的名字）。
 // 加新功能的设置时在这里加一张卡片，固件的 /api/settings 和 /save 加上同名字段即可
@@ -289,6 +311,9 @@ const CARDS=[
  {type:'sw',k:'saver_on',label:'空闲时播放相册（屏保）'},
  {type:'num',k:'saver_min',label:'多久没碰屏幕算空闲',unit:'分钟'}],
  hint:'两个来源都打开时交替播放。必应的图片每天一张，卡里最多存 60 张，满了先删最早的；没插 TF 卡时只放当天这一张。图片版权归必应和摄影师，自己看没问题，别拿去分发。<br>切到屏幕上的「相册」页会一直播放。屏保：碰一下屏幕或按 BOOT 键回到原来的页面；番茄钟进行中、夜间时段和没人熄屏时不会启动。'},
+{t:'display',title:'影片',icon:'film',f:[
+ {type:'html',html:'<a class="album" href="#movies"><span class="l"><b id="mvSum">影片</b><small id="mvSub">电脑转好的 .avi 存在 TF 卡的 movies 文件夹里</small></span><span class="go">上传 / 管理 ›</span></a>'}],
+ hint:'先用电脑上的转换工具（<b>tools/movie</b> 里的「转换影片.bat」）把电影转成 .avi，再在这里传到板子上，或者用读卡器直接拷进 TF 卡的 movies 文件夹。'},
 {t:'services',title:'天气',icon:'cloud',meta:'Open-Meteo',f:[
  {type:'html',html:'<div class="fld"><label class="lab" for="f_city">城市（显示在屏幕上）</label><div class="inl"><input class="txt" id="f_city" name="city" maxlength="16"><button type="button" class="btn g" id="geo">查坐标</button></div><div class="res" id="results"></div></div>'},
  {type:'two',f:[{k:'lat',label:'纬度',dec:1},{k:'lon',label:'经度',dec:1}]}],
@@ -383,6 +408,7 @@ function route(){
  $('back').hidden=!sub;$('logo').toggleAttribute('hidden',!!sub);
  if(sub){$('back').href='#'+sub[1];$('back').innerHTML=ic('left')+TABS.find(t=>t[0]===sub[1])[1];}
  if(id==='album')loadAlbum();
+ if(id==='movies')loadMovies();
  scrollTo(0,0);
 }
 addEventListener('hashchange',route);
@@ -807,6 +833,76 @@ $('files').onchange=async()=>{
  mark();
  show('上传了 '+ok+' 个'+(cut.length?'，'+cut.join('、')+' 超过 5 分钟，只保留了前 5 分钟':'')+(mute.length?'，'+mute.join('、')+' 没读出声音，只有画面':'')+(bad.length?'，失败：'+bad.join('，'):''));
  $('files').value='';loadAlbum();
+};
+
+// ---- 影片 ----
+function hms(s){const h=Math.floor(s/3600),m=Math.floor(s/60)%60,x=String(s%60).padStart(2,'0');return h?h+':'+String(m).padStart(2,'0')+':'+x:m+':'+x;}
+let mvFree=Infinity,mvBusy=false;
+async function loadMovies(){
+ let j;
+ try{j=await (await fetch('/movies/list')).json();}catch(e){$('mvNote').textContent='读取失败，刷新页面再试';return;}
+ const ok=j.card==='ok',list=j.movies||[];
+ $('mvUp').hidden=$('mvBar').hidden=!ok;$('mvCard').hidden=!ok||!list.length;
+ $('mvSum').textContent=ok?list.length+' 部影片':j.card==='noslot'?'这块板子没有 TF 卡槽':'没有检测到 TF 卡';
+ if(!ok){$('mvUse').textContent='';$('mvNote').textContent=j.card==='noslot'?'这块板子没有 TF 卡槽，放不了影片。':'没有检测到 TF 卡。请插入 FAT32 格式的 TF 卡（32GB 以内的卡出厂就是 FAT32），插好后刷新这个页面。';return;}
+ if(j.total){
+  mvFree=j.total-j.used;
+  $('mvUse').textContent='已用 '+fmt(j.used)+' / 共 '+fmt(j.total);
+  $('mvBar').firstChild.style.width=Math.max(1,Math.round(j.used*100/j.total))+'%';
+  $('mvSub').textContent='TF 卡剩余 '+fmt(mvFree);
+ }
+ $('mvNote').textContent='影片存在卡里的 movies 文件夹，板子上翻到「影片」页就能看。FAT32 的卡单个文件最大 4 GB。'+(list.length?'':'现在还没有影片。');
+ $('mvCount').textContent=list.length+' 部影片';
+ const box=$('mvList');box.textContent='';
+ for(const m of list){
+  const r=document.createElement('div');r.className='row';
+  const l=document.createElement('span');l.className='l';
+  const b=document.createElement('b');b.textContent=m.n.replace(/\.avi$/i,'');
+  const sm=document.createElement('small');sm.textContent=(m.d?'时长 '+hms(m.d):'读不出时长')+(m.p?' · 看到 '+hms(m.p):'');
+  l.append(b,sm);
+  const x=document.createElement('button');x.type='button';x.className='btn g s';x.textContent='删除';x.setAttribute('aria-label','删除 '+m.n);
+  x.onclick=async()=>{if(mvBusy)return toast('正在上传，传完再删');if(!confirm('从 TF 卡删除「'+b.textContent+'」？'))return;
+   try{if(!(await post('movies/delete',new URLSearchParams({name:m.n}))).ok)toast('删除失败');}catch(e){toast('删除失败');}loadMovies();};
+  r.append(l,x);box.appendChild(r);
+ }
+}
+async function aviHead(f){const b=new Uint8Array(await f.slice(0,12).arrayBuffer());const t=String.fromCharCode(...b);return t.slice(0,4)==='RIFF'&&t.slice(8)==='AVI ';}
+function mvUpload(f,onp){
+ return new Promise((ok,no)=>{
+  const fd=new FormData();fd.append('movie',f,f.name);
+  const x=new XMLHttpRequest();x.open('POST','/movies/upload');
+  x.upload.onprogress=e=>{if(e.lengthComputable)onp(e.loaded,e.total);};
+  x.onload=()=>{try{ok(JSON.parse(x.responseText));}catch(e){no(err('板子没有回应'));}};
+  x.onerror=()=>no(err('网络断了'));
+  x.send(fd);
+ });
+}
+addEventListener('beforeunload',e=>{if(mvBusy){e.preventDefault();e.returnValue='';}});
+$('mvFiles').onchange=async()=>{
+ const files=[...$('mvFiles').files];if(!files.length||mvBusy)return;
+ const show=(t,p)=>{$('mvMsg').textContent=t;$('mvUpBar').hidden=p===undefined;if(p!==undefined)$('mvUpBar').firstChild.style.width=Math.round(p*100)+'%';};
+ let ok=0,lock=null;const bad=[];
+ mvBusy=true;
+ try{lock=await navigator.wakeLock.request('screen');}catch(e){}  // 传的时候别锁屏
+ for(let i=0;i<files.length;i++){
+  const f=files[i],tag=files.length>1?'（'+(i+1)+' / '+files.length+'）':'';
+  try{
+   if(!/\.avi$/i.test(f.name)||!await aviHead(f)){bad.push(f.name+'（不是 .avi，请先用电脑上的转换工具转换）');continue;}
+   if(f.size>=4294967295){bad.push(f.name+'（超过 4 GB，FAT32 的卡存不下）');continue;}
+   if(f.size+1048576>mvFree){bad.push(f.name+'（TF 卡空间不够）');continue;}
+   const t0=Date.now();
+   show('正在上传「'+f.name+'」'+tag+'…',0);
+   const j=await mvUpload(f,(d,t)=>{
+    const sec=(Date.now()-t0)/1000,rate=d/Math.max(sec,0.1),left=rate>0?(t-d)/rate:0;
+    show('正在上传「'+f.name+'」'+tag+' '+Math.round(d*100/t)+'%，'+(rate/1048576).toFixed(1)+' MB/秒'+(sec>3&&d<t?'，还要大约 '+(left>=60?Math.ceil(left/60)+' 分钟':Math.ceil(left)+' 秒'):'')+'。请不要关闭这个页面。',d/t);
+   });
+   if(j.ok){ok++;mvFree-=f.size;}else bad.push(f.name+'（'+j.error+'）');
+  }catch(e){bad.push(f.name+'（'+(e.cn||'上传失败')+'）');}
+ }
+ mvBusy=false;
+ if(lock)lock.release().catch(()=>{});
+ show('上传了 '+ok+' 部'+(bad.length?'，失败：'+bad.join('，'):'')+'。');
+ $('mvFiles').value='';loadMovies();
 };
 
 // 上次上传时网页被重新加载了：回到相册页，说明原因

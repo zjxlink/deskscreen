@@ -1401,6 +1401,28 @@ void setup() {
     update_ota_screen();
     ui_refresh_now();
   });
+  // 网页上传影片：收的时候主循环停着，屏幕上显示进度；收完回到原来的页面
+  web_config_set_movie_hook([](uint64_t done, uint64_t total) {
+    static bool showing = false;
+    if (total == 0) {
+      if (!showing) return;
+      showing = false;
+      if (alert_on) {
+        close_alert();  // 提醒的内容已经被进度画面盖掉了，直接回到页面
+      } else {
+        ui_show_page(screen.page(), false);
+      }
+      ui_refresh_now();
+      return;
+    }
+    showing = true;
+    quick_on = false;
+    game_on = false;
+    char detail[48];
+    snprintf(detail, sizeof(detail), "%u / %u MB", (unsigned)(done >> 20), (unsigned)(total >> 20));
+    ui_show_progress("正在接收影片", detail, (int)(done * 100 / total));
+    ui_refresh_now();
+  });
   weather_begin();
   github_begin();
   stock_begin();
