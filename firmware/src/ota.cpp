@@ -5,6 +5,7 @@
 #include <Update.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <esp_ota_ops.h>
 #include <time.h>
 
 #include "board.h"
@@ -38,6 +39,29 @@ static OtaManifest manifest;
 static bool auto_ok = false;  // 只有正式版本之间的升级才自动安装
 static size_t upload_done = 0;
 static size_t upload_total = 0;
+
+// ---- 升级后自检：新固件启动后要稳定运行一段时间才算数，之前重启（崩溃、看门狗、死循环）就退回旧固件 ----
+// Arduino 默认一开机就确认新固件，这里改成稍后由 ota_confirm_tick 确认
+extern "C" bool verifyRollbackLater() { return true; }
+
+static constexpr uint32_t kConfirmAfterMs = 30000;
+static bool confirm_pending = true;
+
+void ota_confirm_tick(uint32_t now_ms) {
+  if (!confirm_pending || now_ms < kConfirmAfterMs) return;
+  confirm_pending = false;
+  esp_ota_img_states_t state;
+  const esp_partition_t *running = esp_ota_get_running_partition();
+  if (esp_ota_get_state_partition(running, &state) == ESP_OK && state == ESP_OTA_IMG_PENDING_VERIFY) {
+    esp_ota_mark_app_valid_cancel_rollback();
+    Serial.println("[OTA] 新固件运行正常，已确认，不再回滚");
+  }
+}
+
+bool ota_rolled_back() {
+  const esp_partition_t *last = esp_ota_get_last_invalid_partition();
+  return last != nullptr;
+}
 
 const char *ota_current_version() {
   return FW_VERSION;
