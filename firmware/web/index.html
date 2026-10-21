@@ -292,8 +292,10 @@ const CARDS=[
  hint:'A 股写 6 位代码，指数和深市代码冲突时加前缀，如 <b>sh000001</b> 是上证指数；港股写 5 位代码（如 00700）；美股写代码（如 AAPL）。ETF 和股票写法一样。数据来自东方财富，交易时段每 30 秒刷新。'},
 {t:'services',title:'AI 语音聊天',icon:'mic',meta:'has_ai',f:[
  {type:'secret',k:'ai_key',clear:'ai_clear',label:'阿里云百炼 API Key',ph:'sk-...'},
- {type:'two',f:[{k:'ai_model',label:'模型'},{k:'ai_voice',label:'音色'}]}],
- hint:'在「AI 聊天」页按住麦克风按钮说话，松手后小橘用语音回答。Key 在 <a href="https://bailian.console.aliyun.com/" target="_blank">阿里云百炼控制台</a> 的「API Key」里创建（北京地域），按用量计费。模型默认 qwen3-omni-flash；音色默认 Cherry（女声），也可以填 Ethan（男声）等。'},
+ {type:'two',f:[{k:'ai_model',label:'模型'},{k:'ai_voice',label:'音色'}]},
+ {type:'sw',k:'wake_on',label:'喊「喵喵同学」开始聊天',sub:'在哪一页都行，屏幕熄了也会亮起来；声音只在设备上识别'},
+ {type:'sw',k:'barge_on',label:'说话打断',sub:'小橘说话时直接开口就能插话，不用点屏幕'}],
+ hint:'喊「喵喵同学」或在「AI 聊天」页点「开始聊天」，之后直接说话就行，说完小橘自动回答，可以一直聊下去；小橘说话时点「打断」或直接开口插话，20 秒没人说话自动挂断。Key 在 <a href="https://bailian.console.aliyun.com/" target="_blank">阿里云百炼控制台</a> 的「API Key」里创建（北京地域），按用量计费。模型默认 qwen3-omni-flash（实时对话自动用它的 -realtime 版本）；音色默认 Cherry（女声），也可以填 Ethan（男声）等。'},
 {t:'remind',title:'番茄钟',icon:'timer',f:[
  {type:'num',k:'pomo_focus',label:'专注',unit:'分钟'},
  {type:'num',k:'pomo_short',label:'短休息',unit:'分钟'},

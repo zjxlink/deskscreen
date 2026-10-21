@@ -51,6 +51,8 @@ void settings_begin() {
   current.ai_key = prefs.getString("ai_key", "");
   current.ai_model = prefs.getString("ai_model", "qwen3-omni-flash");
   current.ai_voice = prefs.getString("ai_voice", "Cherry");
+  current.wake_on = prefs.getBool("wake_on", true);
+  current.barge_on = prefs.getBool("barge_on", true);
   current.album_sec = prefs.getUChar("album_sec", 10);
   current.album_shuffle = prefs.getBool("album_shuf", true);
   current.saver_on = prefs.getBool("saver_on", false);
@@ -113,6 +115,8 @@ void settings_save(const Settings &s) {
   prefs.putString("ai_key", s.ai_key);
   prefs.putString("ai_model", s.ai_model);
   prefs.putString("ai_voice", s.ai_voice);
+  prefs.putBool("wake_on", s.wake_on);
+  prefs.putBool("barge_on", s.barge_on);
   prefs.putUChar("album_sec", s.album_sec);
   prefs.putBool("album_shuf", s.album_shuffle);
   prefs.putBool("saver_on", s.saver_on);

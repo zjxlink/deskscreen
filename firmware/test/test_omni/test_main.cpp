@@ -1,11 +1,14 @@
-// AI 语音聊天协议的单元测试：在电脑上运行：pio test -e native
+// AI 语音聊天协议（百炼实时接口、WebSocket）的单元测试：在电脑上运行：pio test -e native
 #include <ArduinoJson.h>
 #include <unity.h>
 
 #include <string>
 #include <vector>
 
+#include "audio_sync.h"
 #include "omni.h"
+#include "realtime.h"
+#include "ws.h"
 
 void setUp() {}
 void tearDown() {}
@@ -48,36 +51,6 @@ static void test_base64_split_and_padded_chunks() {
   TEST_ASSERT_EQUAL_STRING("abcdef", got.c_str());
 }
 
-static void test_wav_header() {
-  uint8_t h[44];
-  wav_header(h, 16000, 16000);
-  TEST_ASSERT_EQUAL_MEMORY("RIFF", h, 4);
-  TEST_ASSERT_EQUAL_MEMORY("WAVEfmt ", h + 8, 8);
-  TEST_ASSERT_EQUAL_MEMORY("data", h + 36, 4);
-  uint32_t data = h[40] | h[41] << 8 | h[42] << 16 | (uint32_t)h[43] << 24;
-  TEST_ASSERT_EQUAL_UINT32(32000, data);
-  uint32_t rate = h[24] | h[25] << 8 | h[26] << 16;
-  TEST_ASSERT_EQUAL_UINT32(16000, rate);
-  TEST_ASSERT_EQUAL(1, h[22]);  // 单声道
-  TEST_ASSERT_EQUAL(16, h[34]);
-}
-
-static void test_normalize() {
-  int16_t quiet[4] = {100, -200, 50, 0};
-  pcm_normalize(quiet, 4, 8);
-  TEST_ASSERT_EQUAL(800, quiet[0]);  // 最多放大 8 倍
-  TEST_ASSERT_EQUAL(-1600, quiet[1]);
-  int16_t mid[2] = {5000, -2000};
-  pcm_normalize(mid, 2, 8);
-  TEST_ASSERT_INT_WITHIN(150, 23000, mid[0]);
-  int16_t loud[2] = {30000, -32768};
-  pcm_normalize(loud, 2, 8);
-  TEST_ASSERT_EQUAL(30000, loud[0]);  // 已经够响就不动
-  int16_t silent[3] = {0, 0, 0};
-  pcm_normalize(silent, 3, 8);
-  TEST_ASSERT_EQUAL(0, silent[1]);
-}
-
 static void test_resample_24k_to_16k() {
   // 一个 24kHz 的斜坡，分几段喂，输出个数是 2/3，数值仍在斜坡上
   std::vector<int16_t> in(2400);
@@ -95,23 +68,6 @@ static void test_resample_24k_to_16k() {
     float expect = (k * 1.5f - 1) * 10;
     TEST_ASSERT_INT_WITHIN(2, (int)expect, out[k]);
   }
-}
-
-static void test_request_body() {
-  OmniRequest r = omni_request("qwen3-omni-flash", "Cherry", "你是\"小橘\"");
-  std::string json = r.head + enc("RIFFxx") + r.tail;
-  JsonDocument doc;
-  TEST_ASSERT_FALSE(deserializeJson(doc, json));
-  TEST_ASSERT_EQUAL_STRING("qwen3-omni-flash", doc["model"]);
-  TEST_ASSERT_TRUE(doc["stream"].as<bool>());
-  TEST_ASSERT_EQUAL_STRING("audio", doc["modalities"][1]);
-  TEST_ASSERT_EQUAL_STRING("Cherry", doc["audio"]["voice"]);
-  TEST_ASSERT_EQUAL_STRING("你是\"小橘\"", doc["messages"][0]["content"]);
-  JsonObject a = doc["messages"][1]["content"][0];
-  TEST_ASSERT_EQUAL_STRING("input_audio", a["type"]);
-  TEST_ASSERT_EQUAL_STRING("wav", a["input_audio"]["format"]);
-  std::string data = a["input_audio"]["data"].as<std::string>();
-  TEST_ASSERT_TRUE(data == "data:;base64," + enc("RIFFxx"));
 }
 
 static void test_http_head() {
@@ -133,25 +89,6 @@ static void test_http_head() {
   TEST_ASSERT_FALSE(e.chunked());
 }
 
-static void test_chunked() {
-  std::string body = "5\r\nhello\r\nb;ext=1\r\n, xiaoju!!!\r\n0\r\n\r\n";
-  // 一个字节一个字节地喂，也能拼对
-  ChunkedDecoder d;
-  std::string out;
-  for (char c : body) {
-    char buf[2];
-    size_t n = d.feed(&c, 1, buf);
-    out.append(buf, n);
-  }
-  TEST_ASSERT_EQUAL_STRING("hello, xiaoju!!!", out.c_str());
-  TEST_ASSERT_TRUE(d.done());
-  // 整段一次喂
-  ChunkedDecoder d2;
-  std::vector<char> buf(body.size());
-  size_t n = d2.feed(body.data(), body.size(), buf.data());
-  TEST_ASSERT_EQUAL_STRING("hello, xiaoju!!!", std::string(buf.data(), n).c_str());
-}
-
 struct Pcm {
   std::vector<int16_t> samples;
 };
@@ -161,63 +98,219 @@ static void collect(const int16_t *pcm, size_t n, void *ctx) {
   p->samples.insert(p->samples.end(), pcm, pcm + n);
 }
 
-static std::string sse_audio(const std::string &bytes) {
-  return "data: {\"choices\":[{\"delta\":{\"audio\":{\"data\":\"" + enc(bytes) + "\"}}}]}\n\n";
+static void test_ws_handshake() {
+  std::string r = ws_handshake("dashscope.aliyuncs.com", "/api-ws/v1/realtime?model=m", "dGhlIHNhbXBsZSBub25jZQ==",
+                               "Authorization: Bearer sk\r\n");
+  TEST_ASSERT_EQUAL_STRING(
+      "GET /api-ws/v1/realtime?model=m HTTP/1.1\r\nHost: dashscope.aliyuncs.com\r\nUpgrade: websocket\r\n"
+      "Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n"
+      "Authorization: Bearer sk\r\n\r\n",
+      r.c_str());
 }
 
-static void test_stream_audio_and_text() {
+// 把客户端发的帧当成服务器收到的来解，验证帧头和掩码
+struct Msgs {
+  std::vector<std::pair<uint8_t, std::string>> list;
+};
+
+static void on_msg(uint8_t op, std::string &payload, void *ctx) {
+  ((Msgs *)ctx)->list.push_back({op, payload});
+}
+
+static std::string client_frame(uint8_t op, const std::string &payload) {
+  const uint8_t mask[4] = {0x12, 0x34, 0x56, 0x78};
+  uint8_t head[14];
+  size_t hn = ws_frame_header(op, payload.size(), mask, head);
+  std::string body = payload;
+  // 分两段加掩码，和固件里分块发送一样
+  size_t half = body.size() / 2;
+  ws_mask((uint8_t *)&body[0], half, mask, 0);
+  ws_mask((uint8_t *)&body[half], body.size() - half, mask, half);
+  return std::string((const char *)head, hn) + body;
+}
+
+static void test_ws_frame_sizes() {
+  for (size_t len : {0u, 5u, 125u, 126u, 4268u, 65535u, 65536u, 200000u}) {
+    std::string payload(len, 'a');
+    for (size_t i = 0; i < len; i++) payload[i] = (char)('a' + i % 26);
+    std::string f = client_frame(kWsText, payload);
+    size_t expect_head = (len < 126 ? 2 : len < 65536 ? 4 : 10) + 4;
+    TEST_ASSERT_EQUAL((int)(expect_head + len), (int)f.size());
+    TEST_ASSERT_EQUAL(0x81, (uint8_t)f[0]);
+    Msgs m;
+    WsReader r(1 << 20);
+    // 一个字节一个字节地喂也能拼回来（大的就整段喂）
+    if (len < 300) {
+      for (char c : f) TEST_ASSERT_TRUE(r.feed((const uint8_t *)&c, 1, on_msg, &m));
+    } else {
+      TEST_ASSERT_TRUE(r.feed((const uint8_t *)f.data(), f.size(), on_msg, &m));
+    }
+    TEST_ASSERT_EQUAL(1, (int)m.list.size());
+    TEST_ASSERT_EQUAL(kWsText, m.list[0].first);
+    TEST_ASSERT_TRUE(m.list[0].second == payload);
+  }
+}
+
+static void test_ws_server_frames() {
+  // 服务器的帧没有掩码：一条分成两片的文本，中间夹一个 ping，后面再来一条短消息
   std::string s;
-  s += "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\n";
-  s += "data: {\"choices\":[{\"delta\":{\"audio\":{\"transcript\":\"你好\"}}}]}\n\n";
-  // 一个采样被拆在两块里
-  s += sse_audio(std::string("\x01\x00\x02", 3));
-  s += sse_audio(std::string("\x00\xff\xff", 3));
-  s += "data: {\"choices\":[{\"delta\":{\"audio\":{\"transcript\":\"，我是小橘\"}}}]}\r\n\r\n";
-  s += "data: {\"choices\":[],\"usage\":{\"total_tokens\":10}}\n\n";
-  s += "data: [DONE]\n\n";
+  s += std::string("\x01\x03" "abc", 5);       // 文本，未完
+  s += std::string("\x89\x02" "hi", 4);        // ping
+  s += std::string("\x80\x02" "de", 4);        // 续片，完
+  s += std::string("\x81\x7e\x00\x80", 4) + std::string(128, 'x');  // 128 字节，用 2 字节长度
+  s += std::string("\x88\x02\x03\xe8", 4);     // close 1000
+  Msgs m;
+  WsReader r(1024);
+  for (size_t i = 0; i < s.size(); i += 3) {
+    TEST_ASSERT_TRUE(r.feed((const uint8_t *)s.data() + i, s.size() - i < 3 ? s.size() - i : 3, on_msg, &m));
+  }
+  TEST_ASSERT_EQUAL(4, (int)m.list.size());
+  TEST_ASSERT_EQUAL(kWsPing, m.list[0].first);
+  TEST_ASSERT_EQUAL_STRING("hi", m.list[0].second.c_str());
+  TEST_ASSERT_EQUAL(kWsText, m.list[1].first);
+  TEST_ASSERT_EQUAL_STRING("abcde", m.list[1].second.c_str());
+  TEST_ASSERT_EQUAL(128, (int)m.list[2].second.size());
+  TEST_ASSERT_EQUAL(kWsClose, m.list[3].first);
+}
+
+static void test_ws_too_big() {
+  std::string s = std::string("\x81\x7e\x01\x00", 4) + std::string(256, 'x');
+  Msgs m;
+  WsReader r(100);
+  TEST_ASSERT_FALSE(r.feed((const uint8_t *)s.data(), s.size(), on_msg, &m));
+}
+
+static void test_rt_model() {
+  TEST_ASSERT_EQUAL_STRING("qwen3-omni-flash-realtime", rt_model("qwen3-omni-flash").c_str());
+  TEST_ASSERT_EQUAL_STRING("qwen-omni-turbo-realtime", rt_model("qwen-omni-turbo-realtime").c_str());
+  TEST_ASSERT_EQUAL_STRING("qwen3-omni-flash-realtime", rt_model("").c_str());
+}
+
+static void test_rt_session_update() {
+  std::string j = rt_session_update("Cherry", "你是\"小橘\"", 700, "gummy-realtime-v1");
+  JsonDocument doc;
+  TEST_ASSERT_FALSE(deserializeJson(doc, j));
+  TEST_ASSERT_EQUAL_STRING("session.update", doc["type"]);
+  JsonObject s = doc["session"];
+  TEST_ASSERT_EQUAL_STRING("text", s["modalities"][0]);
+  TEST_ASSERT_EQUAL_STRING("audio", s["modalities"][1]);
+  TEST_ASSERT_EQUAL_STRING("Cherry", s["voice"]);
+  TEST_ASSERT_EQUAL_STRING("你是\"小橘\"", s["instructions"]);
+  TEST_ASSERT_EQUAL_STRING("pcm16", s["input_audio_format"]);
+  TEST_ASSERT_EQUAL_STRING("pcm24", s["output_audio_format"]);
+  TEST_ASSERT_EQUAL_STRING("server_vad", s["turn_detection"]["type"]);
+  TEST_ASSERT_EQUAL(700, s["turn_detection"]["silence_duration_ms"].as<int>());
+  TEST_ASSERT_EQUAL_STRING("gummy-realtime-v1", s["input_audio_transcription"]["model"]);
+  // 不要文字时整个字段都不发
+  JsonDocument doc2;
+  TEST_ASSERT_FALSE(deserializeJson(doc2, rt_session_update("Cherry", "x", 700, nullptr)));
+  TEST_ASSERT_FALSE(doc2["session"]["input_audio_transcription"].is<JsonObject>());
+  TEST_ASSERT_EQUAL_STRING("{\"type\":\"response.cancel\"}", rt_event("response.cancel").c_str());
+}
+
+static void test_rt_append() {
+  std::string j = std::string(kRtAppendHead) + enc("\x01\x02") + kRtAppendTail;
+  JsonDocument doc;
+  TEST_ASSERT_FALSE(deserializeJson(doc, j));
+  TEST_ASSERT_EQUAL_STRING("input_audio_buffer.append", doc["type"]);
+  TEST_ASSERT_EQUAL_STRING("AQI=", doc["audio"]);
+}
+
+static RtEvent feed(RtParser &p, std::string msg) { return p.feed(msg); }
+
+static void test_rt_conversation() {
   Pcm pcm;
-  OmniStream st(collect, &pcm);
-  // 随便切成几段喂
-  for (size_t i = 0; i < s.size(); i += 7) st.feed(s.data() + i, s.size() - i < 7 ? s.size() - i : 7);
-  TEST_ASSERT_TRUE(st.done());
-  TEST_ASSERT_EQUAL_STRING("你好，我是小橘", st.text().c_str());
+  RtParser p(collect, &pcm);
+  TEST_ASSERT_EQUAL((int)RtEvent::None, (int)feed(p, "{\"event_id\":\"e1\",\"type\":\"session.created\",\"session\":{\"id\":\"s\"}}"));
+  TEST_ASSERT_EQUAL((int)RtEvent::Ready, (int)feed(p, "{\"event_id\":\"e2\",\"type\":\"session.updated\",\"session\":{\"modalities\":[\"text\",\"audio\"]}}"));
+  TEST_ASSERT_EQUAL((int)RtEvent::SpeechStarted, (int)feed(p, "{\"type\":\"input_audio_buffer.speech_started\",\"audio_start_ms\":120}"));
+  TEST_ASSERT_EQUAL((int)RtEvent::SpeechStopped, (int)feed(p, "{\"type\":\"input_audio_buffer.speech_stopped\",\"audio_end_ms\":980}"));
+  TEST_ASSERT_EQUAL((int)RtEvent::None, (int)feed(p, "{\"type\":\"input_audio_buffer.committed\"}"));
+  TEST_ASSERT_EQUAL((int)RtEvent::Response, (int)feed(p, "{\"type\":\"response.created\",\"response\":{\"id\":\"r1\",\"status\":\"in_progress\"}}"));
+  TEST_ASSERT_EQUAL_STRING("r1", p.response_id().c_str());
+  TEST_ASSERT_EQUAL((int)RtEvent::Heard, (int)feed(p, "{\"type\":\"conversation.item.input_audio_transcription.completed\",\"item_id\":\"i\",\"transcript\":\"今天天气怎么样\"}"));
+  TEST_ASSERT_EQUAL_STRING("今天天气怎么样", p.heard().c_str());
+  TEST_ASSERT_EQUAL((int)RtEvent::Text, (int)feed(p, "{\"type\":\"response.audio_transcript.delta\",\"response_id\":\"r1\",\"delta\":\"晴天\"}"));
+  // 一个采样被拆在两块里
+  TEST_ASSERT_EQUAL((int)RtEvent::Audio, (int)feed(p, "{\"event_id\":\"e9\",\"type\":\"response.audio.delta\",\"response_id\":\"r1\",\"item_id\":\"i2\",\"output_index\":0,\"content_index\":0,\"delta\":\"" + enc(std::string("\x01\x00\x02", 3)) + "\"}"));
+  TEST_ASSERT_EQUAL_STRING("r1", p.response_id().c_str());
+  TEST_ASSERT_EQUAL((int)RtEvent::Audio, (int)feed(p, "{\"type\":\"response.audio.delta\",\"delta\":\"" + enc(std::string("\x00\xff\xff", 3)) + "\"}"));
+  TEST_ASSERT_TRUE(p.response_id().empty());
+  TEST_ASSERT_EQUAL((int)RtEvent::Text, (int)feed(p, "{\"type\":\"response.audio_transcript.delta\",\"delta\":\"，出门不用带伞\"}"));
+  TEST_ASSERT_EQUAL_STRING("晴天，出门不用带伞", p.text().c_str());
+  TEST_ASSERT_EQUAL((int)RtEvent::Done, (int)feed(p, "{\"type\":\"response.done\",\"response\":{\"id\":\"r1\",\"status\":\"completed\",\"output\":[{\"type\":\"message\"}]}}"));
+  TEST_ASSERT_TRUE(p.error().empty());
   TEST_ASSERT_EQUAL(3, (int)pcm.samples.size());
   TEST_ASSERT_EQUAL(1, pcm.samples[0]);
   TEST_ASSERT_EQUAL(2, pcm.samples[1]);
   TEST_ASSERT_EQUAL(-1, pcm.samples[2]);
-  TEST_ASSERT_TRUE(st.error().empty());
+  // 下一次回答的文字重新开始
+  feed(p, "{\"type\":\"response.created\",\"response\":{\"id\":\"r2\"}}");
+  TEST_ASSERT_TRUE(p.text().empty());
+  TEST_ASSERT_EQUAL_STRING("r2", p.response_id().c_str());
+  // 被打断的旧回答还在陆续送来的数据，靠 response_id 认出来扔掉
+  feed(p, "{\"type\":\"response.audio_transcript.delta\",\"response_id\":\"r1\",\"delta\":\"x\"}");
+  TEST_ASSERT_EQUAL_STRING("r1", p.response_id().c_str());
 }
 
-static void test_stream_skips_wav_header() {
-  uint8_t h[44];
-  wav_header(h, 2, 24000);
-  std::string bytes((const char *)h, 44);
-  bytes += std::string("\x10\x00\x20\x00", 4);
-  Pcm pcm;
-  OmniStream st(collect, &pcm);
-  std::string s = sse_audio(bytes.substr(0, 10)) + sse_audio(bytes.substr(10));
-  st.feed(s.data(), s.size());
-  TEST_ASSERT_EQUAL(2, (int)pcm.samples.size());
-  TEST_ASSERT_EQUAL(16, pcm.samples[0]);
-  TEST_ASSERT_EQUAL(32, pcm.samples[1]);
-  TEST_ASSERT_EQUAL(4, (int)st.audio_bytes());
+static void test_ref_aligner() {
+  RefAligner a;
+  TEST_ASSERT_FALSE(a.ready());
+  TEST_ASSERT_EQUAL(0, a.offset());
+  // 每次量到的偏移在 1000 上下抖动一个 DMA 缓冲，平均下来接近 1000
+  for (int i = 0; i < 200; i++) a.add(1000 + (i % 2 ? 128 : -128));
+  TEST_ASSERT_TRUE(a.ready());
+  TEST_ASSERT_INT_WITHIN(2, 1000, a.offset());
+  // 只看最近 64 次
+  for (int i = 0; i < 64; i++) a.add(-500);
+  TEST_ASSERT_EQUAL(-500, a.offset());
 }
 
-static void test_stream_prefers_content_text() {
-  std::string s = "data: {\"choices\":[{\"delta\":{\"content\":\"今天\"}}]}\n";
-  s += "data: {\"choices\":[{\"delta\":{\"audio\":{\"transcript\":\"今天\"}}}]}\n";
-  s += "data: {\"choices\":[{\"delta\":{\"content\":\"晴\"}}]}\n";
-  OmniStream st(nullptr, nullptr);
-  st.feed(s.data(), s.size());
-  TEST_ASSERT_EQUAL_STRING("今天晴", st.text().c_str());  // 两种文字都有时不重复
+static void test_ring_at() {
+  int16_t ring[8] = {};
+  uint32_t written = 0;
+  for (int i = 0; i < 11; i++) ring[written++ & 7] = (int16_t)(100 + i);  // 写了 11 个，前 3 个已被覆盖
+  TEST_ASSERT_EQUAL(0, ring_at(ring, 8, written, 2));
+  TEST_ASSERT_EQUAL(103, ring_at(ring, 8, written, 3));
+  TEST_ASSERT_EQUAL(110, ring_at(ring, 8, written, 10));
+  TEST_ASSERT_EQUAL(0, ring_at(ring, 8, written, 11));  // 还没写到
+  TEST_ASSERT_EQUAL(0, ring_at(ring, 8, written, 500));
+  // 计数溢出回绕
+  written = 2;
+  ring[0xFFFFFFFFu & 7] = 7;
+  ring[0] = 8;
+  ring[1] = 9;
+  TEST_ASSERT_EQUAL(7, ring_at(ring, 8, written, 0xFFFFFFFFu));
+  TEST_ASSERT_EQUAL(9, ring_at(ring, 8, written, 1));
 }
 
-static void test_stream_error() {
-  std::string s = "data: {\"error\":{\"message\":\"Arrearage\",\"code\":\"Arrearage\"}}\n\n";
-  OmniStream st(nullptr, nullptr);
-  st.feed(s.data(), s.size());
-  TEST_ASSERT_TRUE(st.done());
-  TEST_ASSERT_EQUAL_STRING("Arrearage", st.error().c_str());
+static void test_rt_errors() {
+  RtParser p(nullptr, nullptr);
+  TEST_ASSERT_EQUAL((int)RtEvent::Error, (int)feed(p, "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"code\":\"Arrearage\",\"message\":\"Access denied\"}}"));
+  TEST_ASSERT_EQUAL_STRING("Arrearage", p.error_code().c_str());
+  TEST_ASSERT_EQUAL_STRING("Access denied", p.error().c_str());
+  feed(p, "{\"type\":\"response.created\",\"response\":{\"id\":\"r3\"}}");
+  TEST_ASSERT_TRUE(p.error().empty());
+  TEST_ASSERT_EQUAL((int)RtEvent::Done, (int)feed(p, "{\"type\":\"response.done\",\"response\":{\"status\":\"failed\",\"status_details\":{\"type\":\"failed\",\"error\":{\"code\":\"x\",\"message\":\"internal\"}}}}"));
+  TEST_ASSERT_EQUAL_STRING("internal", p.error().c_str());
+  TEST_ASSERT_EQUAL((int)RtEvent::None, (int)feed(p, "not json"));
+}
+
+static void test_agc() {
+  Agc agc(8);
+  std::vector<int16_t> quiet(1600, 1000);
+  for (int i = 0; i < 200; i++) {
+    std::vector<int16_t> b = quiet;
+    agc.process(b.data(), b.size());
+  }
+  TEST_ASSERT_EQUAL(8 * 256, agc.gain_x256());  // 一直很小声就放大到上限
+  std::vector<int16_t> loud(1600, 20000);
+  int peak = agc.process(loud.data(), loud.size());
+  TEST_ASSERT_EQUAL(20000, peak);
+  TEST_ASSERT_EQUAL(20000, loud[0]);  // 突然变响马上降下来，不削顶
+  std::vector<int16_t> mid(1600, 2500);
+  agc.process(mid.data(), mid.size());
+  TEST_ASSERT_TRUE(mid[0] < 2600);  // 刚才很响，不会一下子又放大
 }
 
 static void test_error_message() {
@@ -231,16 +324,20 @@ int main() {
   UNITY_BEGIN();
   RUN_TEST(test_base64_roundtrip);
   RUN_TEST(test_base64_split_and_padded_chunks);
-  RUN_TEST(test_wav_header);
-  RUN_TEST(test_normalize);
   RUN_TEST(test_resample_24k_to_16k);
-  RUN_TEST(test_request_body);
   RUN_TEST(test_http_head);
-  RUN_TEST(test_chunked);
-  RUN_TEST(test_stream_audio_and_text);
-  RUN_TEST(test_stream_skips_wav_header);
-  RUN_TEST(test_stream_prefers_content_text);
-  RUN_TEST(test_stream_error);
+  RUN_TEST(test_ws_handshake);
+  RUN_TEST(test_ws_frame_sizes);
+  RUN_TEST(test_ws_server_frames);
+  RUN_TEST(test_ws_too_big);
+  RUN_TEST(test_rt_model);
+  RUN_TEST(test_rt_session_update);
+  RUN_TEST(test_rt_append);
+  RUN_TEST(test_rt_conversation);
+  RUN_TEST(test_rt_errors);
+  RUN_TEST(test_agc);
+  RUN_TEST(test_ref_aligner);
+  RUN_TEST(test_ring_at);
   RUN_TEST(test_error_message);
   return UNITY_END();
 }

@@ -30,7 +30,8 @@ static constexpr uint32_t kStallMs = 20 * 1000;                 // 下载 20 秒
 static constexpr uint32_t kCmdCheck = 1;
 static constexpr uint32_t kCmdInstall = 2;
 
-static TaskHandle_t task_handle;
+static int job = -1;
+static uint32_t pending_cmd = 0;  // 网页上点的「检查更新」「立即升级」，kCmd* 的组合
 static SemaphoreHandle_t lock;
 static OtaStatus status;
 static OtaManifest manifest;
@@ -256,42 +257,42 @@ static bool in_auto_window() {
   return t.tm_hour >= 3 && t.tm_hour < 5;
 }
 
-static void ota_task(void *) {
-  uint32_t next_check = millis() + kFirstCheckMs;
-  for (;;) {
-    uint32_t cmd = 0;
-    xTaskNotifyWait(0, UINT32_MAX, &cmd, pdMS_TO_TICKS(60 * 1000));
-    if (!WiFi.isConnected()) continue;
-    OtaState s = ota_status().state;
-    if (s == OtaState::Downloading || s == OtaState::Done) continue;  // 网页上传进行中或等待重启
+static uint32_t ota_step() {
+  static uint32_t next_check = millis() + kFirstCheckMs;
+  uint32_t cmd = __atomic_exchange_n(&pending_cmd, 0, __ATOMIC_SEQ_CST);
+  if (!WiFi.isConnected()) return 60 * 1000;
+  OtaState s = ota_status().state;
+  if (s == OtaState::Downloading || s == OtaState::Done) return 60 * 1000;  // 网页上传进行中或等待重启
 
-    if ((cmd & kCmdCheck) || (cmd & kCmdInstall) || (int32_t)(millis() - next_check) >= 0) {
-      next_check = millis() + (check() ? kCheckIntervalMs : kRetryMs);
-    }
-
-    bool install = (cmd & kCmdInstall) != 0;
-    if (!install && auto_ok && settings_get().auto_update && in_auto_window()) install = true;
-    if (install && ota_status().state == OtaState::Available) {
-      download();
-      // 下载失败（多半是连不上 GitHub）时 1 小时后重新检查，状态回到「有新版本」，自动升级时段内还能再试
-      if (ota_status().state == OtaState::Failed) next_check = millis() + kRetryMs;
-    }
+  if ((cmd & kCmdCheck) || (cmd & kCmdInstall) || (int32_t)(millis() - next_check) >= 0) {
+    next_check = millis() + (check() ? kCheckIntervalMs : kRetryMs);
   }
+
+  bool install = (cmd & kCmdInstall) != 0;
+  if (!install && auto_ok && settings_get().auto_update && in_auto_window()) install = true;
+  if (install && ota_status().state == OtaState::Available) {
+    download();
+    // 下载失败（多半是连不上 GitHub）时 1 小时后重新检查，状态回到「有新版本」，自动升级时段内还能再试
+    if (ota_status().state == OtaState::Failed) next_check = millis() + kRetryMs;
+  }
+  return 60 * 1000;
 }
 
 void ota_begin() {
   lock = xSemaphoreCreateMutex();
   status.state = OtaState::Idle;
   log_i("firmware %s, board %s", FW_VERSION, BOARD_NAME);
-  xTaskCreate(ota_task, "ota", 12288, nullptr, 1, &task_handle);
+  job = net_job_add("ota", ota_step);  // 第一轮只记下检查时间，1 分钟后才真的检查
 }
 
 void ota_check_now() {
-  if (task_handle) xTaskNotify(task_handle, kCmdCheck, eSetBits);
+  __atomic_fetch_or(&pending_cmd, kCmdCheck, __ATOMIC_SEQ_CST);
+  net_job_kick(job);
 }
 
 void ota_install_now() {
-  if (task_handle) xTaskNotify(task_handle, kCmdInstall, eSetBits);
+  __atomic_fetch_or(&pending_cmd, kCmdInstall, __ATOMIC_SEQ_CST);
+  net_job_kick(job);
 }
 
 bool ota_upload_begin(const uint8_t *first, size_t len, size_t total) {

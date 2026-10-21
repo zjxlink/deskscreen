@@ -13,7 +13,7 @@ static constexpr uint32_t kRetryMs = 5 * 60 * 1000;
 static const char kUserAgent[] =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
 
-static TaskHandle_t task_handle;
+static int job = -1;
 static SemaphoreHandle_t lock;
 static StockData latest;
 static bool fresh = false;
@@ -114,77 +114,75 @@ static void publish(const StockData &d) {
   xSemaphoreGive(lock);
 }
 
-static void stock_task(void *) {
+static uint32_t stock_step() {
   static StockData d;
   static StockData tmp;
-  int failures = 0;
+  static int failures = 0;
   // 东方财富会按 IP 限流，被拦后还一直请求只会被拦得更久：失败后冷却一段时间，期间直接用腾讯
-  int primary_failures = 0;
-  uint32_t primary_failed_at = 0;
-  for (;;) {
-    uint32_t wait_ms = 5000;
-    StockCode codes[kMaxStocks];
-    int n = stock_split_codes(settings_get().stocks.c_str(), codes, kMaxStocks);
-    if (n == 0) {
-      d.status = StockStatus::NotSet;
-      d.count = 0;
-      publish(d);
-      wait_ms = portMAX_DELAY;  // 等设置页面填写后被唤醒
-    } else if (WiFi.isConnected()) {
-      if (d.status != StockStatus::Ok) {
-        d.status = StockStatus::Loading;
-        publish(d);
-      }
-      int error = kNetBadData;
-      StockStatus s = StockStatus::Error;
-      bool try_primary =
-          primary_failures == 0 || millis() - primary_failed_at >= stock_primary_cooldown_ms(primary_failures);
-      if (try_primary) {
-        s = fetch_eastmoney(codes, n, tmp, error);
-        if (s == StockStatus::Ok) {
-          primary_failures = 0;
-        } else {
-          primary_failures++;
-          primary_failed_at = millis();
-          log_w("eastmoney failed %d times, using tencent for %lu s", primary_failures,
-                (unsigned long)(stock_primary_cooldown_ms(primary_failures) / 1000));
-        }
-      }
-      if (s != StockStatus::Ok) {
-        int backup_error;
-        s = fetch_tencent(codes, n, tmp, backup_error);
-        // 两个都失败时，屏幕上显示主数据源的错误码；没试主数据源时显示备用的
-        if (!try_primary) error = backup_error;
-      }
-      struct tm now;
-      bool has_time = getLocalTime(&now, 0);
-      if (s == StockStatus::Ok) {
-        d = tmp;
-        d.status = s;
-        failures = 0;
-        if (has_time) snprintf(d.updated, sizeof(d.updated), "%02d:%02d", now.tm_hour, now.tm_min);
-        wait_ms = has_time ? stock_refresh_ms(now) : 60 * 1000;
-      } else {
-        // 失败时保留上次的行情，只有从没成功过才显示错误
-        if (d.status != StockStatus::Ok) {
-          d.status = s;
-          d.error = error;
-        }
-        wait_ms = net_retry_ms(++failures, kRetryMs);
-      }
-      publish(d);
-    }
-    ulTaskNotifyTake(pdTRUE, wait_ms == portMAX_DELAY ? portMAX_DELAY : pdMS_TO_TICKS(wait_ms));
+  static int primary_failures = 0;
+  static uint32_t primary_failed_at = 0;
+  StockCode codes[kMaxStocks];
+  int n = stock_split_codes(settings_get().stocks.c_str(), codes, kMaxStocks);
+  if (n == 0) {
+    d.status = StockStatus::NotSet;
+    d.count = 0;
+    publish(d);
+    return kNetJobIdle;  // 等设置页面填写后被唤醒
   }
+  if (!WiFi.isConnected()) return 5000;
+  if (d.status != StockStatus::Ok) {
+    d.status = StockStatus::Loading;
+    publish(d);
+  }
+  int error = kNetBadData;
+  StockStatus s = StockStatus::Error;
+  bool try_primary =
+      primary_failures == 0 || millis() - primary_failed_at >= stock_primary_cooldown_ms(primary_failures);
+  if (try_primary) {
+    s = fetch_eastmoney(codes, n, tmp, error);
+    if (s == StockStatus::Ok) {
+      primary_failures = 0;
+    } else {
+      primary_failures++;
+      primary_failed_at = millis();
+      log_w("eastmoney failed %d times, using tencent for %lu s", primary_failures,
+            (unsigned long)(stock_primary_cooldown_ms(primary_failures) / 1000));
+    }
+  }
+  if (s != StockStatus::Ok) {
+    int backup_error;
+    s = fetch_tencent(codes, n, tmp, backup_error);
+    // 两个都失败时，屏幕上显示主数据源的错误码；没试主数据源时显示备用的
+    if (!try_primary) error = backup_error;
+  }
+  struct tm now;
+  bool has_time = getLocalTime(&now, 0);
+  uint32_t wait_ms;
+  if (s == StockStatus::Ok) {
+    d = tmp;
+    d.status = s;
+    failures = 0;
+    if (has_time) snprintf(d.updated, sizeof(d.updated), "%02d:%02d", now.tm_hour, now.tm_min);
+    wait_ms = has_time ? stock_refresh_ms(now) : 60 * 1000;
+  } else {
+    // 失败时保留上次的行情，只有从没成功过才显示错误
+    if (d.status != StockStatus::Ok) {
+      d.status = s;
+      d.error = error;
+    }
+    wait_ms = net_retry_ms(++failures, kRetryMs);
+  }
+  publish(d);
+  return wait_ms;
 }
 
 void stock_begin() {
   lock = xSemaphoreCreateMutex();
-  xTaskCreate(stock_task, "stock", 12288, nullptr, 1, &task_handle);
+  job = net_job_add("stock", stock_step);
 }
 
 void stock_request_refresh() {
-  if (task_handle) xTaskNotifyGive(task_handle);
+  net_job_kick(job);
 }
 
 bool stock_take_update(StockData &out) {

@@ -78,14 +78,18 @@ bool ui_game_close_hit(int x, int y);
 // 触摸点是否落在小猫页的小橘身上（点小橘开始跑酷）
 bool ui_pet_hit(int x, int y);
 
-// AI 聊天页：小橘、它说的话、提示和「按住说话」按钮
+// AI 聊天页：小橘、它说的话、提示和「开始聊天 / 挂断 / 打断」按钮
 struct ChatView {
   VoiceState state;
-  uint8_t level;       // 录音音量 0~100
-  uint32_t rec_ms;
+  uint8_t level;       // 麦克风音量 0~100
+  uint32_t latency_ms;   // 上一句从说完到小橘出声用了多久
+  uint32_t idle_left_ms; // 再过多久没人说话就挂断
+  const char *heard;   // 主人刚才说的话
   const char *reply;   // 最近一次回答
   const char *error;
   bool has_key;        // 设置了百炼 API Key
+  bool wake;           // 唤醒词开着
+  bool full_duplex;    // 小橘说话时开口就能打断
   bool blink;
   int bob;             // 小橘上下跳的像素数
 };

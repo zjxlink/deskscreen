@@ -23,7 +23,7 @@ static constexpr uint32_t kNoClockMs = 6 * 60 * 60 * 1000;  // 还没对时就�
 static const char kUserAgent[] =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
 
-static TaskHandle_t task;
+static int job = -1;
 static volatile bool kicked = false;
 static bool use_http = false;  // HTTPS 连不上（比如证书校验不过）时改用普通 HTTP
 
@@ -176,47 +176,46 @@ static uint32_t until_next_day() {
   return (uint32_t)wait * 1000;
 }
 
-static void bing_task(void *) {
-  bool was_wifi = false;
-  bool last_card = true;
-  bool fetched = false;
-  int failures = 0;
-  uint32_t next_at = 0;
-  for (;;) {
-    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(kCheckMs));
-    bool want = settings_get().album_bing;
-    bool wifi = WiFi.isConnected();
-    uint32_t now = millis();
-    bool go = false;
-    if (want && wifi) {
-      go = !fetched || (int32_t)(now - next_at) >= 0;
-      go = go || !was_wifi;  // WiFi 刚连上
-      go = go || kicked;     // 设置里刚打开
-      // 上次没插卡，现在插上了：把最近几天的图都补上（失败后等重试时间到了再说）
-      go = go || (fetched && !last_card && failures == 0 && photos_status().card != PhotoCard::NoCard);
-    }
-    was_wifi = wifi;
-    kicked = false;
-    if (!go) continue;
-
-    bool card = false;
-    if (fetch(card)) {
-      failures = 0;
-      next_at = millis() + until_next_day();
-    } else {
-      next_at = millis() + net_retry_ms(++failures, kRetryMs);
-    }
-    fetched = true;
-    last_card = card;
+// 每隔 kCheckMs 看一眼要不要下载
+static uint32_t bing_step() {
+  static bool was_wifi = false;
+  static bool last_card = true;
+  static bool fetched = false;
+  static int failures = 0;
+  static uint32_t next_at = 0;
+  bool want = settings_get().album_bing;
+  bool wifi = WiFi.isConnected();
+  uint32_t now = millis();
+  bool go = false;
+  if (want && wifi) {
+    go = !fetched || (int32_t)(now - next_at) >= 0;
+    go = go || !was_wifi;  // WiFi 刚连上
+    go = go || kicked;     // 设置里刚打开
+    // 上次没插卡，现在插上了：把最近几天的图都补上（失败后等重试时间到了再说）
+    go = go || (fetched && !last_card && failures == 0 && photos_status().card != PhotoCard::NoCard);
   }
+  was_wifi = wifi;
+  kicked = false;
+  if (!go) return kCheckMs;
+
+  bool card = false;
+  if (fetch(card)) {
+    failures = 0;
+    next_at = millis() + until_next_day();
+  } else {
+    next_at = millis() + net_retry_ms(++failures, kRetryMs);
+  }
+  fetched = true;
+  last_card = card;
+  return kCheckMs;
 }
 
 void bing_begin() {
   if (!photos_supported()) return;  // 没有相册的板子用不上
-  xTaskCreate(bing_task, "bing", 12288, nullptr, 1, &task);
+  job = net_job_add("bing", bing_step, kCheckMs);
 }
 
 void bing_kick() {
   kicked = true;
-  if (task) xTaskNotifyGive(task);
+  net_job_kick(job);
 }

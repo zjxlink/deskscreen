@@ -49,6 +49,8 @@ struct Settings {
   String ai_key;             // 百炼 API Key，空表示不用
   String ai_model;           // 默认 qwen3-omni-flash
   String ai_voice;           // 音色，默认 Cherry
+  bool wake_on;              // 喊「喵喵同学」开始聊天
+  bool barge_on;             // 小橘说话时主人开口就打断（回声消除）
   // 电子相册（TF 卡）
   uint8_t album_sec;         // 每张照片显示几秒，默认 10
   bool album_shuffle;        // 随机顺序，否则按文件名

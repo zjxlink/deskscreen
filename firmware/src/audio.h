@@ -15,19 +15,24 @@ void audio_set_volume(int volume);
 // 排队播放，立即返回
 void audio_play(SoundId id);
 
-// 语音回答：边下载边播放。begin 和 end 之间提示音会排队等着；write 会阻塞到声音送进 I2S 为止。
-// 采样率 16kHz 单声道，音量按 audio_set_volume 调整
+// 语音回答：边下载边播放。begin 和 end 之间提示音会排队等着；write 放进 32 秒的播放缓冲，一般不用等；
+// end 等声音全部放完才返回。采样率 16kHz 单声道，音量按 audio_set_volume 调整
 void audio_stream_begin();
 void audio_stream_write(const int16_t *mono, size_t n);
 void audio_stream_end();
+// 打断：缓冲里还没放的声音马上扔掉（DMA 里排着的 96ms 照常放完）
+void audio_stream_flush();
+// 缓冲里还有多少采样没放（不含 DMA 里的 96ms）
+size_t audio_stream_pending();
 
 // 麦克风（BOX-3 的 ES7210），采样率 16kHz。没有麦克风的板子上 available 返回 false
 bool audio_mic_available();
-// AI 聊天开始录音前调用：占住麦克风（音乐律动先停下），丢掉缓冲区里的旧数据
-void audio_mic_begin();
-// 读最多 max 个单声道采样（两个麦克风取平均），最多等 100ms，返回读到的个数
-size_t audio_mic_read(int16_t *mono, size_t max);
-// 录完了，放开麦克风
-void audio_mic_end();
-// 音乐律动用：麦克风没被 AI 聊天占着、喇叭也没在响时读最多 max 个采样，否则马上返回 0
+
+// AI 聊天用：麦克风一直在读，每读到一段就调用回调。mic 是两个麦克风的平均，
+// ref 是同一时刻喇叭放出的声音（已经对齐好，回声消除用的参考信号）。回调在采集任务里运行，要尽快返回；
+// 传 nullptr 取消
+using CaptureSink = void (*)(const int16_t *mic, const int16_t *ref, size_t n, void *ctx);
+void audio_set_capture_sink(CaptureSink sink, void *ctx);
+
+// 音乐律动用：读最多 max 个采样，最多等 100ms；喇叭在响时返回 0（免得听到自己的声音）
 size_t audio_mic_listen(int16_t *mono, size_t max);

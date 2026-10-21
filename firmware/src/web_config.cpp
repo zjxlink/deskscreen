@@ -125,6 +125,8 @@ static void handle_api_settings() {
   doc["has_ai"] = s.ai_key.length() > 0;
   doc["ai_model"] = s.ai_model;
   doc["ai_voice"] = s.ai_voice;
+  doc["wake_on"] = s.wake_on;
+  doc["barge_on"] = s.barge_on;
   doc["album_sec"] = s.album_sec;
   doc["album_shuffle"] = s.album_shuffle;
   doc["saver_on"] = s.saver_on;
@@ -288,6 +290,8 @@ static void handle_save() {
   s.water_on = server.hasArg("water_on");
   s.rain_on = server.hasArg("rain_on");
   s.music_on = server.hasArg("music_on");
+  s.wake_on = server.hasArg("wake_on");
+  s.barge_on = server.hasArg("barge_on");
   s.chime_on = server.hasArg("chime_on");
   s.alarm_on = server.hasArg("alarm_on");
   int at = night_parse_hhmm(server.arg("alarm_time").c_str());

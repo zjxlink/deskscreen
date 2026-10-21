@@ -33,7 +33,7 @@ static void listen_task(void *mem) {
       continue;
     }
     size_t got = audio_mic_listen(frame + n, kMusicFrame - n);
-    if (got == 0) {  // AI 聊天在录音、喇叭在响，或者读失败了
+    if (got == 0) {  // 喇叭在响，或者读失败了
       meter.idle(millis());
       publish(meter, false);
       n = 0;

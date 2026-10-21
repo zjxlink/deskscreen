@@ -12,7 +12,7 @@
 static constexpr uint32_t kRefreshMs = 30 * 60 * 1000;
 static constexpr uint32_t kRetryMs = 2 * 60 * 1000;
 
-static TaskHandle_t task_handle;
+static int job = -1;
 static SemaphoreHandle_t lock;
 static GithubData latest;
 static bool fresh = false;
@@ -74,49 +74,47 @@ static void publish(const GithubData &d) {
   xSemaphoreGive(lock);
 }
 
-static void github_task(void *) {
+static uint32_t github_step() {
   static GithubData d;  // 放在静态区，任务栈留给 TLS
-  int failures = 0;
-  for (;;) {
-    uint32_t wait_ms = 5000;
-    String token = settings_get().github_token;
-    if (token.isEmpty()) {
-      d.status = GithubStatus::NoToken;
-      publish(d);
-      wait_ms = portMAX_DELAY;  // 等设置页面填写后被唤醒
-    } else if (WiFi.isConnected()) {
-      if (d.status != GithubStatus::Ok) {
-        d.status = GithubStatus::Loading;
-        publish(d);
-      }
-      int error;
-      GithubStatus s = fetch(token, d, error);
-      if (s == GithubStatus::Ok) {
-        d.status = s;
-        failures = 0;
-        wait_ms = kRefreshMs;
-      } else {
-        // 拉取失败时保留上次的数据，只有从没成功过才显示错误
-        if (d.status != GithubStatus::Ok || s == GithubStatus::BadToken) {
-          d.status = s;
-          d.error = error;
-        }
-        wait_ms = s == GithubStatus::BadToken ? portMAX_DELAY : net_retry_ms(++failures, kRetryMs);
-      }
-      publish(d);
-    }
-    ulTaskNotifyTake(pdTRUE, wait_ms == portMAX_DELAY ? portMAX_DELAY : pdMS_TO_TICKS(wait_ms));
+  static int failures = 0;
+  String token = settings_get().github_token;
+  if (token.isEmpty()) {
+    d.status = GithubStatus::NoToken;
+    publish(d);
+    return kNetJobIdle;  // 等设置页面填写后被唤醒
   }
+  if (!WiFi.isConnected()) return 5000;
+  if (d.status != GithubStatus::Ok) {
+    d.status = GithubStatus::Loading;
+    publish(d);
+  }
+  int error;
+  GithubStatus s = fetch(token, d, error);
+  uint32_t wait_ms;
+  if (s == GithubStatus::Ok) {
+    d.status = s;
+    failures = 0;
+    wait_ms = kRefreshMs;
+  } else {
+    // 拉取失败时保留上次的数据，只有从没成功过才显示错误
+    if (d.status != GithubStatus::Ok || s == GithubStatus::BadToken) {
+      d.status = s;
+      d.error = error;
+    }
+    wait_ms = s == GithubStatus::BadToken ? kNetJobIdle : net_retry_ms(++failures, kRetryMs);
+  }
+  publish(d);
+  return wait_ms;
 }
 
 void github_begin() {
   lock = xSemaphoreCreateMutex();
   latest.status = GithubStatus::Loading;
-  xTaskCreate(github_task, "github", 16384, nullptr, 1, &task_handle);
+  job = net_job_add("github", github_step);
 }
 
 void github_request_refresh() {
-  if (task_handle) xTaskNotifyGive(task_handle);
+  net_job_kick(job);
 }
 
 bool github_take_update(GithubData &out) {
