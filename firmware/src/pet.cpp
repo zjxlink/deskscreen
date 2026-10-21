@@ -2,6 +2,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 PetMood pet_mood(const PetInputs &in) {
   if (in.night) return PetMood::Sleep;
@@ -120,4 +121,33 @@ int pet_pixel(PetMood mood, bool blink, int x, int y) {
     case 'b': return PET_TEAR;
     default: return PET_NONE;
   }
+}
+
+PetMood chat_mood(const char *text, PetMood fallback) {
+  struct Rule {
+    PetMood mood;
+    const char *words[8];
+  };
+  static const Rule kRules[] = {
+      {PetMood::Sleep, {"晚安", "好梦", "困了", "睡觉", "睡吧", "早点睡"}},
+      {PetMood::Sad, {"呜", "难过", "抱歉", "对不起", "可惜", "遗憾", "心疼", "伤心"}},
+      {PetMood::Startled, {"哇", "天哪", "天呐", "真的吗", "竟然", "居然", "太厉害", "不会吧"}},
+      {PetMood::Happy, {"哈哈", "太好了", "开心", "真棒", "好耶", "嘿嘿", "恭喜", "喜欢"}},
+  };
+  if (!text) return fallback;
+  // 表情跟着说到哪儿变：取最后出现的那个词
+  PetMood mood = fallback;
+  const char *best = nullptr;
+  for (const Rule &r : kRules) {
+    for (const char *w : r.words) {
+      if (!w) continue;
+      for (const char *at = strstr(text, w); at; at = strstr(at + 1, w)) {
+        if (!best || at > best) {
+          best = at;
+          mood = r.mood;
+        }
+      }
+    }
+  }
+  return mood;
 }

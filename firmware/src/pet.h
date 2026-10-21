@@ -39,3 +39,7 @@ enum PetColor { PET_NONE, PET_LINE, PET_FUR, PET_WHITE, PET_PINK, PET_TEAR };
 
 // 取 (x, y) 处的颜色编号。blink 为 true 时闭眼（眨眼动画的一帧）
 int pet_pixel(PetMood mood, bool blink, int x, int y);
+
+// AI 聊天时小橘的表情：按它已经念出来的话里最后出现的词猜心情（晚安→睡、抱歉→难过、哇→吃惊、
+// 哈哈→开心），一个都没有就是 fallback
+PetMood chat_mood(const char *text, PetMood fallback);

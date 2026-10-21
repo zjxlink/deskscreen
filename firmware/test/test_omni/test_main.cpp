@@ -325,6 +325,18 @@ static void test_error_message() {
   TEST_ASSERT_EQUAL_STRING("model not found", omni_error_message(400, "{\"code\":\"x\",\"message\":\"model not found\"}").c_str());
 }
 
+static void test_rt_is_goodbye() {
+  TEST_ASSERT_TRUE(rt_is_goodbye("拜拜"));
+  TEST_ASSERT_TRUE(rt_is_goodbye("好的，再见！"));
+  TEST_ASSERT_TRUE(rt_is_goodbye("先这样吧。"));
+  TEST_ASSERT_TRUE(rt_is_goodbye("Bye bye."));
+  TEST_ASSERT_TRUE(rt_is_goodbye("小橘退下吧"));
+  TEST_ASSERT_FALSE(rt_is_goodbye(""));
+  TEST_ASSERT_FALSE(rt_is_goodbye("今天天气怎么样"));
+  // 长句里提到「再见」不算道别
+  TEST_ASSERT_FALSE(rt_is_goodbye("你知道再见这个词用英语怎么说吗"));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_base64_roundtrip);
@@ -344,5 +356,6 @@ int main() {
   RUN_TEST(test_ref_aligner);
   RUN_TEST(test_ring_at);
   RUN_TEST(test_error_message);
+  RUN_TEST(test_rt_is_goodbye);
   return UNITY_END();
 }
