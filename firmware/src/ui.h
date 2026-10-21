@@ -58,11 +58,12 @@ void ui_show_alert(AlertIcon icon, const char *title, const char *body, const ch
 struct QuickState {
   uint8_t brightness;  // 白天亮度 10~255
   bool sound_on;
+  uint8_t volume;      // 0~100，小橘说话、提示音、整点报时都用它
   bool has_dock;       // 插了 SENSOR 底座，「没人熄屏」才有用
   bool away_off;
   const char *url;     // 网页设置地址，空字符串表示还没连上 WiFi
 };
-enum class QuickHit { None, Close, BrightDown, BrightUp, Sound, Away };
+enum class QuickHit { None, Close, BrightDown, BrightUp, VolumeDown, VolumeUp, Sound, Away };
 
 // 显示快捷设置页，或者在已经显示时刷新上面的状态
 void ui_show_quick(const QuickState &q);

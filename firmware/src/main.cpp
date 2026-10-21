@@ -664,6 +664,7 @@ static void show_quick() {
   QuickState q;
   q.brightness = s.brightness;
   q.sound_on = s.sound_on;
+  q.volume = s.sound_volume;
   q.has_dock = sensors_dock();
   q.away_off = s.away_off;
   q.url = url.c_str();
@@ -697,6 +698,8 @@ static void quick_tap(int x, int y, uint32_t now) {
   switch (h) {
     case QuickHit::BrightDown: s.brightness = s.brightness > 35 ? s.brightness - 25 : 10; break;
     case QuickHit::BrightUp: s.brightness = s.brightness < 230 ? s.brightness + 25 : 255; break;
+    case QuickHit::VolumeDown: s.sound_volume = s.sound_volume > 10 ? s.sound_volume - 10 : 0; break;
+    case QuickHit::VolumeUp: s.sound_volume = s.sound_volume < 90 ? s.sound_volume + 10 : 100; break;
     case QuickHit::Sound: s.sound_on = !s.sound_on; break;
     case QuickHit::Away:
       if (!sensors_dock()) return;
@@ -707,6 +710,7 @@ static void quick_tap(int x, int y, uint32_t now) {
   settings_save(s);
   apply_settings();
   show_quick();
+  if (h == QuickHit::VolumeDown || h == QuickHit::VolumeUp) audio_play(SoundId::Chime);  // 叮一声听听多大
 }
 
 static void update_quick() {
