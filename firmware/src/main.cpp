@@ -1261,7 +1261,12 @@ static void update_listen() {
 }
 
 static void render_music_list() {
-  static char names[kPlayerMaxFolders][kTagMax];
+  // 这两块放 PSRAM，第一次打开列表时才分配（内部内存留给 WiFi 和 TLS）
+  static char (*names)[kTagMax] = nullptr;
+  static TrackInfo *infos = nullptr;
+  if (!names) names = (char (*)[kTagMax])heap_caps_calloc(kPlayerMaxFolders, kTagMax, MALLOC_CAP_SPIRAM);
+  if (!infos) infos = (TrackInfo *)heap_caps_calloc(kMusicRows, sizeof(TrackInfo), MALLOC_CAP_SPIRAM);
+  if (!names || !infos) return;
   const char *chips[kPlayerMaxFolders];
   int nf = player_folder_count();
   for (int i = 0; i < nf; i++) {
@@ -1286,7 +1291,6 @@ static void render_music_list() {
   int pages = (n + kMusicRows - 1) / kMusicRows;
   if (music_list_page >= pages) music_list_page = pages > 0 ? pages - 1 : 0;
   int playing = player_view_playing();
-  static TrackInfo infos[kMusicRows];
   MusicRow rows[kMusicRows];
   int shown = 0;
   for (; shown < kMusicRows; shown++) {

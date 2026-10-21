@@ -50,7 +50,7 @@ struct Library {
   TrackInfo *tracks;
   uint8_t *folder_of;  // 每首在第几个歌单（0 表示直接放在 music 下）
   int count;
-  char folders[kPlayerMaxFolders][kTagMax];  // 0 号是「全部」
+  char (*folders)[kTagMax];  // kPlayerMaxFolders 个，0 号是「全部」（放在 PSRAM）
   int folder_count;
 };
 
@@ -69,7 +69,9 @@ static int view_n = 0;
 
 // ---- 播放（播放任务写，主循环读） ----
 
-static TaskHandle_t task;
+static TaskHandle_t task;     // 播放任务，第一次要放歌时才建（省下 10KB 内部内存，开机时 WiFi 和 TLS 要用）
+static bool ready = false;    // player_begin 成功了
+static void start_player_task();
 static portMUX_TYPE cmd_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint32_t cmds = 0;
 static int cmd_view_folder = 0, cmd_view_index = 0;
@@ -129,6 +131,12 @@ static void send(uint32_t cmd) {
   cmds |= cmd;
   portEXIT_CRITICAL(&cmd_mux);
   if (task) xTaskNotifyGive(task);
+}
+
+// 主循环和网页发来的命令：播放任务还没建时先建好（列表变了这种不用放歌的命令不建，等它建好后一起处理）
+static void send_play(uint32_t cmd) {
+  start_player_task();
+  send(cmd);
 }
 
 static void *psram_calloc(size_t n, size_t size) {
@@ -313,10 +321,23 @@ static void scan() {
   xSemaphoreGive(scan_lock);
 }
 
+// 扫描任务要扫时才建，扫完自己退出，平时不占内部内存的栈
+static portMUX_TYPE scan_mux = portMUX_INITIALIZER_UNLOCKED;
+static bool scan_running = false;
+static bool scan_again = false;
+
 static void scan_task(void *) {
   for (;;) {
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     scan();
+    portENTER_CRITICAL(&scan_mux);
+    if (!scan_again) {
+      scan_running = false;
+      scan_task_handle = nullptr;
+      portEXIT_CRITICAL(&scan_mux);
+      vTaskDelete(nullptr);
+    }
+    scan_again = false;
+    portEXIT_CRITICAL(&scan_mux);
   }
 }
 
@@ -728,8 +749,9 @@ static int sleep_gain() {
   return left >= (int32_t)kFadeMs ? 256 : (int)(left * 256 / kFadeMs);
 }
 
+static int16_t *pcm;  // 解出来的声音（kChunk * 4 个采样，放在 PSRAM）
+
 static void player_task(void *) {
-  static int16_t pcm[kChunk * 4];
   for (;;) {
     // 睡眠定时到了：暂停（暂停着也照样倒计时）
     uint32_t until = sleep_until;
@@ -820,9 +842,11 @@ void player_begin() {
   for (auto &l : libs) {
     l.tracks = (TrackInfo *)psram_calloc(kPlayerMaxTracks, sizeof(TrackInfo));
     l.folder_of = (uint8_t *)psram_calloc(kPlayerMaxTracks, 1);
-    strlcpy(l.folders[0], "全部", kTagMax);
+    l.folders = (char (*)[kTagMax])psram_calloc(kPlayerMaxFolders, kTagMax);
+    if (l.folders) strlcpy(l.folders[0], "全部", kTagMax);
     l.folder_count = 1;
   }
+  pcm = (int16_t *)psram_calloc(kChunk * 4, sizeof(int16_t));
   view_ids = (int *)psram_calloc(kPlayerMaxTracks, sizeof(int));
   queue_ids = (int *)psram_calloc(kPlayerMaxTracks, sizeof(int));
   order = (PlayOrder *)psram_calloc(1, sizeof(PlayOrder));
@@ -831,32 +855,57 @@ void player_begin() {
   lyrics.max_lines = kLrcLines;
   lyrics.pool = (char *)psram_calloc(kLrcPool, 1);
   lyrics.pool_size = kLrcPool;
-  if (!libs[0].tracks || !libs[1].tracks || !libs[0].folder_of || !libs[1].folder_of || !view_ids || !queue_ids ||
-      !order || !cover_px || !lyrics.lines || !lyrics.pool) {
+  if (!libs[0].tracks || !libs[1].tracks || !libs[0].folder_of || !libs[1].folder_of || !libs[0].folders ||
+      !libs[1].folders || !view_ids || !queue_ids || !order || !cover_px || !lyrics.lines || !lyrics.pool || !pcm) {
     log_e("player: no memory");
     return;
   }
   new (order) PlayOrder();
   st.mode = PlayMode::Loop;
-  // 解码在 1 号核（界面那个核，0 号核上有 WiFi 和唤醒词），比界面优先级高一点，放歌不卡；
-  // 栈要装下 dr_flac 打开文件时的 5KB 左右
-  xTaskCreatePinnedToCore(player_task, "player", 10240, nullptr, 3, &task, 1);
-  xTaskCreatePinnedToCore(scan_task, "music_scan", 6144, nullptr, 1, &scan_task_handle, 0);
+  ready = true;
   player_rescan();
 }
 
-bool player_supported() { return task != nullptr; }
-
-void player_rescan() {
-  if (scan_task_handle) xTaskNotifyGive(scan_task_handle);
+static void start_player_task() {
+  if (!ready || task) return;  // 只在主循环里调用（按钮、网页），不会同时建两个
+  // 刚建好的任务先看一遍列表（还没建时扫完的那几次没发给它），再处理命令
+  portENTER_CRITICAL(&cmd_mux);
+  cmds |= kCmdListChanged;
+  portEXIT_CRITICAL(&cmd_mux);
+  // 解码在 1 号核（界面那个核，0 号核上有 WiFi 和唤醒词），比界面优先级高一点，放歌不卡；
+  // 栈要装下 dr_flac 打开文件时的 5KB 左右
+  if (xTaskCreatePinnedToCore(player_task, "player", 10240, nullptr, 3, &task, 1) != pdPASS) {
+    task = nullptr;
+    log_e("player: no memory for task");
+  }
 }
 
-PlayerCard player_card() { return task ? card : PlayerCard::NoSlot; }
+bool player_supported() { return ready; }
+
+void player_rescan() {
+  if (!ready) return;
+  portENTER_CRITICAL(&scan_mux);
+  if (scan_running) {
+    scan_again = true;
+    portEXIT_CRITICAL(&scan_mux);
+    return;
+  }
+  scan_running = true;
+  scan_again = false;
+  portEXIT_CRITICAL(&scan_mux);
+  if (xTaskCreatePinnedToCore(scan_task, "music_scan", 6144, nullptr, 1, &scan_task_handle, 0) != pdPASS) {
+    portENTER_CRITICAL(&scan_mux);
+    scan_running = false;
+    portEXIT_CRITICAL(&scan_mux);
+  }
+}
+
+PlayerCard player_card() { return ready ? card : PlayerCard::NoSlot; }
 
 uint32_t player_list_version() { return version; }
 
 int player_folder_count() {
-  if (!task) return 0;
+  if (!ready) return 0;
   xSemaphoreTake(list_lock, portMAX_DELAY);
   int n = lib->folder_count;
   xSemaphoreGive(list_lock);
@@ -864,7 +913,7 @@ int player_folder_count() {
 }
 
 bool player_folder_name(int i, char *out, size_t cap) {
-  if (!task) return false;
+  if (!ready) return false;
   xSemaphoreTake(list_lock, portMAX_DELAY);
   bool ok = i >= 0 && i < lib->folder_count;
   if (ok) strlcpy(out, lib->folders[i], cap);
@@ -873,7 +922,7 @@ bool player_folder_name(int i, char *out, size_t cap) {
 }
 
 void player_set_view(int folder) {
-  if (!task) return;
+  if (!ready) return;
   view_folder = folder;
   rebuild_view();
 }
@@ -881,13 +930,13 @@ void player_set_view(int folder) {
 int player_view() { return view_folder; }
 
 int player_view_count() {
-  if (!task) return 0;
+  if (!ready) return 0;
   rebuild_view();  // 列表可能刚扫完换了
   return view_n;
 }
 
 bool player_view_track(int i, TrackInfo &out) {
-  if (!task) return false;
+  if (!ready) return false;
   xSemaphoreTake(list_lock, portMAX_DELAY);
   bool ok = i >= 0 && i < view_n && view_ids[i] < lib->count;
   if (ok) out = lib->tracks[view_ids[i]];
@@ -896,7 +945,7 @@ bool player_view_track(int i, TrackInfo &out) {
 }
 
 int player_view_playing() {
-  if (!task || !st.loaded) return -1;
+  if (!ready || !st.loaded) return -1;
   char path[kTrackPathMax];
   xSemaphoreTake(meta_lock, portMAX_DELAY);
   strlcpy(path, cur_path, sizeof(path));
@@ -915,27 +964,28 @@ void player_play_view(int i) {
   cmd_view_folder = view_folder;
   cmd_view_index = i;
   portEXIT_CRITICAL(&cmd_mux);
-  send(kCmdPlayView);
+  send_play(kCmdPlayView);
 }
 
-void player_toggle() { send(kCmdToggle); }
+void player_toggle() { send_play(kCmdToggle); }
 void player_pause() {
   if (want_play) send(kCmdPause);
 }
-void player_resume() { send(kCmdResume); }
-void player_next() { send(kCmdNext); }
-void player_prev() { send(kCmdPrev); }
+void player_resume() { send_play(kCmdResume); }
+void player_next() { send_play(kCmdNext); }
+void player_prev() { send_play(kCmdPrev); }
 
 void player_seek_to(uint32_t ms) {
   portENTER_CRITICAL(&cmd_mux);
   cmd_seek_ms = ms;
   portEXIT_CRITICAL(&cmd_mux);
-  send(kCmdSeek);
+  send_play(kCmdSeek);
 }
 
-void player_cycle_mode() { send(kCmdMode); }
+void player_cycle_mode() { send_play(kCmdMode); }
 
 void player_cycle_sleep() {
+  start_player_task();  // 倒计时在播放任务里走
   int m = sleep_next_choice(sleep_minutes);
   sleep_minutes = m;
   uint32_t until = m ? millis() + (uint32_t)m * 60000 : 0;
@@ -946,7 +996,7 @@ void player_cycle_sleep() {
 
 PlayerStatus player_status() {
   PlayerStatus s = {};
-  if (!task) return s;
+  if (!ready) return s;
   xSemaphoreTake(meta_lock, portMAX_DELAY);
   s = st;
   xSemaphoreGive(meta_lock);
@@ -954,10 +1004,10 @@ PlayerStatus player_status() {
   return s;
 }
 
-bool player_playing() { return task && want_play && st.loaded && !st.error; }
+bool player_playing() { return ready && want_play && st.loaded && !st.error; }
 
 bool player_cover(uint16_t *px) {
-  if (!task) return false;
+  if (!ready) return false;
   xSemaphoreTake(meta_lock, portMAX_DELAY);
   bool ok = cover_ok;
   if (ok) memcpy(px, cover_px, kPlayerCover * kPlayerCover * sizeof(uint16_t));
@@ -966,7 +1016,7 @@ bool player_cover(uint16_t *px) {
 }
 
 bool player_lyrics(char *cur, size_t cur_cap, char *next, size_t next_cap) {
-  if (!task) return false;
+  if (!ready) return false;
   xSemaphoreTake(meta_lock, portMAX_DELAY);
   bool ok = lyrics.count > 0;
   if (ok) {
@@ -1009,7 +1059,7 @@ static void json_str(String &out, const char *s) {
 
 void player_list_json(String &out) {
   out = "";
-  if (!task) {
+  if (!ready) {
     out = "{\"card\":\"noslot\"}";
     return;
   }
@@ -1083,7 +1133,7 @@ bool player_upload_begin(const char *folder, uint64_t size) {
   upload_ok = false;
   upload_fill = 0;
   upload_folder[0] = '\0';
-  if (!task) {
+  if (!ready) {
     upload_err = "这块板子没有 TF 卡槽";
     return false;
   }
@@ -1175,7 +1225,7 @@ static bool safe_rel(const char *path) {
 }
 
 bool player_delete(const char *path) {
-  if (!task || !safe_rel(path) || track_format(path) == TrackFormat::None) return false;
+  if (!ready || !safe_rel(path) || track_format(path) == TrackFormat::None) return false;
   bool playing_it = false;
   xSemaphoreTake(meta_lock, portMAX_DELAY);
   playing_it = strcmp(cur_path, path) == 0;
@@ -1201,7 +1251,7 @@ bool player_delete(const char *path) {
 
 bool player_mkdir(const char *name) {
   char folder[kTagMax];
-  if (!task || !track_safe_folder(name, folder, sizeof(folder))) return false;
+  if (!ready || !track_safe_folder(name, folder, sizeof(folder))) return false;
   bool ok = photos_card_lock();
   if (ok) {
     if (!SD_MMC.exists(kDir)) SD_MMC.mkdir(kDir);
