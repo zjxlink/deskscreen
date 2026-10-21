@@ -9,23 +9,47 @@
 #include "board.h"
 #include "screen_load.h"
 
-// 配色参考 GitHub 深色主题
-#define COLOR_BG      lv_color_hex(0x0D1117)
-#define COLOR_CARD    lv_color_hex(0x161B22)
-#define COLOR_TEXT    lv_color_hex(0xE6EDF3)
-#define COLOR_SUBTLE  lv_color_hex(0x8B949E)
-#define COLOR_ACCENT  lv_color_hex(0x58A6FF)
-#define COLOR_OK      lv_color_hex(0x3FB950)
-#define COLOR_ERR     lv_color_hex(0xF85149)
+// 屏幕配色有深色、浅色两套。深色参考 GitHub 深色主题；浅色是偏暖的米白底、白卡片，
+// 雨的蓝色调深一点，白底上才看得清。启动时界面先按深色建好，ui_set_theme 再换成浅色
+struct Palette {
+  uint32_t bg, card, text, subtle, accent, ok, err, flat, line, rain, rain_soft;
+  uint32_t level[5];  // GitHub 贡献等级，0 级为空白格
+  uint32_t moon_lit, moon_dark;
+  uint32_t flat_text;  // 灰色涨跌标签（平盘）上的字
+};
+static const Palette kDark = {
+    0x0D1117, 0x161B22, 0xE6EDF3, 0x8B949E, 0x58A6FF, 0x3FB950, 0xF85149, 0x30363D, 0x21262D, 0x4FC3F7, 0x3B5368,
+    {0x161B22, 0x0E4429, 0x006D32, 0x26A641, 0x39D353},
+    0xF2E6B8, 0x2D333B,
+    0xFFFFFF,
+};
+// 卡片不用纯白：换主题时按颜色值找控件，和按钮、标签上的白字分开
+static const Palette kLight = {
+    0xF3F1EC, 0xFAFAF7, 0x1F2328, 0x6E7781, 0x0969DA, 0x2DA44E, 0xE5534B, 0xD8DCE1, 0xE4E2DC, 0x1E88D6, 0xA9CBE6,
+    {0xE6E8EB, 0x9BE9A8, 0x40C463, 0x30A14E, 0x216E39},
+    0xE0B33A, 0xD3D7DD,
+    0x6E7781,
+};
+static const Palette *pal = &kDark;
 
-// GitHub 深色主题的贡献等级配色，0 级为空白格
-static const uint32_t kLevelColors[5] = {0x161B22, 0x0E4429, 0x006D32, 0x26A641, 0x39D353};
+static uint32_t weather_color_on(int code) {
+  return pal == &kLight ? weather_color_light(code) : weather_color(code);
+}
 
-// 行情涨跌配色，按 A 股习惯红涨绿跌
+#define COLOR_BG      lv_color_hex(pal->bg)
+#define COLOR_CARD    lv_color_hex(pal->card)
+#define COLOR_TEXT    lv_color_hex(pal->text)
+#define COLOR_SUBTLE  lv_color_hex(pal->subtle)
+#define COLOR_ACCENT  lv_color_hex(pal->accent)
+#define COLOR_OK      lv_color_hex(pal->ok)
+#define COLOR_ERR     lv_color_hex(pal->err)
+#define COLOR_RAIN    lv_color_hex(pal->rain)
+
+// 行情涨跌配色，按 A 股习惯红涨绿跌，两套主题一样
 #define COLOR_UP      lv_color_hex(0xDA3633)
 #define COLOR_DOWN    lv_color_hex(0x238636)
-#define COLOR_FLAT    lv_color_hex(0x30363D)
-#define COLOR_LINE    lv_color_hex(0x21262D)
+#define COLOR_FLAT    lv_color_hex(pal->flat)
+#define COLOR_LINE    lv_color_hex(pal->line)
 
 // 热力图格子尺寸：24 周 x 13px = 309px，正好放进 320 宽的屏幕
 static constexpr int kCell = 10;
@@ -74,6 +98,7 @@ static lv_obj_t *lbl_gh_total;
 static lv_obj_t *gh_grid;
 static lv_obj_t *gh_cells[kGithubWeeks][7];
 static lv_obj_t *lbl_gh_msg;
+static lv_obj_t *gh_legend[5];  // 图例「少 ■■■■■ 多」
 
 struct StockRow {
   lv_obj_t *row;
@@ -100,7 +125,11 @@ static lv_obj_t *pomo_dots[kPomoMaxDots];
 static constexpr int kPetScale = 7;
 static constexpr int kPetPx = kPetSize * kPetScale;
 static constexpr int kPetTop = 34;
+// 0 号是背景色，画的时候换成当前主题的背景
 static const uint32_t kPetPalette[] = {0x0D1117, 0x5C3317, 0xF0A04B, 0xFFF4E6, 0xFF8FA3, 0x58A6FF};
+static lv_color_t pet_color(int i) { return lv_color_hex(i == 0 ? pal->bg : kPetPalette[i]); }
+// 换主题时加一，画小橘的地方据此知道要重画
+static uint8_t theme_epoch;
 static lv_obj_t *pet_canvas;
 static lv_color_t *pet_buf;
 static lv_obj_t *lbl_pet_line;
@@ -212,7 +241,7 @@ static lv_obj_t *make_cell(lv_obj_t *parent, int size, uint8_t level) {
   lv_obj_set_style_radius(c, 2, 0);
   lv_obj_set_style_border_width(c, 0, 0);
   lv_obj_set_style_pad_all(c, 0, 0);
-  lv_obj_set_style_bg_color(c, lv_color_hex(kLevelColors[level]), 0);
+  lv_obj_set_style_bg_color(c, lv_color_hex(pal->level[level]), 0);
   lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
   return c;
 }
@@ -434,6 +463,7 @@ static void build_github() {
   for (int lv = 4; lv >= 0; lv--) {
     lv_obj_t *c = make_cell(scr, 10, lv);
     lv_obj_align_to(c, prev, LV_ALIGN_OUT_LEFT_MID, lv == 4 ? -6 : -3, 0);
+    gh_legend[lv] = c;
     prev = c;
   }
   lv_obj_t *less = make_label(scr, &font_cn_16, COLOR_SUBTLE);
@@ -845,12 +875,14 @@ static void build_game() {
 
 static void draw_game_cat(PetMood mood) {
   static int last = -1;
-  if (!game_cat_buf || (int)mood == last) return;
+  static uint8_t epoch;
+  if (!game_cat_buf || ((int)mood == last && epoch == theme_epoch)) return;
   last = (int)mood;
+  epoch = theme_epoch;
   const int scale = RunnerGame::kCatSize / kPetSize;
   for (int y = 0; y < RunnerGame::kCatSize; y++) {
     for (int x = 0; x < RunnerGame::kCatSize; x++) {
-      game_cat_buf[y * RunnerGame::kCatSize + x] = lv_color_hex(kPetPalette[pet_pixel(mood, false, x / scale, y / scale)]);
+      game_cat_buf[y * RunnerGame::kCatSize + x] = pet_color(pet_pixel(mood, false, x / scale, y / scale));
     }
   }
   lv_obj_invalidate(game_cat);
@@ -971,13 +1003,15 @@ static void build_chat() {
 
 static void draw_chat_cat(PetMood mood, bool blink) {
   static int last = -1;
+  static uint8_t epoch;
   int key = (int)mood * 2 + blink;
-  if (!chat_cat_buf || key == last) return;
+  if (!chat_cat_buf || (key == last && epoch == theme_epoch)) return;
   last = key;
+  epoch = theme_epoch;
   const int scale = kChatCat / kPetSize;
   for (int y = 0; y < kChatCat; y++) {
     for (int x = 0; x < kChatCat; x++) {
-      chat_cat_buf[y * kChatCat + x] = lv_color_hex(kPetPalette[pet_pixel(mood, blink, x / scale, y / scale)]);
+      chat_cat_buf[y * kChatCat + x] = pet_color(pet_pixel(mood, blink, x / scale, y / scale));
     }
   }
   lv_obj_invalidate(chat_cat);
@@ -1189,7 +1223,7 @@ void ui_show_page(Page page, bool animate, bool back) {
 
 // 画月亮：每个像素取 3x3 个点，按亮面、暗面、背景的比例混色，边缘不会有锯齿
 static void draw_moon(float phase) {
-  const lv_color_t lit = lv_color_hex(0xF2E6B8), dark = lv_color_hex(0x2D333B);
+  const lv_color_t lit = lv_color_hex(pal->moon_lit), dark = lv_color_hex(pal->moon_dark);
   const float r = kMoonPx / 2.0f - 0.5f;
   for (int py = 0; py < kMoonPx; py++) {
     for (int px = 0; px < kMoonPx; px++) {
@@ -1276,7 +1310,7 @@ static void set_forecast(const WeatherData &w) {
   weather_rain_summary(w, text, sizeof(text));
   bool wet = weather_rain_index(w) >= 0;
   lv_label_set_text(lbl_rain_title, text[0] ? text : "没有逐小时预报");
-  lv_obj_set_style_text_color(lbl_rain_title, wet ? lv_color_hex(0x4FC3F7) : COLOR_TEXT, 0);
+  lv_obj_set_style_text_color(lbl_rain_title, wet ? COLOR_RAIN : COLOR_TEXT, 0);
   for (int i = 0; i < kRainHours; i++) {
     lv_obj_t *b = rain_bars[i];
     if (i >= w.nhours) {
@@ -1287,7 +1321,7 @@ static void set_forecast(const WeatherData &w) {
     int ht = 2 + h.prob * (kRainBarMaxH - 2) / 100;
     lv_obj_set_height(b, ht);
     lv_obj_set_y(b, kRainBase - ht);
-    lv_obj_set_style_bg_color(b, weather_hour_wet(h) ? lv_color_hex(0x4FC3F7) : h.prob >= 30 ? lv_color_hex(0x3B5368) : COLOR_FLAT, 0);
+    lv_obj_set_style_bg_color(b, weather_hour_wet(h) ? COLOR_RAIN : h.prob >= 30 ? lv_color_hex(pal->rain_soft) : COLOR_FLAT, 0);
     lv_obj_clear_flag(b, LV_OBJ_FLAG_HIDDEN);
   }
   for (int i = 0; i < kRainHours / 3; i++) {
@@ -1305,13 +1339,19 @@ static void set_forecast(const WeatherData &w) {
     const DayForecast &d = w.days[i + 1];
     lv_label_set_text(lbl_fc_name[i], weather_day_name(d, i + 1));
     lv_label_set_text(lbl_fc_desc[i], weather_text(d.code));
-    lv_obj_set_style_text_color(lbl_fc_desc[i], lv_color_hex(weather_color(d.code)), 0);
+    lv_obj_set_style_text_color(lbl_fc_desc[i], lv_color_hex(weather_color_on(d.code)), 0);
     lv_label_set_text_fmt(lbl_fc_range[i], "%d\xC2\xB0 / %d\xC2\xB0", (int)lroundf(d.temp_min), (int)lroundf(d.temp_max));
     if (d.rain_prob > 0) lv_label_set_text_fmt(lbl_fc_rain[i], "降水 %d%%", d.rain_prob);
     else lv_label_set_text(lbl_fc_rain[i], "不下雨");
-    lv_obj_set_style_text_color(lbl_fc_rain[i], d.rain_prob >= 50 ? lv_color_hex(0x4FC3F7) : COLOR_SUBTLE, 0);
+    lv_obj_set_style_text_color(lbl_fc_rain[i], d.rain_prob >= 50 ? COLOR_RAIN : COLOR_SUBTLE, 0);
   }
 }
+
+// 最近一次成功拿到的数据，换主题时用它重新上色（天气描述、雨量条、贡献格子、涨跌标签的颜色跟着数据变）
+static WeatherData last_weather;
+static GithubData last_github;
+static StockData last_stocks;
+static bool have_weather, have_github, have_stocks;
 
 void ui_set_weather(const WeatherData &w) {
   if (w.error) {
@@ -1320,15 +1360,17 @@ void ui_set_weather(const WeatherData &w) {
     lv_label_set_text_fmt(lbl_rain_title, "获取失败（%d），稍后自动重试", w.error);
     return;
   }
+  if (&w != &last_weather) last_weather = w;
+  have_weather = true;
   if (w.ndays > 0) ui_set_sun(w.days[0].sunrise, w.days[0].sunset);
   lv_label_set_text_fmt(lbl_temp, "%d\xC2\xB0", (int)lroundf(w.temp));
   lv_label_set_text(lbl_desc, weather_text(w.code));
-  lv_obj_set_style_text_color(lbl_desc, lv_color_hex(weather_color(w.code)), 0);
+  lv_obj_set_style_text_color(lbl_desc, lv_color_hex(weather_color_on(w.code)), 0);
   lv_label_set_text_fmt(lbl_range, "%d\xC2\xB0 / %d\xC2\xB0", (int)lroundf(w.temp_min),
                         (int)lroundf(w.temp_max));
   char rain[48];
   weather_rain_short(w, rain, sizeof(rain));
-  if (rain[0]) lv_label_set_text_fmt(lbl_humidity, "#4FC3F7 %s#", rain);  // 卡片上放不下两句，有雨时先说雨
+  if (rain[0]) lv_label_set_text_fmt(lbl_humidity, "#%06X %s#", (unsigned)pal->rain, rain);  // 卡片上放不下两句，有雨时先说雨
   else lv_label_set_text_fmt(lbl_humidity, "湿度 %d%%", w.humidity);
   set_forecast(w);
 }
@@ -1343,19 +1385,22 @@ void ui_set_github(const GithubData &g) {
     case GithubStatus::Ok: break;
   }
   if (msg) {
+    have_github = false;
     lv_label_set_text_fmt(lbl_gh_msg, msg, g.error);
     lv_obj_clear_flag(lbl_gh_msg, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(gh_grid, LV_OBJ_FLAG_HIDDEN);
     return;
   }
 
+  if (&g != &last_github) last_github = g;
+  have_github = true;
   lv_obj_add_flag(lbl_gh_msg, LV_OBJ_FLAG_HIDDEN);
   lv_obj_clear_flag(gh_grid, LV_OBJ_FLAG_HIDDEN);
   lv_label_set_text_fmt(lbl_gh_login, "@%s", g.login);
   lv_label_set_text_fmt(lbl_gh_today, "%u", g.today);
   lv_label_set_text_fmt(lbl_gh_streak, "%u", g.streak);
   lv_label_set_text_fmt(lbl_gh_total, "%u", g.total);
-  lv_obj_set_style_text_color(lbl_gh_today, g.today > 0 ? lv_color_hex(kLevelColors[4]) : COLOR_TEXT, 0);
+  lv_obj_set_style_text_color(lbl_gh_today, g.today > 0 ? lv_color_hex(pal->level[4]) : COLOR_TEXT, 0);
 
   for (int w = 0; w < kGithubWeeks; w++) {
     for (int d = 0; d < 7; d++) {
@@ -1365,7 +1410,7 @@ void ui_set_github(const GithubData &g) {
         lv_obj_add_flag(c, LV_OBJ_FLAG_HIDDEN);
       } else {
         lv_obj_clear_flag(c, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_style_bg_color(c, lv_color_hex(kLevelColors[lv > 4 ? 4 : lv]), 0);
+        lv_obj_set_style_bg_color(c, lv_color_hex(pal->level[lv > 4 ? 4 : lv]), 0);
       }
     }
   }
@@ -1380,6 +1425,7 @@ void ui_set_stocks(const StockData &s) {
     case StockStatus::Ok: break;
   }
   if (msg) {
+    have_stocks = false;
     lv_label_set_text_fmt(lbl_stock_msg, msg, s.error);
     lv_obj_clear_flag(lbl_stock_msg, LV_OBJ_FLAG_HIDDEN);
     for (StockRow &r : stock_rows) lv_obj_add_flag(r.row, LV_OBJ_FLAG_HIDDEN);
@@ -1387,6 +1433,8 @@ void ui_set_stocks(const StockData &s) {
     return;
   }
 
+  if (&s != &last_stocks) last_stocks = s;
+  have_stocks = true;
   lv_obj_add_flag(lbl_stock_msg, LV_OBJ_FLAG_HIDDEN);
   if (s.updated[0]) lv_label_set_text_fmt(lbl_stock_updated, "%s 更新", s.updated);
   lv_obj_align_to(lbl_stock_updated, dot_wifi[PAGE_STOCKS], LV_ALIGN_OUT_LEFT_MID, -8, 0);
@@ -1415,6 +1463,7 @@ void ui_set_stocks(const StockData &s) {
     lv_label_set_text(r.pct, buf);
     lv_obj_set_style_bg_color(r.pill,
                               q.change_pct > 0 ? COLOR_UP : q.change_pct < 0 ? COLOR_DOWN : COLOR_FLAT, 0);
+    lv_obj_set_style_text_color(r.pct, q.change_pct == 0 ? lv_color_hex(pal->flat_text) : lv_color_white(), 0);
   }
 }
 
@@ -1459,11 +1508,13 @@ void ui_set_pomodoro(const Pomodoro &p, uint32_t now_ms, const char *msg, int do
 void ui_set_pet(PetMood mood, bool blink, const char *line, const char *status) {
   static int last_mood = -1;
   static int last_blink = -1;
-  if (pet_buf && ((int)mood != last_mood || (int)blink != last_blink)) {
+  static uint8_t epoch;
+  if (pet_buf && ((int)mood != last_mood || (int)blink != last_blink || epoch != theme_epoch)) {
     last_mood = (int)mood;
     last_blink = blink;
+    epoch = theme_epoch;
     lv_color_t colors[sizeof(kPetPalette) / sizeof(kPetPalette[0])];
-    for (size_t i = 0; i < sizeof(kPetPalette) / sizeof(kPetPalette[0]); i++) colors[i] = lv_color_hex(kPetPalette[i]);
+    for (size_t i = 0; i < sizeof(kPetPalette) / sizeof(kPetPalette[0]); i++) colors[i] = pet_color(i);
     for (int y = 0; y < kPetPx; y++) {
       for (int x = 0; x < kPetPx; x++) {
         pet_buf[y * kPetPx + x] = colors[pet_pixel(mood, blink, x / kPetScale, y / kPetScale)];
@@ -1542,6 +1593,54 @@ bool ui_pomodoro_hit(int x, int y) {
   int dy = y - SCREEN_H / 2;
   int r = kPomoRing / 2 + 12;  // 比圆环稍大一点，好点中
   return dx * dx + dy * dy <= r * r;
+}
+
+// 换主题：把各页面上用到主题色的地方逐个换成另一套里对应的颜色，按数据上色的部分用最近的数据重画。
+// 开机提示页（升级进度、配网）和相册页（照片底下是黑的）一直用深色，不参与
+static const lv_style_prop_t kColorProps[] = {
+    LV_STYLE_BG_COLOR,   LV_STYLE_BG_GRAD_COLOR, LV_STYLE_BORDER_COLOR, LV_STYLE_OUTLINE_COLOR,
+    LV_STYLE_SHADOW_COLOR, LV_STYLE_TEXT_COLOR,  LV_STYLE_LINE_COLOR,   LV_STYLE_ARC_COLOR,
+};
+static uint32_t Palette::*const kSwap[] = {
+    &Palette::bg,   &Palette::card, &Palette::text, &Palette::subtle, &Palette::accent,    &Palette::ok,
+    &Palette::err,  &Palette::flat, &Palette::line, &Palette::rain,   &Palette::rain_soft,
+};
+
+static void recolor(lv_obj_t *obj, const Palette &from, const Palette &to) {
+  for (uint32_t i = 0; i < obj->style_cnt; i++) {
+    const _lv_obj_style_t &os = obj->styles[i];
+    if (!os.is_local) continue;
+    for (lv_style_prop_t prop : kColorProps) {
+      lv_style_value_t v;
+      if (lv_style_get_prop(os.style, prop, &v) != LV_RES_OK) continue;
+      for (uint32_t Palette::*c : kSwap) {
+        if (v.color.full == lv_color_hex(from.*c).full) {
+          v.color = lv_color_hex(to.*c);
+          lv_style_set_prop(os.style, prop, v);
+          break;
+        }
+      }
+    }
+  }
+  for (uint32_t i = 0; i < lv_obj_get_child_cnt(obj); i++) recolor(lv_obj_get_child(obj, i), from, to);
+}
+
+void ui_set_theme(bool light) {
+  const Palette *next = light ? &kLight : &kDark;
+  if (next == pal) return;
+  const Palette &from = *pal;
+  pal = next;
+  theme_epoch++;
+  for (lv_obj_t *scr : scr_pages) {
+    if (scr != scr_pages[PAGE_ALBUM]) recolor(scr, from, *pal);
+  }
+  for (lv_obj_t *scr : {scr_alert, scr_quick, scr_game}) recolor(scr, from, *pal);
+  for (int lv = 0; lv < 5; lv++) lv_obj_set_style_bg_color(gh_legend[lv], lv_color_hex(pal->level[lv]), 0);
+  if (moon_now >= 0) draw_moon(moon_now);
+  if (have_weather) ui_set_weather(last_weather);
+  if (have_github) ui_set_github(last_github);
+  if (have_stocks) ui_set_stocks(last_stocks);
+  lv_obj_invalidate(lv_scr_act());
 }
 
 void ui_set_wifi(bool connected) {

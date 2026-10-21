@@ -112,5 +112,8 @@ void ui_set_album_arrows(bool show);
 bool ui_pomodoro_hit(int x, int y);
 void ui_set_wifi(bool connected);
 
+// 换成浅色或深色主题，和现在一样时什么都不做。开机时界面是深色
+void ui_set_theme(bool light);
+
 // 立即把当前界面画到屏幕上（主循环阻塞前使用）
 void ui_refresh_now();

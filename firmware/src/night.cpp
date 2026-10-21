@@ -25,3 +25,11 @@ int night_parse_hhmm(const char *s) {
 void night_format_hhmm(int minutes, char *buf, size_t len) {
   snprintf(buf, len, "%02d:%02d", minutes / 60 % 24, minutes % 60);
 }
+
+bool theme_is_light(int mode, int now, int sunrise, int sunset) {
+  if (mode == THEME_LIGHT) return true;
+  if (mode != THEME_AUTO || now < 0) return false;
+  int rise = sunrise >= 0 ? sunrise : 7 * 60;
+  int set = sunset >= 0 ? sunset : 19 * 60;
+  return now >= rise && now < set;
+}

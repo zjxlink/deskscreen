@@ -17,6 +17,7 @@ struct Settings {
   bool night_sun;          // 日落时开始（按天气预报里的日落时间，没拿到时用 night_start）
   uint16_t night_end;      // 默认 07:00
   uint8_t night_brightness;  // 0 表示关闭背光
+  uint8_t screen_theme;      // 屏幕主题，见 night.h 的 ScreenTheme，默认深色
   bool auto_update;          // 发现新版本后在凌晨 3~5 点自动安装
   String ota_url;            // 自建升级服务器的 manifest.json 地址，空表示只用 GitHub
   uint8_t pomo_focus;        // 番茄钟专注分钟数

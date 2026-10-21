@@ -53,6 +53,26 @@ static void test_format_hhmm() {
   TEST_ASSERT_EQUAL_STRING("23:00", buf);
 }
 
+static void test_theme_fixed() {
+  TEST_ASSERT_FALSE(theme_is_light(THEME_DARK, hm(12, 0), hm(6, 0), hm(18, 0)));
+  TEST_ASSERT_TRUE(theme_is_light(THEME_LIGHT, hm(23, 0), hm(6, 0), hm(18, 0)));
+  TEST_ASSERT_TRUE(theme_is_light(THEME_LIGHT, -1, -1, -1));  // 没对时也照样浅色
+}
+
+static void test_theme_auto() {
+  // 日出到日落浅色，日落那一分钟起换深色
+  TEST_ASSERT_FALSE(theme_is_light(THEME_AUTO, hm(6, 4), hm(6, 5), hm(17, 28)));
+  TEST_ASSERT_TRUE(theme_is_light(THEME_AUTO, hm(6, 5), hm(6, 5), hm(17, 28)));
+  TEST_ASSERT_TRUE(theme_is_light(THEME_AUTO, hm(17, 27), hm(6, 5), hm(17, 28)));
+  TEST_ASSERT_FALSE(theme_is_light(THEME_AUTO, hm(17, 28), hm(6, 5), hm(17, 28)));
+  // 还没拿到天气预报时按 7:00～19:00
+  TEST_ASSERT_FALSE(theme_is_light(THEME_AUTO, hm(6, 59), -1, -1));
+  TEST_ASSERT_TRUE(theme_is_light(THEME_AUTO, hm(18, 59), -1, -1));
+  TEST_ASSERT_FALSE(theme_is_light(THEME_AUTO, hm(19, 0), -1, -1));
+  // 还没对时先深色
+  TEST_ASSERT_FALSE(theme_is_light(THEME_AUTO, -1, hm(6, 5), hm(17, 28)));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_same_day_range);
@@ -60,5 +80,7 @@ int main() {
   RUN_TEST(test_equal_means_disabled);
   RUN_TEST(test_parse_hhmm);
   RUN_TEST(test_format_hhmm);
+  RUN_TEST(test_theme_fixed);
+  RUN_TEST(test_theme_auto);
   return UNITY_END();
 }
