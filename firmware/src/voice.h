@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#include "chat_log.h"
+
 // AI 语音聊天：点一下或喊「喵喵同学」开始，之后像打电话一样连续对话，小橘用语音回答（阿里云百炼 Qwen-Omni-Realtime）。
 // 服务器自己判断一句话说完了；小橘说话时点一下或直接开口就打断它；一阵子没人说话就自动挂断。
 // 唤醒词和回声消除用乐鑫 esp-sr（只有 BOX-3 编进去，见 tools/esp_sr.py）。
@@ -23,12 +25,13 @@ struct VoiceStatus {
   uint8_t level;        // 麦克风音量 0~100，用来画音量条
   uint32_t latency_ms;  // 上一句从说完到小橘出声用了多久，0 表示还没有
   uint32_t idle_left_ms;  // 再过多久没人说话就挂断（在听的时候才有）
-  char heard[128];      // 主人最近说的话（服务器识别的）
-  char reply[384];      // 小橘最近一次回答的文字
   char error[128];      // 出错原因；挂断后也用来说明为什么挂断
   bool wake_word;       // 唤醒词开着（没聊天时一直在等「喵喵同学」）
   bool full_duplex;     // 有回声消除：小橘说话时主人开口就能打断
+  uint16_t spoken;      // 小橘正在说的那句已经念到第几个字（字幕跟着走），kSpokenAll 表示全念完了
 };
+
+static constexpr uint16_t kSpokenAll = 0xFFFF;
 
 static constexpr uint32_t kVoiceIdleHangupMs = 20000;  // 这么久没人说话就挂断
 
@@ -46,6 +49,8 @@ void voice_set_options(bool wake, bool barge);
 void voice_pause(bool on);
 // 桌面信息（天气、番茄钟、股票……，见 desk_brief），下次开聊时告诉小橘。主循环有新数据时调用
 void voice_set_desk_info(const char *text);
+// 这次聊天的记录（气泡）：out 和现在的不一样时复制过去，返回 true
+bool voice_chat_log(ChatLog &out);
 // 刚被唤醒词叫醒时返回一次 true，主循环据此点亮屏幕、切到聊天页
 bool voice_take_wake();
 

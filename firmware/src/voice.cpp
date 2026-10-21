@@ -15,6 +15,7 @@ void voice_cancel() {}
 void voice_pause(bool) {}
 void voice_set_desk_info(const char *) {}
 bool voice_take_wake() { return false; }
+bool voice_chat_log(ChatLog &) { return false; }
 VoiceStatus voice_status() {
   VoiceStatus s = {};
   s.state = VoiceState::Off;
@@ -66,8 +67,9 @@ static volatile bool woke = false;       // 刚被唤醒词叫醒，主循环要
 static volatile bool wake_on = true;
 static volatile bool barge_on = true;
 static volatile bool paused = false;    // 正在升级固件：不听唤醒词、不聊天，CPU 留给写 Flash
-static volatile uint32_t session_from = 0;
-static std::string desk_info;  // 桌面信息，开聊时放进给小橘的说明里（lock 保护）  // 这次聊天从缓冲里第几个采样开始上传
+static volatile uint32_t session_from = 0;  // 这次聊天从缓冲里第几个采样开始上传
+static std::string desk_info;  // 桌面信息，开聊时放进给小橘的说明里（lock 保护）
+static ChatLog chat_log;       // 这次聊天说过的话（lock 保护）
 
 // 要上传的声音（PSRAM）：采集任务（或回声消除后的输出）写，聊天任务读。计数只增不减，相减就是缓冲里的采样数
 static int16_t *ring;
@@ -100,6 +102,14 @@ static VoiceState get_state() {
 static void set_text(char *dst, size_t size, const std::string &text) {
   xSemaphoreTake(lock, portMAX_DELAY);
   copy_utf8(dst, size, text);
+  xSemaphoreGive(lock);
+}
+
+// 改聊天记录，fn 拿到 ChatLog&
+template <typename Fn>
+static void edit_log(Fn fn) {
+  xSemaphoreTake(lock, portMAX_DELAY);
+  fn(chat_log);
   xSemaphoreGive(lock);
 }
 
@@ -350,6 +360,14 @@ struct Session {
   uint32_t stopped_at = 0;    // 主人一句话说完的时间，用来算回应用了多久
   uint32_t speak_at = 0;      // 小橘这次开口（收到第一段语音）的时间
   bool bye = false;           // 主人道别了，小橘回完这句就挂断
+  // 字幕：每收到一段文字记下当时已经收到多少语音，喇叭放到那儿时这段字算念出来了
+  struct Mark {
+    uint16_t chars;   // 到这段为止一共多少字
+    uint32_t audio;   // 那时已经收到的语音（16kHz 采样数）
+  };
+  Mark marks[48];
+  int mark_count = 0;
+  uint32_t audio_in = 0;      // 这次回答收到的语音（16kHz 采样数）
   std::string fatal;          // 非空表示要结束这次聊天
 
   explicit Session(RtParser::AudioFn fn) : parser(fn, this) {}
@@ -357,10 +375,26 @@ struct Session {
   bool dropped() const { return !drop_id.empty() && parser.response_id() == drop_id; }
 };
 
+static void set_spoken(uint16_t chars) {
+  xSemaphoreTake(lock, portMAX_DELAY);
+  status.spoken = chars;
+  xSemaphoreGive(lock);
+}
+
 static void to_listening(Session &s, uint32_t now, uint32_t guard_ms) {
+  set_spoken(kSpokenAll);
   s.resume_at = now + guard_ms;
   s.last_activity = now;
   set_state(VoiceState::Listening);
+}
+
+// 小橘这次回答已经念出来几个字
+static uint16_t spoken_chars(const Session &s) {
+  uint32_t pending = s.playing ? audio_stream_pending() : 0;
+  uint32_t played = s.audio_in > pending ? s.audio_in - pending : 0;
+  uint16_t chars = 0;
+  for (int i = 0; i < s.mark_count && s.marks[i].audio <= played; i++) chars = s.marks[i].chars;
+  return chars;
 }
 
 static void stop_playing(Session &s) {
@@ -373,6 +407,10 @@ static void stop_playing(Session &s) {
 // 不要当前这次回答了：喇叭里没放的扔掉，告诉服务器停下（回答已经收完时服务器那边没什么可停的，不发，免得它报错）
 static void cut_answer(Session &s) {
   if (!s.current_id.empty()) s.drop_id = s.current_id;
+  // 气泡里只留下已经念出来的
+  uint16_t said = get_state() == VoiceState::Speaking ? spoken_chars(s) : 0;
+  edit_log([&](ChatLog &log) { log.cut_reply(said); });
+  set_spoken(kSpokenAll);
   if (!s.current_id.empty() || get_state() != VoiceState::Speaking) ws_send_text(s.client, rt_event("response.cancel"));
   if (s.playing) audio_stream_flush();
   stop_playing(s);
@@ -398,6 +436,7 @@ static void on_audio(const int16_t *pcm, size_t n, void *ctx) {
     size_t take = n < 480 ? n : 480;  // 480 个 24kHz 采样变成 320 个 16kHz 采样
     size_t got = s.resampler.feed(pcm, take, out);
     audio_stream_write(out, got);
+    s.audio_in += got;
     pcm += take;
     n -= take;
   }
@@ -423,6 +462,7 @@ static void on_event(Session &s, RtEvent ev) {
         cut_answer(s);  // 主人开口了，小橘闭嘴听
       }
       set_state(VoiceState::Hearing);
+      edit_log([](ChatLog &log) { log.user_started(); });
       break;
     }
     case RtEvent::SpeechStopped:
@@ -431,7 +471,7 @@ static void on_event(Session &s, RtEvent ev) {
       set_state(VoiceState::Thinking);
       break;
     case RtEvent::Heard:
-      set_text(status.heard, sizeof(status.heard), s.parser.heard());
+      edit_log([&](ChatLog &log) { log.user_heard(s.parser.heard()); });
       if (rt_is_goodbye(s.parser.heard())) {
         log_i("voice: goodbye heard");
         s.bye = true;
@@ -444,11 +484,24 @@ static void on_event(Session &s, RtEvent ev) {
         s.drop_id = s.parser.response_id();
       } else {
         s.current_id = s.parser.response_id();
+        s.audio_in = 0;
+        s.mark_count = 0;
+        set_spoken(0);
+        edit_log([](ChatLog &log) { log.reply_started(); });
       }
       break;
-    case RtEvent::Text:
-      if (!s.dropped()) set_text(status.reply, sizeof(status.reply), s.parser.text());
+    case RtEvent::Text: {
+      if (s.dropped()) break;
+      edit_log([&](ChatLog &log) { log.reply_text(s.parser.text()); });
+      size_t chars = utf8_chars(s.parser.text().c_str());
+      Session::Mark m = {(uint16_t)(chars < kSpokenAll ? chars : kSpokenAll - 1), s.audio_in};
+      if (s.mark_count < (int)(sizeof(s.marks) / sizeof(s.marks[0]))) {
+        s.marks[s.mark_count++] = m;
+      } else {
+        s.marks[s.mark_count - 1].chars = m.chars;  // 记满了：最后一段往后延，字幕慢一点也不会提前
+      }
       break;
+    }
     case RtEvent::Done:
       if (s.dropped() || s.parser.response_id() != s.current_id) break;  // 被打断的那次回答结束了
       s.current_id.clear();
@@ -693,7 +746,12 @@ static std::string converse(bool &idle, bool &retry) {
       to_listening(s, now, 0);
       st = get_state();
     }
+    if (st == VoiceState::Speaking && s.playing) {
+      uint16_t said = spoken_chars(s);
+      if (said != status.spoken) set_spoken(said);
+    }
     if (s.finishing && audio_stream_pending() == 0) {
+      set_spoken(kSpokenAll);
       stop_playing(s);  // 等 DMA 里最后一点放完
       if (get_state() == VoiceState::Speaking) to_listening(s, millis(), s.full_duplex ? 0 : kEchoMs);
       st = get_state();
@@ -751,6 +809,10 @@ static std::string converse(bool &idle, bool &retry) {
     }
     if (!sent && got == 0) delay(5);
   }
+  if (get_state() == VoiceState::Speaking) {
+    uint16_t said = spoken_chars(s);
+    edit_log([&](ChatLog &log) { log.cut_reply(said); });  // 挂断时没念完的那句也只留念出来的
+  }
   if (s.playing) audio_stream_flush();
   stop_playing(s);
   if (s.client.connected()) {
@@ -786,6 +848,8 @@ static void voice_task(void *) {
     }
     status.level = 0;
     status.idle_left_ms = 0;
+    status.spoken = kSpokenAll;
+    chat_log.drop_pending();
     xSemaphoreGive(lock);
     if (why.empty() || idle) audio_play(SoundId::ChatOff);
     running = false;
@@ -805,8 +869,8 @@ static bool start_session() {
     status.state = VoiceState::Connecting;
     status.level = 0;
     status.error[0] = 0;
-    status.heard[0] = 0;
-    status.reply[0] = 0;
+    status.spoken = kSpokenAll;
+    chat_log.clear();
   }
   xSemaphoreGive(lock);
   if (start) xTaskNotifyGive(task);
@@ -887,6 +951,15 @@ bool voice_take_wake() {
   if (!woke) return false;
   woke = false;
   return true;
+}
+
+bool voice_chat_log(ChatLog &out) {
+  if (!task) return false;
+  xSemaphoreTake(lock, portMAX_DELAY);
+  bool changed = out.rev() != chat_log.rev();
+  if (changed) out = chat_log;
+  xSemaphoreGive(lock);
+  return changed;
 }
 
 VoiceStatus voice_status() {

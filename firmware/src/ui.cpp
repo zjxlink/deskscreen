@@ -5,6 +5,8 @@
 #include <string.h>
 #include <time.h>
 
+#include <string>
+
 #include "astro.h"
 #include "board.h"
 #include "screen_load.h"
@@ -194,8 +196,10 @@ static lv_obj_t *lbl_game_msg;
 static constexpr int kChatCat = 48;  // 小橘放大 3 倍
 static lv_obj_t *chat_cat;
 static lv_color_t *chat_cat_buf;
-static lv_obj_t *chat_bubble;
-static lv_obj_t *lbl_chat_reply;
+static lv_obj_t *chat_area;  // 气泡的显示区域，放不下时最早的从上面移出去
+static constexpr int kChatBubbles = kChatLines + 1;  // 再多一个给「嗯……」之类的提示
+static lv_obj_t *chat_bubbles[kChatBubbles];
+static lv_obj_t *chat_texts[kChatBubbles];
 static lv_obj_t *lbl_chat_hint;
 static lv_obj_t *chat_button;
 static lv_obj_t *lbl_chat_button;
@@ -1436,6 +1440,17 @@ bool ui_pet_hit(int x, int y) {
   return x >= a.x1 - 10 && x <= a.x2 + 10 && y >= a.y1 - 10 && y <= a.y2 + 10;
 }
 
+// 聊天页气泡区域和气泡尺寸
+static constexpr int kChatAreaX = 66;
+static constexpr int kChatAreaY = 32;
+static constexpr int kChatAreaW = SCREEN_W - kChatAreaX - 8;
+static constexpr int kChatAreaH = 116;
+static constexpr int kChatMeW = 200;  // 主人的气泡最宽这么多，左边留出空白，一眼分得清谁说的
+static constexpr int kBubblePadX = 8;
+static constexpr int kBubblePadY = 5;
+static constexpr int kBubbleGap = 6;
+static constexpr int kBubbleLineSpace = 2;
+
 static void build_chat() {
   lv_obj_t *scr = make_screen();
   scr_pages[PAGE_CHAT] = scr;
@@ -1450,19 +1465,31 @@ static void build_chat() {
   if (chat_cat_buf) lv_canvas_set_buffer(chat_cat, chat_cat_buf, kChatCat, kChatCat, LV_IMG_CF_TRUE_COLOR);
   lv_obj_set_pos(chat_cat, 12, 60);
 
-  // 气泡：小橘说的话
-  chat_bubble = lv_obj_create(scr);
-  lv_obj_set_size(chat_bubble, SCREEN_W - 84, 112);
-  lv_obj_set_pos(chat_bubble, 72, 36);
-  lv_obj_set_style_radius(chat_bubble, 10, 0);
-  lv_obj_set_style_border_width(chat_bubble, 0, 0);
-  lv_obj_set_style_bg_color(chat_bubble, COLOR_CARD, 0);
-  lv_obj_set_style_pad_all(chat_bubble, 8, 0);
-  lv_obj_clear_flag(chat_bubble, LV_OBJ_FLAG_SCROLLABLE);
-  lbl_chat_reply = make_label(chat_bubble, &font_cn_16, COLOR_TEXT);
-  lv_obj_set_width(lbl_chat_reply, SCREEN_W - 84 - 16);
-  lv_label_set_long_mode(lbl_chat_reply, LV_LABEL_LONG_WRAP);
-  lv_obj_set_style_text_line_space(lbl_chat_reply, 2, 0);
+  // 对话气泡：区域外的部分裁掉，位置在 ui_set_chat 里按内容排
+  chat_area = lv_obj_create(scr);
+  lv_obj_set_size(chat_area, kChatAreaW, kChatAreaH);
+  lv_obj_set_pos(chat_area, kChatAreaX, kChatAreaY);
+  lv_obj_set_style_bg_opa(chat_area, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(chat_area, 0, 0);
+  lv_obj_set_style_pad_all(chat_area, 0, 0);
+  lv_obj_set_style_radius(chat_area, 0, 0);
+  lv_obj_clear_flag(chat_area, LV_OBJ_FLAG_SCROLLABLE);
+  for (int i = 0; i < kChatBubbles; i++) {
+    lv_obj_t *b = lv_obj_create(chat_area);
+    lv_obj_set_style_radius(b, 10, 0);
+    lv_obj_set_style_border_width(b, 0, 0);
+    lv_obj_set_style_bg_color(b, COLOR_CARD, 0);
+    lv_obj_set_style_pad_hor(b, kBubblePadX, 0);
+    lv_obj_set_style_pad_ver(b, kBubblePadY, 0);
+    lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_t *t = make_label(b, &font_cn_16, COLOR_TEXT);
+    lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
+    lv_label_set_recolor(t, true);  // 还没念到的字用灰色
+    lv_obj_set_style_text_line_space(t, kBubbleLineSpace, 0);
+    chat_bubbles[i] = b;
+    chat_texts[i] = t;
+  }
 
   lbl_chat_hint = make_label(scr, &font_cn_16, COLOR_SUBTLE);
   lv_obj_set_width(lbl_chat_hint, SCREEN_W - 24);
@@ -1509,15 +1536,93 @@ static void set_text(lv_obj_t *label, const char *text) {
   if (strcmp(lv_label_get_text(label), text) != 0) lv_label_set_text(label, text);
 }
 
+// 一个要画的气泡。spoken 是已经念出来的字节数，后面的字用灰色；SIZE_MAX 表示整句都正常显示
+struct Bubble {
+  bool me;
+  const char *text;
+  size_t spoken;
+  bool hint;  // 不是谁说的话，是「嗯……」这样的提示，字用灰色
+};
+
+// 主人的气泡：深色主题是暗蓝色，浅色主题是淡蓝色
+static lv_color_t chat_me_bg() { return lv_color_hex(pal == &kLight ? 0xDCEAF8 : 0x1C3A5E); }
+
+// 把 text 的前 split 个字节正常显示、后面用 color 显示，写成标签的 "#RRGGBB 文字#" 格式。
+// 正文里的 # 会被当成颜色命令，换成空格
+static void recolor_text(char *out, size_t size, const char *text, size_t split, uint32_t color) {
+  size_t n = 0;
+  for (size_t i = 0; text[i] && n + 10 < size; i++) {
+    if (i == split) n += snprintf(out + n, size - n, "#%06X ", (unsigned)color);
+    out[n++] = text[i] == '#' ? ' ' : text[i];
+  }
+  if (split < strlen(text) && n + 1 < size) out[n++] = '#';
+  out[n] = 0;
+}
+
+static void render_bubbles(const Bubble *bubbles, int n) {
+  static char buf[kChatLineLen + 16];
+  int ys[kChatBubbles];
+  int y = 0;
+  int focus = -1;  // 正在念的地方（相对第一个气泡顶上），要保证看得见
+  for (int i = 0; i < kChatBubbles; i++) {
+    lv_obj_t *b = chat_bubbles[i];
+    if (i >= n) {
+      lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
+      continue;
+    }
+    const Bubble &bb = bubbles[i];
+    int max_w = (bb.me ? kChatMeW : kChatAreaW) - 2 * kBubblePadX;
+    lv_point_t size;
+    lv_txt_get_size(&size, bb.text, &font_cn_16, 0, kBubbleLineSpace, max_w, LV_TEXT_FLAG_NONE);
+    size_t len = strlen(bb.text);
+    size_t split = bb.spoken < len ? bb.spoken : len;
+    recolor_text(buf, sizeof(buf), bb.text, split, pal->subtle);
+    lv_obj_t *t = chat_texts[i];
+    lv_obj_set_width(t, size.x + 1);
+    set_text(t, buf);
+    lv_obj_set_style_text_color(t, bb.hint ? COLOR_SUBTLE : COLOR_TEXT, 0);
+    lv_obj_set_style_bg_color(b, bb.me ? chat_me_bg() : COLOR_CARD, 0);
+    int w = size.x + 1 + 2 * kBubblePadX;
+    int h = size.y + 2 * kBubblePadY;
+    lv_obj_set_size(b, w, h);
+    lv_obj_set_x(b, bb.me ? kChatAreaW - w : 0);
+    lv_obj_clear_flag(b, LV_OBJ_FLAG_HIDDEN);
+    if (split < len) {
+      // 念到的那一行下面再多露一行
+      std::string said(bb.text, split);
+      lv_point_t p;
+      lv_txt_get_size(&p, said.c_str(), &font_cn_16, 0, kBubbleLineSpace, max_w, LV_TEXT_FLAG_NONE);
+      focus = y + kBubblePadY + p.y + font_cn_16.line_height + kBubbleLineSpace;
+      if (focus > y + h) focus = y + h;
+    }
+    ys[i] = y;
+    y += h + kBubbleGap;
+  }
+  // 放不下时往上推，让最新的露出来；小橘正在念的话太长时，先停在念到的地方
+  int total = y - kBubbleGap;
+  int off = total > kChatAreaH ? total - kChatAreaH : 0;
+  if (focus >= 0 && focus - kChatAreaH < off) off = focus > kChatAreaH ? focus - kChatAreaH : 0;
+  // 上面被切掉一半的气泡不显示，剩下的顶到最上面；最后一句太长放不下时只能切
+  int first = n - 1;
+  while (first > 0 && ys[first - 1] >= off) first--;
+  if (ys[first] >= off) off = ys[first];
+  for (int i = 0; i < n; i++) {
+    if (i < first) {
+      lv_obj_add_flag(chat_bubbles[i], LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_set_y(chat_bubbles[i], ys[i] - off);
+    }
+  }
+}
+
 void ui_set_chat(const ChatView &v) {
   PetMood mood = PetMood::Normal;
   const char *hint = "";
   const char *button = "挂断";
   lv_color_t button_color = COLOR_ERR;
-  bool has_reply = v.reply && v.reply[0];
-  const char *reply = has_reply ? v.reply
-                                 : v.wake ? "喵！喊「喵喵同学」或点下面的按钮，然后直接跟我说话就行。"
-                                          : "喵！点下面的按钮接通，然后直接跟我说话就行，不用一直按着。";
+  // 还没说过话时小橘说的
+  const char *reply = v.wake ? "喵！喊「喵喵同学」或点下面的按钮，然后直接跟我说话就行。"
+                             : "喵！点下面的按钮接通，然后直接跟我说话就行，不用一直按着。";
   bool level = false;
   char buf[192];
   switch (v.state) {
@@ -1537,9 +1642,11 @@ void ui_set_chat(const ChatView &v) {
       }
       break;
     case VoiceState::Connecting:
+      reply = "我在听喵，想聊点什么？";
       hint = "正在接通…";
       break;
     case VoiceState::Listening:
+      reply = "我在听喵，想聊点什么？";
       level = true;
       if (v.error && v.error[0]) {
         hint = v.error;
@@ -1555,10 +1662,12 @@ void ui_set_chat(const ChatView &v) {
       }
       break;
     case VoiceState::Hearing:
+      reply = "我在听喵，想聊点什么？";
       level = true;
       hint = "在听…";
       break;
     case VoiceState::Thinking:
+      reply = "嗯……让我想想。";
       mood = PetMood::Bored;
       hint = "小橘在想……";
       button = "打断";
@@ -1577,20 +1686,51 @@ void ui_set_chat(const ChatView &v) {
       button_color = COLOR_ACCENT;
       break;
   }
-  if (!has_reply && (v.state == VoiceState::Connecting || v.state == VoiceState::Listening ||
-                     v.state == VoiceState::Hearing)) {
-    reply = "我在听喵，想聊点什么？";
-  } else if (!has_reply && v.state == VoiceState::Thinking) {
-    reply = "嗯……让我想想。";
+
+  // 气泡：聊过的话；还没聊过就是小橘的开场白。小橘在想的时候后面跟一个「……」
+  Bubble bubbles[kChatBubbles];
+  int n = 0;
+  int last_cat = -1;
+  int count = v.log ? v.log->count() : 0;
+  for (int i = 0; i < count; i++) {
+    const ChatLine &l = v.log->line(i);
+    if (l.text[0]) {
+      if (!l.me) last_cat = n;
+      bubbles[n++] = {l.me, l.text, SIZE_MAX, l.pending};
+    }
   }
-  // 小橘在想或在说的时候，提示行显示主人刚才说的话
-  if ((v.state == VoiceState::Thinking || v.state == VoiceState::Speaking) && v.heard && v.heard[0]) {
-    snprintf(buf, sizeof(buf), "你：%s", v.heard);
-    hint = buf;
+  if (n == 0) {
+    bubbles[n++] = {false, reply, SIZE_MAX, false};
+  } else if (v.state == VoiceState::Thinking && bubbles[n - 1].me) {
+    bubbles[n++] = {false, "……", SIZE_MAX, true};
   }
+  static std::string said;  // 小橘正在说的那句已经念出来的部分，用来定表情
+  said.clear();
+  if (last_cat >= 0 && v.spoken != kSpokenAll) {
+    Bubble &b = bubbles[last_cat];
+    b.spoken = utf8_prefix(b.text, v.spoken);
+    said.assign(b.text, b.spoken);
+  }
+  if (v.state == VoiceState::Speaking) mood = chat_mood(said.c_str(), PetMood::Happy);
+
+  // 内容没变就不用重新排版
+  static uint32_t last_rev = 0xFFFFFFFF;
+  static uint16_t last_spoken;
+  static const char *last_reply;
+  static int last_n;
+  static uint8_t last_epoch;
+  uint32_t rev = v.log ? v.log->rev() : 0;
+  if (rev != last_rev || v.spoken != last_spoken || reply != last_reply || n != last_n || theme_epoch != last_epoch) {
+    last_rev = rev;
+    last_spoken = v.spoken;
+    last_reply = reply;
+    last_n = n;
+    last_epoch = theme_epoch;
+    render_bubbles(bubbles, n);
+  }
+
   draw_chat_cat(mood, v.blink);
   lv_obj_set_y(chat_cat, 60 + v.bob);
-  set_text(lbl_chat_reply, reply);
   set_text(lbl_chat_hint, hint);
   lv_obj_set_style_text_color(lbl_chat_hint, v.state == VoiceState::Error ? COLOR_ERR : COLOR_SUBTLE, 0);
   set_text(lbl_chat_button, button);

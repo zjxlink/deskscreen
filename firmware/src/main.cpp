@@ -889,8 +889,10 @@ static void update_chat() {
   v.level = st.level;
   v.latency_ms = st.latency_ms;
   v.idle_left_ms = st.idle_left_ms;
-  v.heard = st.heard;
-  v.reply = st.reply;
+  static ChatLog chat_log;  // 气泡显示的聊天记录，变了才从语音任务复制过来
+  voice_chat_log(chat_log);
+  v.log = &chat_log;
+  v.spoken = st.spoken;
   v.error = st.error;
   v.has_key = chat_has_key;
   v.wake = st.wake_word;
