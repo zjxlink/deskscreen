@@ -21,6 +21,7 @@
 #include "night.h"
 #include "ota.h"
 #include "pet.h"
+#include "player.h"
 #include "bing.h"
 #include "photos.h"
 #include "pomo_stats.h"
@@ -100,6 +101,8 @@ static uint32_t last_beat_at = 0;
 static PetMood reaction = PetMood::Normal;  // Normal 表示没有反应
 static uint32_t reaction_start = 0;
 static uint32_t reaction_until = 0;
+static bool music_on_setting = false;  // 设置里的「音乐律动」
+static void update_listen();
 static constexpr uint32_t kDizzyMs = 4000;
 static constexpr uint32_t kStartledMs = 2500;
 
@@ -184,6 +187,7 @@ static void apply_settings() {
   c.away_min = s.away_min;
   if (!voice_available()) c.page_unavailable |= 1u << PAGE_CHAT;  // 没有麦克风
   if (!photos_supported()) c.page_unavailable |= 1u << PAGE_ALBUM | 1u << PAGE_MOVIE;  // 没有 TF 卡槽
+  if (!player_supported()) c.page_unavailable |= 1u << PAGE_MUSIC;  // 没有 TF 卡槽或者喇叭
   bool news_on = s.news_src.length() > 0 || s.news_rss.length() > 0;
   c.page_enabled[PAGE_NEWS] = news_on;
   if (!news_on) c.page_unavailable |= 1u << PAGE_NEWS;  // 没选新闻来源时不显示资讯页
@@ -234,7 +238,8 @@ static void apply_settings() {
   chime.set_on(s.chime_on);
   if (rain_on != s.rain_on) rain_alert.reset();
   rain_on = s.rain_on;
-  listen_set_enabled(s.music_on);
+  music_on_setting = s.music_on;
+  update_listen();
   voice_set_options(s.wake_on, s.barge_on);
 
   ClimateConfig cc;
@@ -420,6 +425,7 @@ static void update_clock_events() {
     show_alert(AlertIcon::Alarm, "闹钟", body, "点屏幕或按 BOOT 键关闭", kAlarmRingMs);
     alarm_ringing = true;
     alarm_next_ring = now;
+    player_pause();  // 闹钟响了先停歌，关掉闹钟也不自动接着放
   } else if (chime.tick(day, minutes) && !alarm_ringing) {
     play(SoundId::Chime);
   }
@@ -523,7 +529,7 @@ static void update_motion() {
 }
 
 // 音乐律动：听到音乐、又一分钟没人碰屏幕时切到小橘页；音乐停了，如果是自动切过来的就切回去。
-// 番茄钟、提醒、聊天、相册、影片、夜间和熄屏时不切
+// 番茄钟、提醒、聊天、相册、影片、音乐页、夜间和熄屏时不切；只在打开了「音乐律动」时切
 static void update_music() {
   uint32_t now = millis();
   bool was = music.playing;
@@ -533,7 +539,7 @@ static void update_music() {
   if (music.playing && !was) {
     music_start = now;
     Page p = screen.page();
-    if (screen.started() && p != PAGE_PET && p != PAGE_POMODORO && p != PAGE_CHAT && p != PAGE_ALBUM &&
+    if (music_on_setting && screen.started() && p != PAGE_PET && p != PAGE_MUSIC && p != PAGE_POMODORO && p != PAGE_CHAT && p != PAGE_ALBUM &&
         p != PAGE_MOVIE && now - last_input >= kMusicIdleMs && !screen.night() && !screen.dimmed() && !alert_on &&
         !quick_on && !game_on && !ota_screen && !pomo.running()) {
       music_return = p;
@@ -702,7 +708,8 @@ static bool ota_busy = false;
 static void on_ota_busy(bool busy) {
   ota_busy = busy;
   voice_pause(busy || movie_playing());
-  listen_set_enabled(!busy && settings_get().music_on);
+  if (busy) player_pause();  // 不接着放：升级完会重启
+  update_listen();
 }
 
 // 在线升级或网页上传固件时显示进度；成功后重启，失败时提示几秒再回到原来的页面
@@ -780,6 +787,8 @@ static void show_quick() {
   if (s.github_token.length() == 0) q.page_unset |= 1u << PAGE_GITHUB;
   if (s.stocks.length() == 0) q.page_unset |= 1u << PAGE_STOCKS;
   if (s.ai_key.length() == 0) q.page_unset |= 1u << PAGE_CHAT;
+  q.music = player_status().loaded;
+  q.music_playing = player_playing();
   ui_show_quick(q);
 }
 
@@ -813,6 +822,12 @@ static void quick_tap(int x, int y, uint32_t now) {
   if (h == QuickHit::Close) {
     close_quick();
     return;
+  }
+  if (h == QuickHit::MusicPrev || h == QuickHit::MusicPlay || h == QuickHit::MusicNext) {
+    if (h == QuickHit::MusicPrev) player_prev();
+    else if (h == QuickHit::MusicNext) player_next();
+    else player_toggle();
+    return;  // 播放键的图标在 update_quick 里跟着播放状态换
   }
   if (h == QuickHit::Pages || h == QuickHit::Back) {
     quick_pages = h == QuickHit::Pages;
@@ -848,6 +863,9 @@ static void quick_tap(int x, int y, uint32_t now) {
 
 static void update_quick() {
   if (quick_on && millis() - quick_last >= kQuickIdleMs) close_quick();
+  static bool music_was = false;
+  if (quick_on && !quick_pages && player_playing() != music_was) show_quick();
+  music_was = player_playing();
 }
 
 static void close_game();
@@ -968,7 +986,7 @@ static void update_game() {
 static void update_saver(uint32_t now) {
   if (!saver_on || saver_active || !screen.started() || now - last_input < saver_min * 60000UL) return;
   if (screen.page() == PAGE_ALBUM || screen.page() == PAGE_MOVIE || screen.night() || screen.dimmed() || alert_on ||
-      quick_on || game_on || ota_screen || pomo.running() || pomo_msg ||
+      quick_on || game_on || ota_screen || pomo.running() || pomo_msg || player_playing() ||
       (chat_busy_at && now - chat_busy_at < kChatStayMs))
     return;
   if (photos_status().count == 0) return;
@@ -1214,6 +1232,218 @@ static void update_movie() {
   ui_set_movie_player(v);
 }
 
+// ---- 音乐页 ----
+
+static constexpr uint32_t kMusicBarKeepMs = 10 * 60000;  // 暂停后时钟页的迷你播放条再留这么久
+static int music_list_page = 0;
+static int music_chip_first = 0;
+static bool music_list_dirty = true;
+static bool chat_paused_music = false;  // AI 聊天时自动暂停的，聊完接着放
+static uint16_t *music_cover = nullptr;
+
+static void update_listen() {
+  listen_set_enabled(!ota_busy && (music_on_setting || player_playing()));
+}
+
+static void render_music_list() {
+  static char names[kPlayerMaxFolders][kTagMax];
+  const char *chips[kPlayerMaxFolders];
+  int nf = player_folder_count();
+  for (int i = 0; i < nf; i++) {
+    if (!player_folder_name(i, names[i], sizeof(names[i]))) names[i][0] = '\0';
+    chips[i] = names[i];
+  }
+  int view = player_view();
+  if (view >= nf) {
+    player_set_view(0);
+    view = 0;
+  }
+  if (music_chip_first >= nf) music_chip_first = 0;
+  int n = player_view_count();
+  const char *msg = nullptr;
+  switch (player_card()) {
+    case PlayerCard::NoSlot: msg = "这块板子没有 TF 卡槽"; break;
+    case PlayerCard::NoCard: msg = "没有检测到 TF 卡"; break;
+    case PlayerCard::Empty: msg = "TF 卡的 music 文件夹里还没有歌"; break;
+    case PlayerCard::Reading: if (n == 0) msg = "正在读取 TF 卡…"; break;
+    case PlayerCard::Ok: if (n == 0) msg = "这个歌单里还没有歌"; break;
+  }
+  int pages = (n + kMusicRows - 1) / kMusicRows;
+  if (music_list_page >= pages) music_list_page = pages > 0 ? pages - 1 : 0;
+  int playing = player_view_playing();
+  static TrackInfo infos[kMusicRows];
+  MusicRow rows[kMusicRows];
+  int shown = 0;
+  for (; shown < kMusicRows; shown++) {
+    int idx = music_list_page * kMusicRows + shown;
+    if (!player_view_track(idx, infos[shown])) break;
+    rows[shown] = {idx + 1, infos[shown].title, infos[shown].artist, infos[shown].dur_ms, idx == playing};
+  }
+  ui_set_music_list(msg, chips, nf, view, music_chip_first, rows, shown, n, music_list_page, pages);
+}
+
+static void music_open_list() {
+  int playing = player_view_playing();
+  if (playing >= 0) music_list_page = playing / kMusicRows;  // 翻到正在放的那首
+  ui_music_show_list(true);
+  music_list_dirty = true;
+}
+
+static void music_scroll(int dir) {
+  int pages = (player_view_count() + kMusicRows - 1) / kMusicRows;
+  int p = music_list_page + dir;
+  if (p < 0 || p >= pages) return;
+  music_list_page = p;
+  music_list_dirty = true;
+}
+
+// 音乐页上点了一下，点到按钮、列表时返回 true；点在空白处返回 false，照常翻页
+static bool music_tap(int x, int y, uint32_t now) {
+  float frac = 0;
+  int idx = 0;
+  MusicHit h = ui_music_hit(x, y, &frac, &idx);
+  if (h == MusicHit::None) return false;
+  screen.activity(now);
+  screen.stay(now);
+  switch (h) {
+    case MusicHit::List: music_open_list(); break;
+    case MusicHit::Back: ui_music_show_list(false); break;
+    case MusicHit::Sleep: player_cycle_sleep(); break;
+    case MusicHit::Mode: player_cycle_mode(); break;
+    case MusicHit::Prev: player_prev(); break;
+    case MusicHit::Next: player_next(); break;
+    case MusicHit::PlayPause:
+      chat_paused_music = false;
+      player_toggle();
+      break;
+    case MusicHit::Progress: {
+      PlayerStatus st = player_status();
+      if (st.loaded && st.dur_ms) player_seek_to((uint32_t)(frac * st.dur_ms));
+      break;
+    }
+    case MusicHit::Chip:
+      player_set_view(idx);
+      music_list_page = 0;
+      music_list_dirty = true;
+      break;
+    case MusicHit::ChipMore:
+      music_chip_first = idx;
+      music_list_dirty = true;
+      break;
+    case MusicHit::Row:
+      player_play_view(music_list_page * kMusicRows + idx);
+      ui_music_show_list(false);  // 选好了回到播放画面
+      break;
+    default: break;
+  }
+  return true;
+}
+
+// 时钟页的迷你播放条：点歌名打开音乐页，点右边暂停、下一首
+static bool music_bar_tap(int x, int y, uint32_t now) {
+  MusicBarHit h = ui_music_bar_hit(x, y);
+  if (h == MusicBarHit::None) return false;
+  screen.activity(now);
+  if (h == MusicBarHit::Open) screen.go_to(PAGE_MUSIC, now);
+  else if (h == MusicBarHit::PlayPause) player_toggle();
+  else player_next();
+  return true;
+}
+
+static void update_player() {
+  if (!player_supported()) return;
+  static bool was_on = false;
+  static bool was_playing = false;
+  static uint32_t seen_version = 0;
+  static PlayerCard seen_card = PlayerCard::NoSlot;
+  static uint32_t seen_track = 0;
+  static bool cover_done = true;
+  static uint32_t last_ui = 0;
+  static uint32_t last_play_at = 0;
+  uint32_t now = millis();
+  bool on_page = screen.page() == PAGE_MUSIC && !alert_on && !quick_on && !game_on && !ota_screen;
+  if (on_page && !was_on) player_rescan();  // 刚拷进去、传上来的歌也能看到
+  if (!on_page && was_on && screen.page() != PAGE_MUSIC) ui_music_show_list(false);  // 下次进来先看播放画面
+  was_on = on_page;
+
+  // AI 聊天时先停下，聊完接着放；小橘回答时自己让出喇叭的也算
+  VoiceState vs = voice_status().state;
+  bool chatting = vs == VoiceState::Connecting || vs == VoiceState::Listening || vs == VoiceState::Hearing ||
+                  vs == VoiceState::Thinking || vs == VoiceState::Speaking;
+  if (chatting && player_playing()) {
+    player_pause();
+    chat_paused_music = true;
+  }
+  if (player_take_yielded() && chatting) chat_paused_music = true;
+  if (!chatting && chat_paused_music) {
+    chat_paused_music = false;
+    player_resume();
+  }
+
+  bool playing = player_playing();
+  if (playing != was_playing) {
+    was_playing = playing;
+    update_listen();  // 放歌时听喇叭的声音画频谱
+  }
+  if (playing) last_play_at = now;
+
+  PlayerStatus st = player_status();
+  if (st.track_version != seen_track) {
+    seen_track = st.track_version;
+    cover_done = false;
+    ui_set_music_cover(nullptr);
+    music_list_dirty = true;  // 列表里正在放的标记换一首
+  }
+  if (!cover_done && music_cover) {
+    if (player_cover(music_cover)) {
+      ui_set_music_cover(music_cover);
+      cover_done = true;
+    } else if (!st.loading) {
+      cover_done = true;  // 这首没有封面
+    }
+  }
+
+  // 时钟页的迷你播放条：在放、或者暂停不到 10 分钟时显示
+  bool bar = st.loaded && (playing || now - last_play_at < kMusicBarKeepMs) && last_play_at != 0;
+  ui_set_music_bar(bar, playing, st.title, st.artist);
+
+  if (!on_page) return;
+  screen.stay(now);  // 在音乐页不轮播走
+  if (ui_music_list_shown()) {
+    if (music_list_dirty || player_list_version() != seen_version || player_card() != seen_card) {
+      music_list_dirty = false;
+      seen_version = player_list_version();
+      seen_card = player_card();
+      render_music_list();
+    }
+    return;
+  }
+  if (now - last_ui < 100) return;
+  last_ui = now;
+  static char cur[160], next[160];
+  bool lyr = st.loaded && player_lyrics(cur, sizeof(cur), next, sizeof(next));
+  MusicPageView v;
+  v.card = player_card();
+  v.loaded = st.loaded;
+  v.playing = playing;
+  v.loading = st.loading;
+  v.pos_ms = st.pos_ms;
+  v.dur_ms = st.dur_ms;
+  v.title = st.title;
+  v.artist = st.artist;
+  v.album = st.album;
+  v.folder = st.folder;
+  v.queue_pos = st.queue_pos;
+  v.queue_len = st.queue_len;
+  v.mode = st.mode;
+  v.sleep_left_s = st.sleep_left_s;
+  v.error = st.error;
+  v.lyric_cur = lyr ? cur : nullptr;
+  v.lyric_next = lyr ? next : nullptr;
+  v.bands = music.bands;
+  ui_set_music(v);
+}
+
 // 点屏幕或短按 BOOT 键：有全屏提醒时先关掉提醒（屏幕调暗时第一下只点亮），否则切换页面。
 // back 为 true 时切到上一页（点屏幕左半边）；BOOT 键总是下一页
 static void on_tap(uint32_t now, bool back = false) {
@@ -1338,6 +1568,10 @@ static void check_touch() {
     } else if (abs(dy) >= kSwipePx && screen.page() == PAGE_MOVIE && screen.started() && !screen.dimmed() &&
                !ota_screen && !alert_on && !game_on && !movie_status().open) {
       movie_scroll(dy < 0 ? 1 : -1);  // 往上滑看后面的片子
+    } else if (abs(dy) >= kSwipePx && screen.page() == PAGE_MUSIC && screen.started() && !screen.dimmed() &&
+               !ota_screen && !alert_on && !game_on && ui_music_list_shown()) {
+      music_scroll(dy < 0 ? 1 : -1);  // 往上滑看后面的歌
+      screen.activity(now);
     }
   } else if (!touched && was_touched && !long_done) {
     if (on_ring) {
@@ -1355,6 +1589,12 @@ static void check_touch() {
     } else if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && screen.page() == PAGE_MOVIE &&
                movie_tap(down_x, down_y, now)) {
       // 影片页：点片子、控制条
+    } else if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && screen.page() == PAGE_MUSIC &&
+               music_tap(down_x, down_y, now)) {
+      // 音乐页：按钮、进度条、列表
+    } else if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && screen.page() == PAGE_CLOCK &&
+               music_bar_tap(down_x, down_y, now)) {
+      // 时钟页的迷你播放条
     } else {
       on_tap(now, down_x < SCREEN_W / 2);
     }
@@ -1380,6 +1620,8 @@ void setup() {
   imu_ok = imu_begin();
   photos_begin();
   movie_begin();
+  player_begin();
+  music_cover = (uint16_t *)heap_caps_malloc(kPlayerCover * kPlayerCover * 2, MALLOC_CAP_SPIRAM);
   ui_init();
   apply_settings();
   update_screen();  // 还没对时，先用白天亮度
@@ -1469,6 +1711,7 @@ void loop() {
   update_chat();
   update_album();
   update_movie();
+  update_player();
   update_screen();
   update_ota_screen();
 

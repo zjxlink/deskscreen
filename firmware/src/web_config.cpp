@@ -16,6 +16,7 @@
 #include "ota.h"
 #include "ota_util.h"
 #include "pages.h"
+#include "player.h"
 #include "photos.h"
 #include "settings.h"
 #include "stock.h"
@@ -39,6 +40,7 @@ static constexpr int kMessageMaxChars = 60;
 static bool page_available(int p) {
   if (p == PAGE_CHAT) return voice_available();
   if (p == PAGE_ALBUM || p == PAGE_MOVIE) return photos_supported();
+  if (p == PAGE_MUSIC) return player_supported();
   return true;
 }
 
