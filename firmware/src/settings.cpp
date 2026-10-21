@@ -49,7 +49,7 @@ void settings_begin() {
   current.away_off = prefs.getBool("away_off", true);
   current.away_min = prefs.getUChar("away_min", 5);
   current.ai_key = prefs.getString("ai_key", "");
-  current.ai_model = prefs.getString("ai_model", "qwen3-omni-flash");
+  current.ai_model = prefs.getString("ai_model", "qwen3.8-omni-flash-realtime");
   current.ai_voice = prefs.getString("ai_voice", "Cherry");
   current.wake_on = prefs.getBool("wake_on", true);
   current.barge_on = prefs.getBool("barge_on", true);

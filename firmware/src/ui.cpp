@@ -126,6 +126,9 @@ static lv_obj_t *quick_close;
 static lv_obj_t *quick_minus;
 static lv_obj_t *quick_plus;
 static lv_obj_t *lbl_quick_bright;
+static lv_obj_t *quick_vol_minus;
+static lv_obj_t *quick_vol_plus;
+static lv_obj_t *lbl_quick_volume;
 static lv_obj_t *quick_sound;
 static lv_obj_t *quick_away;
 static lv_obj_t *lbl_quick_away;
@@ -713,19 +716,26 @@ static void build_quick() {
   lv_obj_set_style_text_align(lbl_quick_url, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_align(lbl_quick_url, LV_ALIGN_TOP_LEFT, 4, 186);
 
-  // 右边：三行设置
+  // 右边：四行设置，亮度和音量是「− 数值 +」
   const int x = 158;
-  lv_obj_t *l = make_label(scr_quick, &font_cn_16, COLOR_TEXT);
-  lv_label_set_text(l, "亮度");
-  lv_obj_align(l, LV_ALIGN_TOP_LEFT, x, 52);
-  quick_minus = make_button(scr_quick, LV_SYMBOL_MINUS);
-  lv_obj_align(quick_minus, LV_ALIGN_TOP_LEFT, x, 76);
-  lbl_quick_bright = make_label(scr_quick, &lv_font_montserrat_20, COLOR_TEXT);
-  lv_obj_set_width(lbl_quick_bright, 62);
-  lv_obj_set_style_text_align(lbl_quick_bright, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_align(lbl_quick_bright, LV_ALIGN_TOP_LEFT, x + 44, 83);
-  quick_plus = make_button(scr_quick, LV_SYMBOL_PLUS);
-  lv_obj_align(quick_plus, LV_ALIGN_TOP_LEFT, x + 106, 76);
+  lv_obj_t *l;
+  auto stepper = [&](const char *name, int y, lv_obj_t **minus, lv_obj_t **value, lv_obj_t **plus) {
+    l = make_label(scr_quick, &font_cn_16, COLOR_TEXT);
+    lv_label_set_text(l, name);
+    lv_obj_align(l, LV_ALIGN_TOP_LEFT, x, y + 7);
+    *minus = make_button(scr_quick, LV_SYMBOL_MINUS);
+    lv_obj_set_size(*minus, 34, 32);
+    lv_obj_align(*minus, LV_ALIGN_TOP_LEFT, x + 36, y);
+    *value = make_label(scr_quick, &lv_font_montserrat_20, COLOR_TEXT);
+    lv_obj_set_width(*value, 48);
+    lv_obj_set_style_text_align(*value, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(*value, LV_ALIGN_TOP_LEFT, x + 70, y + 6);
+    *plus = make_button(scr_quick, LV_SYMBOL_PLUS);
+    lv_obj_set_size(*plus, 34, 32);
+    lv_obj_align(*plus, LV_ALIGN_TOP_LEFT, x + 118, y);
+  };
+  stepper("亮度", 44, &quick_minus, &lbl_quick_bright, &quick_plus);
+  stepper("音量", 88, &quick_vol_minus, &lbl_quick_volume, &quick_vol_plus);
 
   l = make_label(scr_quick, &font_cn_16, COLOR_TEXT);
   lv_label_set_text(l, "提示音");
@@ -741,6 +751,7 @@ static void build_quick() {
 
 void ui_show_quick(const QuickState &q) {
   lv_label_set_text_fmt(lbl_quick_bright, "%d%%", (q.brightness * 100 + 127) / 255);
+  lv_label_set_text_fmt(lbl_quick_volume, "%d", q.volume);
   set_toggle(quick_sound, q.sound_on);
   set_toggle(quick_away, q.away_off, q.has_dock);
   lv_label_set_text(lbl_quick_away, q.has_dock ? "没人熄屏" : "没人熄屏\n#8B949E 未插底座#");
@@ -771,6 +782,8 @@ QuickHit ui_quick_hit(int x, int y) {
   if (hit(quick_close, x, y)) return QuickHit::Close;
   if (hit(quick_minus, x, y)) return QuickHit::BrightDown;
   if (hit(quick_plus, x, y)) return QuickHit::BrightUp;
+  if (hit(quick_vol_minus, x, y)) return QuickHit::VolumeDown;
+  if (hit(quick_vol_plus, x, y)) return QuickHit::VolumeUp;
   // 开关那一整行都算
   lv_area_t a;
   lv_obj_get_coords(quick_sound, &a);

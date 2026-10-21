@@ -15,7 +15,9 @@ static constexpr const char *kRtPath = "/api-ws/v1/realtime?model=";
 static constexpr int kRtInRate = 16000;   // 上传 16kHz 16 位单声道 PCM
 static constexpr int kRtOutRate = 24000;  // 回答是 24kHz 16 位单声道 PCM
 
-// 设置里填的是普通模型名（qwen3-omni-flash），实时接口用带 -realtime 的版本
+// 默认的实时模型（2026-10 百炼上能用的）
+static constexpr const char *kRtDefaultModel = "qwen3.8-omni-flash-realtime";
+// 设置里的模型名转成实时接口用的：空的或以前的默认值换成 kRtDefaultModel，没带 -realtime 的补上
 std::string rt_model(const char *model);
 
 // 连上以后第一条：音色、提示词、输入输出格式、服务器断句。

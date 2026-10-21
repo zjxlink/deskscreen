@@ -248,7 +248,7 @@ static void handle_save() {
   }
   String ai_model = server.arg("ai_model");
   ai_model.trim();
-  s.ai_model = ai_model.length() > 0 ? ai_model : String("qwen3-omni-flash");
+  s.ai_model = ai_model.length() > 0 ? ai_model : String("qwen3.8-omni-flash-realtime");
   String ai_voice = server.arg("ai_voice");
   ai_voice.trim();
   s.ai_voice = ai_voice.length() > 0 ? ai_voice : String("Cherry");
