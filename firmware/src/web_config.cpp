@@ -1,7 +1,11 @@
 #include "web_config.h"
 
 #include <ArduinoJson.h>
+#include <Preferences.h>
 #include <WebServer.h>
+#include <esp_system.h>
+
+#include <functional>
 #include <WiFi.h>
 
 #include "album.h"
@@ -19,6 +23,7 @@
 #include "stock.h"
 #include "voice.h"
 #include "weather.h"
+#include "web_auth.h"
 #include "web_index_gz.h"
 
 static WebServer server(80);
@@ -31,6 +36,94 @@ static int (*today)() = nullptr;
 static void (*message_hook)(const String &, bool) = nullptr;
 static void (*room_info)(RoomInfo &) = nullptr;
 static constexpr int kMessageMaxChars = 60;
+static void (*pair_hook)(const char *) = nullptr;
+
+// ---- 配对登录：除了网页本身，所有接口都要带配对后拿到的令牌 ----
+static WebAuth auth;
+static constexpr const char *kAuthCookie = "ds_auth";
+
+static uint32_t hw_random() { return esp_random(); }
+
+static void save_tokens() {
+  char buf[kWebAuthMaxTokens * (kWebAuthTokenLen + 1)];
+  web_auth_save_tokens(auth, buf, sizeof(buf));
+  Preferences p;
+  p.begin("webauth", false);
+  p.putString("tokens", buf);
+  p.end();
+}
+
+static void load_tokens() {
+  Preferences p;
+  p.begin("webauth", true);
+  String s = p.getString("tokens", "");
+  p.end();
+  web_auth_load_tokens(auth, s.c_str());
+}
+
+// 浏览器用 Cookie，电脑上的脚本可以用 X-Auth-Token 头
+static bool authed() {
+  char token[kWebAuthTokenLen + 1];
+  if (web_auth_cookie(server.header("Cookie").c_str(), kAuthCookie, token, sizeof(token)) &&
+      web_auth_check(auth, token)) {
+    return true;
+  }
+  return web_auth_check(auth, server.header("X-Auth-Token").c_str());
+}
+
+using Handler = std::function<void()>;
+
+static Handler guard(Handler h) {
+  return [h] {
+    if (!authed()) {
+      server.send(401, "application/json", "{\"ok\":false,\"error\":\"需要配对\"}");
+      return;
+    }
+    h();
+  };
+}
+
+// 上传时没配对的请求直接丢掉数据，结束时由 guard 过的完成回调返回 401
+static Handler guard_upload(Handler h) {
+  return [h] {
+    if (authed()) h();
+  };
+}
+
+// 网页打不开接口时调用：屏幕上显示配对码
+static void handle_pair_start() {
+  const char *code = web_auth_start(auth, millis(), hw_random);
+  if (pair_hook) pair_hook(code);
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+static void handle_pair() {
+  char token[kWebAuthTokenLen + 1];
+  if (!web_auth_pair(auth, server.arg("code").c_str(), millis(), hw_random, token)) {
+    bool active = web_auth_code_active(auth, millis());
+    if (!active && pair_hook) pair_hook(nullptr);
+    JsonDocument doc;
+    doc["ok"] = false;
+    doc["error"] = active ? "配对码不对，再看一下屏幕" : "配对码已失效，请重新获取";
+    doc["expired"] = !active;
+    String out;
+    serializeJson(doc, out);
+    server.send(403, "application/json", out);
+    return;
+  }
+  save_tokens();
+  if (pair_hook) pair_hook(nullptr);
+  server.sendHeader("Set-Cookie", String(kAuthCookie) + "=" + token +
+                                      "; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict");
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+static void handle_pair_forget() {
+  web_auth_forget_all(auth);
+  save_tokens();
+  server.sendHeader("Set-Cookie", String(kAuthCookie) + "=; Path=/; Max-Age=0");
+  server.send(200, "application/json", "{\"ok\":true}");
+}
 
 // 板子上有没有这一页的硬件，和 main.cpp 的 page_unavailable 一致
 static bool page_available(int p) {
@@ -195,6 +288,7 @@ static void handle_api_status() {
   JsonObject ota = doc["ota"].to<JsonObject>();
   ota["state"] = ota_state_name(os.state);
   ota["text"] = ota_text(os);
+  ota["rolled_back"] = ota_rolled_back();
   ota["busy"] = ota_busy(os);
   ota["latest"] = os.latest;
 
@@ -547,41 +641,46 @@ static void handle_reset_wifi() {
 }
 
 void web_config_begin() {
+  load_tokens();
   server.on("/", HTTP_GET, handle_index);
-  server.on("/api/settings", HTTP_GET, handle_api_settings);
-  server.on("/api/status", HTTP_GET, handle_api_status);
-  server.on("/save", HTTP_POST, handle_save);
-  server.on("/reset-wifi", HTTP_POST, handle_reset_wifi);
-  server.on("/message", HTTP_POST, handle_message);
-  server.on("/pomodoro/toggle", HTTP_POST, [] { handle_pomo(PomoCmd::Toggle); });
-  server.on("/pomodoro/skip", HTTP_POST, [] { handle_pomo(PomoCmd::Skip); });
-  server.on("/pomodoro/reset", HTTP_POST, [] { handle_pomo(PomoCmd::Reset); });
-  server.on("/sound/test", HTTP_POST, [] {
+  server.on("/pair/start", HTTP_POST, handle_pair_start);
+  server.on("/pair", HTTP_POST, handle_pair);
+  server.on("/pair/forget", HTTP_POST, guard(handle_pair_forget));
+  server.on("/api/settings", HTTP_GET, guard(handle_api_settings));
+  server.on("/api/status", HTTP_GET, guard(handle_api_status));
+  server.on("/save", HTTP_POST, guard(handle_save));
+  server.on("/reset-wifi", HTTP_POST, guard(handle_reset_wifi));
+  server.on("/message", HTTP_POST, guard(handle_message));
+  server.on("/pomodoro/toggle", HTTP_POST, guard([] { handle_pomo(PomoCmd::Toggle); }));
+  server.on("/pomodoro/skip", HTTP_POST, guard([] { handle_pomo(PomoCmd::Skip); }));
+  server.on("/pomodoro/reset", HTTP_POST, guard([] { handle_pomo(PomoCmd::Reset); }));
+  server.on("/sound/test", HTTP_POST, guard([] {
     audio_play(SoundId::FocusDone);
     send_ok();
-  });
-  server.on("/ota/check", HTTP_POST, [] {
+  }));
+  server.on("/ota/check", HTTP_POST, guard([] {
     ota_check_now();
     send_ok();
-  });
-  server.on("/ota/install", HTTP_POST, [] {
+  }));
+  server.on("/ota/install", HTTP_POST, guard([] {
     ota_install_now();
     send_ok();
-  });
-  server.on("/ota/upload", HTTP_POST, handle_upload_done, handle_upload_chunk);
+  }));
+  server.on("/ota/upload", HTTP_POST, guard(handle_upload_done), guard_upload(handle_upload_chunk));
   server.on("/album", HTTP_GET, [] {  // 旧的相册地址，现在是设置网页里的子页面
     server.sendHeader("Location", "/#album");
     server.send(302);
   });
-  server.on("/album/list", HTTP_GET, [] { server.send(200, "application/json", photos_list_json()); });
-  server.on("/album/file", HTTP_GET, handle_photo_file);
-  server.on("/album/upload", HTTP_POST, [] { send_json(photo_ok, photo_error); }, handle_photo_chunk);
-  server.on("/album/delete", HTTP_POST, [] {
+  server.on("/album/list", HTTP_GET, guard([] { server.send(200, "application/json", photos_list_json()); }));
+  server.on("/album/file", HTTP_GET, guard(handle_photo_file));
+  server.on("/album/upload", HTTP_POST, guard([] { send_json(photo_ok, photo_error); }),
+            guard_upload(handle_photo_chunk));
+  server.on("/album/delete", HTTP_POST, guard([] {
     photo_name = "";
     send_json(photos_delete(source_arg(), server.arg("name")), "删除失败");
-  });
-  const char *headers[] = {"Content-Length"};
-  server.collectHeaders(headers, 1);
+  }));
+  const char *headers[] = {"Content-Length", "Cookie", "X-Auth-Token"};
+  server.collectHeaders(headers, 3);
   server.onNotFound([] { server.send(404, "text/plain", "Not found"); });
   server.begin();
 }
@@ -606,6 +705,14 @@ void web_config_set_message_hook(void (*hook)(const String &text, bool sound)) {
 
 void web_config_set_room_info(void (*hook)(RoomInfo &info)) {
   room_info = hook;
+}
+
+void web_config_set_pair_hook(void (*hook)(const char *code)) {
+  pair_hook = hook;
+}
+
+bool web_config_pair_active() {
+  return web_auth_code_active(auth, millis());
 }
 
 void web_config_set_progress_hook(void (*hook)()) {

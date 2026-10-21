@@ -111,6 +111,7 @@ static bool weather_valid = false;
 
 // 全屏提醒（留言、久坐、喝水）：盖在页面上，点屏幕或按 BOOT 键关掉
 static bool alert_on = false;
+static bool pair_shown = false;  // 屏幕上正在显示网页配对码
 static bool alert_timed = false;  // 久坐、喝水提醒到时自动关掉；留言一直显示到有人关掉
 static uint32_t alert_until = 0;
 
@@ -279,12 +280,14 @@ static void show_alert(AlertIcon icon, const char *title, const char *body, cons
   game_on = false;
   alert_timed = show_ms > 0;
   alert_until = now + show_ms;
+  pair_shown = icon == AlertIcon::Pair;
   if (screen.started()) screen.wake(now);
   if (!ota_screen) ui_show_alert(icon, title, body, foot);
 }
 
 static void close_alert() {
   alert_on = false;
+  pair_shown = false;
   if (!ota_screen) ui_show_page(screen.page(), false);
 }
 
@@ -297,6 +300,17 @@ static void on_message(const String &text, bool sound) {
   }
   show_alert(AlertIcon::Message, "新留言", text.c_str(), foot, 0);
   if (sound) play(SoundId::Message);
+}
+
+// 手机打开设置网页要配对：把配对码大字显示出来，配对成功或失效后关掉
+static void on_pair(const char *code) {
+  if (!code) {
+    if (pair_shown && alert_on) close_alert();
+    return;
+  }
+  char title[12];
+  snprintf(title, sizeof(title), "%.3s %.3s", code, code + 3);
+  show_alert(AlertIcon::Pair, title, "手机正在打开设置网页\n在网页里输入这 6 位数字", "2 分钟内有效 · 不是你在操作就点屏幕关闭", 0);
 }
 
 // 触摸、设置页面的番茄钟操作都走这里
@@ -382,6 +396,7 @@ static void update_reminders() {
     play(SoundId::Reminder);
   }
   if (alert_on && alert_timed && (int32_t)(now - alert_until) >= 0) close_alert();
+  if (pair_shown && alert_on && !web_config_pair_active()) close_alert();
 }
 
 // 新的天气预报到了：快下雨时提醒一次。夜间时段、留言没看、闹钟在响时先不提醒，下次拿到预报时再看
@@ -1395,6 +1410,7 @@ void setup() {
   web_config_set_pomodoro(&pomo, pomo_command);
   web_config_set_pomo_stats(&pomo_stats, local_day);
   web_config_set_message_hook(on_message);
+  web_config_set_pair_hook(on_pair);
   web_config_set_room_info(room_info);
   // 网页上传固件期间主循环被阻塞，由上传处理顺带刷新进度画面
   web_config_set_progress_hook([] {
@@ -1425,6 +1441,7 @@ void loop() {
   display_check_panel();
   lv_timer_handler();
   web_config_loop();
+  ota_confirm_tick(millis());
   check_button();
   check_touch();
 

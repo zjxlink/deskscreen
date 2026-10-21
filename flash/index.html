@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>桌面信息屏 · 网页刷机</title>
+<!-- 发布 Release 时由 .github/workflows/release.yml 和最新固件一起部署到 GitHub Pages -->
+<script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"></script>
+<style>
+:root{--bg:#F2F3F5;--card:#FFF;--text:#1D2129;--sub:#5C6370;--line:#E4E7EB;--accent:#C2410C;--on:#FFF;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#0E1013;--card:#181B20;--text:#E7E9EC;--sub:#A2A9B4;--line:#2A2F37;--accent:#F28C3C;--on:#1A0F05;color-scheme:dark}}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.7 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+main{max-width:640px;margin:0 auto;padding:32px 16px 64px;display:flex;flex-direction:column;gap:16px}
+h1{font-size:26px;margin:0}
+h2{font-size:18px;margin:0 0 6px}
+p{margin:0}
+.sub{color:var(--sub)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px}
+ol,ul{margin:0;padding-left:1.3em}
+.go{display:flex;flex-direction:column;align-items:flex-start;gap:10px}
+esp-web-install-button button{height:48px;border:0;border-radius:12px;background:var(--accent);color:var(--on);font:inherit;font-weight:600;padding:0 22px;cursor:pointer}
+.ver{font-size:14px;color:var(--sub)}
+a{color:var(--accent)}
+code{font-size:.9em}
+</style>
+</head>
+<body>
+<main>
+<h1>桌面信息屏 · 网页刷机</h1>
+<p class="sub">不用装任何软件，用电脑上的 Chrome 或 Edge 就能把固件刷进乐鑫 ESP32-S3-BOX-3。以后的新版本设备会自己在线升级。</p>
+
+<section class="card go">
+<h2>一键刷机</h2>
+<esp-web-install-button manifest="manifest-box3.json">
+  <button slot="activate">连接板子并刷机</button>
+  <span slot="unsupported">这个浏览器不支持网页刷机，请用电脑上的 Chrome 或 Edge 打开这个网页（手机和 Safari、Firefox 都不行）。</span>
+  <span slot="not-allowed">网页刷机需要 https 地址，请从 GitHub Pages 的网址打开。</span>
+</esp-web-install-button>
+<span class="ver" id="ver"></span>
+</section>
+
+<section class="card">
+<h2>步骤</h2>
+<ol>
+<li>用能传数据的 USB-C 线把 BOX-3 接到电脑（只能充电的线不行）。</li>
+<li>点上面的按钮，在弹出的列表里选板子的串口，点「连接」。Windows 上通常叫 <code>USB JTAG/serial debug unit</code>。</li>
+<li>选「安装」。第一次刷建议勾选清除设备，大约 1～2 分钟。</li>
+<li>刷完板子会重启，屏幕上显示一个 <code>DeskScreen-XXXX</code> 热点。用手机连上它，在弹出的网页里选家里的 WiFi（只支持 2.4G）。</li>
+<li>连上网后，长按屏幕 2 秒打开快捷设置，用手机扫二维码打开设置网页。第一次打开要输入屏幕上显示的 6 位配对码。</li>
+</ol>
+</section>
+
+<section class="card">
+<h2>连不上板子？</h2>
+<ul>
+<li>换一根 USB 线或换一个 USB 口，别用扩展坞。</li>
+<li>按住板子上的 BOOT 键不放，再按一下 RESET（复位）键，松开 BOOT，然后重新点按钮。</li>
+<li>还是不行，可以用乐鑫的 <a href="https://espressif.github.io/esptool-js/">esptool 网页版</a>，地址填 <code>0x0</code>，选 Release 里的 <code>firmware-box3-merged.bin</code>。</li>
+</ul>
+</section>
+
+<p class="sub">源代码和使用说明：<a href="https://github.com/zjxlink/test-repo">github.com/zjxlink/test-repo</a>（GPL-3.0 开源）</p>
+</main>
+<script>
+fetch('manifest-box3.json').then(r=>r.json()).then(m=>{document.getElementById('ver').textContent='将会安装 '+m.version;}).catch(()=>{});
+</script>
+</body>
+</html>

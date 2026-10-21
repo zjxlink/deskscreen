@@ -122,6 +122,7 @@ textarea.txt{height:76px;padding:10px 12px;resize:none}
 .ph .tag{position:absolute;left:5px;top:5px;padding:1px 6px;border-radius:6px;background:rgba(0,0,0,.55);color:#fff;font-size:10.5px;line-height:1.5}
 .ph button{position:absolute;top:4px;right:4px;width:28px;height:28px;border:0;border-radius:50%;background:rgba(0,0,0,.5);color:#fff;font-size:16px;cursor:pointer}
 .dock{position:fixed;left:0;right:0;bottom:0;z-index:5}
+.pair:not([hidden])~.dock{z-index:25}
 .save,.toast{max-width:456px;margin:0 auto 10px;border-radius:14px;box-shadow:0 8px 24px rgba(0,0,0,.18)}
 .save{display:flex;align-items:center;gap:12px;padding:8px 8px 8px 16px;background:var(--text);color:var(--bg);width:calc(100% - 24px)}
 .save span{flex:1;font-size:14px}
@@ -132,6 +133,12 @@ nav div{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);max-w
 nav a{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;min-height:52px;font-size:11.5px;color:var(--sub);text-decoration:none}
 nav a svg{width:22px;height:22px}
 nav a.on{color:var(--ink);font-weight:600}
+.pair{position:fixed;inset:0;z-index:20;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:24px max(16px,env(safe-area-inset-right)) 24px max(16px,env(safe-area-inset-left))}
+.pair .card{max-width:400px;width:100%;padding:24px;display:flex;flex-direction:column;gap:14px}
+.pair h2{margin:0;font-size:20px}
+.pair p{margin:0;color:var(--sub)}
+.pair input{font-size:28px;letter-spacing:.3em;text-align:center;font-variant-numeric:tabular-nums}
+.pair .err{color:var(--danger);min-height:1.4em}
 </style></head><body>
 <header class="top">
 <a class="back" href="#display" id="back" hidden></a>
@@ -186,6 +193,10 @@ nav a.on{color:var(--ink);font-weight:600}
 <ul class="diag" id="diag"></ul>
 </section>
 <section class="card">
+<div class="ch"><span class="ic" data-ic="lock"></span><h2>已配对的手机</h2></div>
+<div class="fld"><span class="hint" style="padding:0">打开这个网页的手机都要先输入屏幕上的配对码，配对过的手机会记住一年（最多 8 台）。手机丢了或者换了，可以让所有手机重新配对。</span><button type="button" class="btn d" data-act="pair/forget" data-confirm="所有手机（包括这台）都要重新输入配对码，继续？">让所有手机重新配对</button></div>
+</section>
+<section class="card">
 <div class="ch"><span class="ic" data-ic="wifi" style="color:var(--danger)"></span><h2>WiFi</h2></div>
 <div class="fld"><span class="hint" style="padding:0">清除保存的 WiFi 并重启，板子会开热点等你重新配网。也可以长按 BOOT 键 3 秒。</span><button type="button" class="btn d" data-act="reset-wifi" data-confirm="清除 WiFi 并重启进入配网模式？">重新配置 WiFi</button></div>
 </section>
@@ -217,6 +228,16 @@ nav a.on{color:var(--ink);font-weight:600}
 
 </main>
 </form>
+<div class="pair" id="pair" hidden>
+<form class="card" id="pairForm">
+<h2>输入屏幕上的配对码</h2>
+<p>为了防止同一个 WiFi 里的其他人改设置，第一次用这台手机打开时要配对一次。板子屏幕上现在显示了 6 位数字。</p>
+<input class="txt" id="pairCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" aria-label="配对码">
+<div class="err" id="pairErr" role="alert"></div>
+<button type="submit" class="btn" id="pairGo">配对</button>
+<button type="button" class="btn g" id="pairAgain">屏幕上没有？重新显示</button>
+</form>
+</div>
 <div class="dock">
 <div class="toast" id="toast" role="status" hidden></div>
 <div class="save" id="save" hidden><span id="dirty"></span><button type="button" class="btn" id="saveBtn">保存</button></div>
@@ -249,7 +270,8 @@ theme:'<circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 0 0 16z" fill="curr
 pulse:'<path d="M3 12h4l3-8 4 16 3-8h4"/>',
 music:'<path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>',
 news:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/>',
-left:'<path d="M15 5l-7 7 7 7"/>'};
+left:'<path d="M15 5l-7 7 7 7"/>',
+lock:'<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>'};
 const ic=n=>P+ICONS[n]+'</svg>';
 
 // 底部导航的分区。超过 5 个时手机上会挤，到时候加一个「应用」分区收纳
@@ -389,6 +411,40 @@ addEventListener('hashchange',route);
 
 let toastT;
 function toast(s){const t=$('toast');t.textContent=s;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>t.hidden=true,2600);}
+
+// ---- 配对：接口返回 401 时，屏幕上显示配对码，这里输入 ----
+let pairing=false;
+async function showPair(){
+ if(pairing)return;
+ pairing=true;$('pair').hidden=false;$('pairCode').focus();
+ try{await fetch('/pair/start',{method:'POST'});}catch(e){$('pairErr').textContent='连不上设备';}
+}
+const rawFetch=window.fetch.bind(window);
+window.fetch=async(url,opt)=>{
+ const r=await rawFetch(url,opt);
+ if(r.status===401&&String(url).startsWith('/'))showPair();
+ return r;
+};
+const rawSend=XMLHttpRequest.prototype.send;
+XMLHttpRequest.prototype.send=function(b){this.addEventListener('load',()=>{if(this.status===401)showPair();});return rawSend.call(this,b);};
+$('pairForm').onsubmit=async e=>{
+ e.preventDefault();
+ const code=$('pairCode').value.trim();
+ if(!/^[0-9]{6}$/.test(code)){$('pairErr').textContent='配对码是 6 位数字';return;}
+ $('pairGo').disabled=true;
+ try{
+  const r=await rawFetch('/pair',{method:'POST',body:new URLSearchParams({code})});
+  const j=await r.json();
+  if(j.ok){location.reload();return;}
+  $('pairErr').textContent=j.error||'配对失败';
+  if(j.expired)$('pairCode').value='';
+ }catch(e){$('pairErr').textContent='连不上设备';}
+ $('pairGo').disabled=false;
+};
+$('pairAgain').onclick=async()=>{
+ $('pairErr').textContent='';$('pairCode').value='';
+ try{await rawFetch('/pair/start',{method:'POST'});toast('屏幕上重新显示了配对码');}catch(e){$('pairErr').textContent='连不上设备';}
+};
 async function post(url,body){
  const r=await fetch('/'+url,{method:'POST',body:body||new URLSearchParams()});
  if(!r.ok)throw new Error(r.status);
@@ -479,6 +535,7 @@ document.addEventListener('click',async e=>{
  try{
   await post(act==='check'||act==='install'?'ota/'+act:act);
   if(act==='reset-wifi'){toast('已清除 WiFi，设备正在重启进入配网模式');return;}
+  if(act==='pair/forget'){location.reload();return;}
   if(act==='sound/test')toast('正在播放提示音');
   await status();
  }catch(e){toast('操作失败，请检查网络');}
@@ -549,7 +606,7 @@ async function status(){
  $('upd').hidden=o.state!=='available'&&o.state!=='downloading';
  $('updTitle').textContent=o.state==='downloading'?o.text:'发现新版本 '+o.latest;
  $('updSub').textContent=S.auto_update?'今晚 3～5 点会自动升级，也可以现在升级':'点右边按钮现在升级';
- $('diag').innerHTML=j.net+'<li>'+j.panel+'</li>';
+ $('diag').innerHTML=j.net+'<li>'+j.panel+'</li>'+(j.ota&&j.ota.rolled_back?'<li><b>上次升级的固件没能正常启动，已自动退回现在这个版本</b></li>':'');
  statT=setTimeout(status,o.busy?2000:5000);
 }
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)status();});

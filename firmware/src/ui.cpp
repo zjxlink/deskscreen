@@ -2457,6 +2457,10 @@ void ui_show_alert(AlertIcon icon, const char *title, const char *body, const ch
       lv_label_set_text(alert_icon, LV_SYMBOL_TINT);
       lv_obj_set_style_bg_color(alert_badge, lv_color_hex(0x0E7490), 0);
       break;
+    case AlertIcon::Pair:
+      lv_label_set_text(alert_icon, LV_SYMBOL_SETTINGS);
+      lv_obj_set_style_bg_color(alert_badge, COLOR_ACCENT, 0);
+      break;
   }
   lv_obj_center(alert_icon);
   lv_label_set_text(alert_title, title);
