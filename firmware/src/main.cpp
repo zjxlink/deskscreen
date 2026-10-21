@@ -1602,6 +1602,29 @@ static void check_touch() {
   was_touched = touched;
 }
 
+// 网页上传文件时的进度画面，total 为 0 表示收完了（或者出错了），回到原来的页面
+static void show_receive(const char *title, uint64_t done, uint64_t total) {
+  static bool showing = false;
+  if (total == 0) {
+    if (!showing) return;
+    showing = false;
+    if (alert_on) {
+      close_alert();  // 提醒的内容已经被进度画面盖掉了，直接回到页面
+    } else {
+      ui_show_page(screen.page(), false);
+    }
+    ui_refresh_now();
+    return;
+  }
+  showing = true;
+  quick_on = false;
+  game_on = false;
+  char detail[48];
+  snprintf(detail, sizeof(detail), "%.1f / %.1f MB", done / 1048576.0, total / 1048576.0);
+  ui_show_progress(title, detail, (int)(done * 100 / total));
+  ui_refresh_now();
+}
+
 void setup() {
   Serial.begin(115200);
   net_tls_use_psram();
@@ -1643,28 +1666,9 @@ void setup() {
     update_ota_screen();
     ui_refresh_now();
   });
-  // 网页上传影片：收的时候主循环停着，屏幕上显示进度；收完回到原来的页面
-  web_config_set_movie_hook([](uint64_t done, uint64_t total) {
-    static bool showing = false;
-    if (total == 0) {
-      if (!showing) return;
-      showing = false;
-      if (alert_on) {
-        close_alert();  // 提醒的内容已经被进度画面盖掉了，直接回到页面
-      } else {
-        ui_show_page(screen.page(), false);
-      }
-      ui_refresh_now();
-      return;
-    }
-    showing = true;
-    quick_on = false;
-    game_on = false;
-    char detail[48];
-    snprintf(detail, sizeof(detail), "%u / %u MB", (unsigned)(done >> 20), (unsigned)(total >> 20));
-    ui_show_progress("正在接收影片", detail, (int)(done * 100 / total));
-    ui_refresh_now();
-  });
+  // 网页上传影片、歌曲：收的时候主循环停着，屏幕上显示进度；收完回到原来的页面
+  web_config_set_movie_hook([](uint64_t done, uint64_t total) { show_receive("正在接收影片", done, total); });
+  web_config_set_music_hook([](uint64_t done, uint64_t total) { show_receive("正在接收歌曲", done, total); });
   weather_begin();
   github_begin();
   stock_begin();

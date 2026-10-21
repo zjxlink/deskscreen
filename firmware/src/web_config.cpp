@@ -28,6 +28,7 @@ static WebServer server(80);
 static bool changed = false;
 static void (*progress_hook)() = nullptr;
 static void (*movie_hook)(uint64_t done, uint64_t total) = nullptr;
+static void (*music_hook)(uint64_t done, uint64_t total) = nullptr;
 static const Pomodoro *pomodoro = nullptr;
 static void (*pomo_cmd)(PomoCmd) = nullptr;
 static const PomoStats *pomo_stats = nullptr;
@@ -604,6 +605,43 @@ static void handle_movie_done() {
   send_doc(doc);
 }
 
+// 音乐：TF 卡 music 文件夹的列表、上传（可以选歌单文件夹）、删除、新建歌单。
+// 一首歌几 MB 到几十 MB，收的时候和影片一样在屏幕上显示进度
+static bool music_ok = false;
+static uint64_t music_size = 0;
+static char music_saved[kTrackPathMax];
+
+static void handle_music_chunk() {
+  HTTPUpload &up = server.upload();
+  if (up.status == UPLOAD_FILE_START) {
+    music_size = strtoull(server.header("Content-Length").c_str(), nullptr, 10);
+    music_saved[0] = '\0';
+    music_ok = player_upload_begin(server.arg("folder").c_str(), music_size);
+    if (music_hook) music_hook(0, music_size);
+  } else if (up.status == UPLOAD_FILE_WRITE && music_ok) {
+    music_ok = player_upload_write(up.buf, up.currentSize);
+    static size_t last_hook = 0;
+    if (music_hook && (up.totalSize - last_hook >= 128 * 1024 || up.totalSize < last_hook)) {
+      last_hook = up.totalSize;
+      music_hook(up.totalSize, music_size);
+    }
+  } else if (up.status == UPLOAD_FILE_END && music_ok) {
+    music_ok = player_upload_end(up.filename.c_str(), music_saved, sizeof(music_saved));
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    if (music_ok) player_upload_abort();
+    music_ok = false;
+  }
+}
+
+static void handle_music_done() {
+  if (music_hook) music_hook(0, 0);  // 收完、出错都收起进度画面
+  JsonDocument doc;
+  doc["ok"] = music_ok;
+  if (music_ok) doc["name"] = music_saved;
+  else doc["error"] = player_upload_error();
+  send_doc(doc);
+}
+
 static void handle_reset_wifi() {
   send_ok();
   delay(500);
@@ -655,6 +693,26 @@ void web_config_begin() {
     if (!ok) doc["error"] = "删除失败";
     send_doc(doc);
   });
+  server.on("/music/list", HTTP_GET, [] {
+    String out;
+    player_list_json(out);
+    server.send(200, "application/json", out);
+  });
+  server.on("/music/upload", HTTP_POST, handle_music_done, handle_music_chunk);
+  server.on("/music/delete", HTTP_POST, [] {
+    JsonDocument doc;
+    bool ok = player_delete(server.arg("name").c_str());
+    doc["ok"] = ok;
+    if (!ok) doc["error"] = "删除失败";
+    send_doc(doc);
+  });
+  server.on("/music/mkdir", HTTP_POST, [] {
+    JsonDocument doc;
+    bool ok = player_mkdir(server.arg("name").c_str());
+    doc["ok"] = ok;
+    if (!ok) doc["error"] = "建不了这个歌单，换个名字试试";
+    send_doc(doc);
+  });
   const char *headers[] = {"Content-Length"};
   server.collectHeaders(headers, 1);
   server.onNotFound([] { server.send(404, "text/plain", "Not found"); });
@@ -689,6 +747,10 @@ void web_config_set_progress_hook(void (*hook)()) {
 
 void web_config_set_movie_hook(void (*hook)(uint64_t done, uint64_t total)) {
   movie_hook = hook;
+}
+
+void web_config_set_music_hook(void (*hook)(uint64_t done, uint64_t total)) {
+  music_hook = hook;
 }
 
 bool web_config_take_changed() {
