@@ -18,8 +18,9 @@ static constexpr int kRtOutRate = 24000;  // 回答是 24kHz 16 位单声道 PCM
 // 设置里填的是普通模型名（qwen3-omni-flash），实时接口用带 -realtime 的版本
 std::string rt_model(const char *model);
 
-// 连上以后第一条：音色、提示词、输入输出格式、服务器断句
-std::string rt_session_update(const char *voice, const char *instructions, int silence_ms);
+// 连上以后第一条：音色、提示词、输入输出格式、服务器断句。
+// asr_model 是把主人的话转成文字的模型（显示在屏幕上），nullptr 表示不要文字
+std::string rt_session_update(const char *voice, const char *instructions, int silence_ms, const char *asr_model);
 
 // 只有类型的事件，比如 response.cancel
 std::string rt_event(const char *type);

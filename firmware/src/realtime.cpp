@@ -12,7 +12,7 @@ std::string rt_model(const char *model) {
   return m;
 }
 
-std::string rt_session_update(const char *voice, const char *instructions, int silence_ms) {
+std::string rt_session_update(const char *voice, const char *instructions, int silence_ms, const char *asr_model) {
   JsonDocument doc;
   doc["type"] = "session.update";
   JsonObject s = doc["session"].to<JsonObject>();
@@ -22,7 +22,7 @@ std::string rt_session_update(const char *voice, const char *instructions, int s
   s["instructions"] = instructions;
   s["input_audio_format"] = "pcm16";
   s["output_audio_format"] = "pcm24";
-  s["input_audio_transcription"]["model"] = nullptr;  // 服务器默认的识别模型，用来显示主人说了什么
+  if (asr_model) s["input_audio_transcription"]["model"] = asr_model;
   JsonObject td = s["turn_detection"].to<JsonObject>();
   td["type"] = "server_vad";
   td["threshold"] = 0.2;

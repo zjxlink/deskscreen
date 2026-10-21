@@ -187,7 +187,7 @@ static void test_rt_model() {
 }
 
 static void test_rt_session_update() {
-  std::string j = rt_session_update("Cherry", "你是\"小橘\"", 700);
+  std::string j = rt_session_update("Cherry", "你是\"小橘\"", 700, "gummy-realtime-v1");
   JsonDocument doc;
   TEST_ASSERT_FALSE(deserializeJson(doc, j));
   TEST_ASSERT_EQUAL_STRING("session.update", doc["type"]);
@@ -200,6 +200,11 @@ static void test_rt_session_update() {
   TEST_ASSERT_EQUAL_STRING("pcm24", s["output_audio_format"]);
   TEST_ASSERT_EQUAL_STRING("server_vad", s["turn_detection"]["type"]);
   TEST_ASSERT_EQUAL(700, s["turn_detection"]["silence_duration_ms"].as<int>());
+  TEST_ASSERT_EQUAL_STRING("gummy-realtime-v1", s["input_audio_transcription"]["model"]);
+  // 不要文字时整个字段都不发
+  JsonDocument doc2;
+  TEST_ASSERT_FALSE(deserializeJson(doc2, rt_session_update("Cherry", "x", 700, nullptr)));
+  TEST_ASSERT_FALSE(doc2["session"]["input_audio_transcription"].is<JsonObject>());
   TEST_ASSERT_EQUAL_STRING("{\"type\":\"response.cancel\"}", rt_event("response.cancel").c_str());
 }
 

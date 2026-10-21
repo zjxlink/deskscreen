@@ -292,6 +292,7 @@ struct Session {
   bool full_duplex = false;   // 有回声消除：小橘说话时也一直上传，主人开口就打断
   bool ready = false;
   bool closed = false;
+  std::string close_reason;   // 服务器断开时说的原因
   bool playing = false;       // 喇叭被这次聊天占着
   bool finishing = false;     // 回答已经收完，等喇叭放完
   bool drop_next = false;     // 还没开始的那次回答不要了（在想的时候被点了打断）
@@ -426,7 +427,10 @@ static void on_message(uint8_t opcode, std::string &payload, void *ctx) {
     ws_send(s.client, kWsPong, parts, sizes, 1);
   } else if (opcode == kWsClose) {
     s.closed = true;
-    if (payload.size() > 2) log_w("voice: server closed: %s", payload.c_str() + 2);
+    if (payload.size() > 2) {
+      s.close_reason.assign(payload, 2, 120);
+      log_w("voice: server closed: %s", s.close_reason.c_str());
+    }
   } else if (opcode == kWsText) {
     on_event(s, s.parser.feed(payload));
   }
@@ -446,6 +450,12 @@ static size_t pump(Session &s, WsReader &reader, size_t limit) {
   }
   return total;
 }
+
+// 把主人的话转成文字的模型，依次试：文档里写的 gummy，不行就不要文字（只是屏幕上不显示「你：…」）。
+// 服务器不认的话一连上就断开（Model not exist），换下一个重连；试通的记下来，下次直接用
+static const char *const kAsrModels[] = {"gummy-realtime-v1", nullptr};
+static constexpr int kAsrModelCount = sizeof(kAsrModels) / sizeof(kAsrModels[0]);
+static int asr_choice = 0;
 
 // 连上百炼并完成 WebSocket 握手。返回出错原因，成功返回空字符串
 static std::string connect_session(Session &s, WsReader &reader) {
@@ -534,7 +544,9 @@ static std::string connect_session(Session &s, WsReader &reader) {
   log_i("voice: tls %u ms, websocket %u ms", (unsigned)(t1 - t0), (unsigned)(millis() - t1));
 
   String prompt = system_prompt();
-  if (!ws_send_text(s.client, rt_session_update(st.ai_voice.c_str(), prompt.c_str(), kSilenceMs))) {
+  const char *asr = kAsrModels[asr_choice];
+  log_i("voice: model %s, transcription %s", rt_model(st.ai_model.c_str()).c_str(), asr ? asr : "off");
+  if (!ws_send_text(s.client, rt_session_update(st.ai_voice.c_str(), prompt.c_str(), kSilenceMs, asr))) {
     net_report(NetService::Voice, -2, s.client, "发送配置失败");
     return "网络不好，连接断了";
   }
@@ -556,9 +568,18 @@ static bool send_chunk(Session &s) {
   return ws_send(s.client, kWsText, parts, sizes, 3);
 }
 
+// 还没配置好就因为「模型不存在」被拒：换下一个识别模型，返回 true 表示该重连
+static bool model_rejected(const Session &s, const std::string &reason) {
+  if (s.ready || reason.find("odel") == std::string::npos || asr_choice + 1 >= kAsrModelCount) return false;
+  asr_choice++;
+  log_w("voice: server rejected a model (%s), retrying with transcription %s", reason.c_str(),
+        kAsrModels[asr_choice] ? kAsrModels[asr_choice] : "off");
+  return true;
+}
+
 // 一次聊天：连上以后一直听、一直回答，直到挂断。返回结束原因，主人自己挂断时返回空字符串；
-// idle 为 true 表示是没人说话自动挂断的
-static std::string converse(bool &idle) {
+// idle 为 true 表示是没人说话自动挂断的；retry 为 true 表示换了识别模型，该马上重连
+static std::string converse(bool &idle, bool &retry) {
   auto *sp = new Session(on_audio);
   Session &s = *sp;
   s.full_duplex = afe != nullptr && barge_on;
@@ -568,12 +589,15 @@ static std::string converse(bool &idle) {
   while (why.empty() && !hangup) {
     uint32_t now = millis();
     if (!s.fatal.empty()) {
+      retry = model_rejected(s, s.fatal);
       why = s.fatal;
       net_report(NetService::Voice, kNetBadData, why.c_str());
       break;
     }
     if (s.closed || (!s.client.connected() && s.client.available() <= 0)) {
-      why = "和百炼的连接断了";
+      retry = model_rejected(s, s.close_reason);
+      // 还没开始就被断开时，把服务器说的原因显示出来，方便查
+      why = !s.ready && !s.close_reason.empty() ? "百炼：" + s.close_reason : "和百炼的连接断了";
       net_report(NetService::Voice, -5, why.c_str());
       break;
     }
@@ -662,7 +686,12 @@ static void voice_task(void *) {
   for (;;) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     bool idle = false;
-    std::string why = hangup ? "" : converse(idle);
+    std::string why;
+    for (int attempt = 0; attempt < kAsrModelCount && !hangup; attempt++) {
+      bool retry = false;
+      why = converse(idle, retry);
+      if (!retry) break;
+    }
     xSemaphoreTake(lock, portMAX_DELAY);
     if (why.empty() || idle) {
       status.state = VoiceState::Idle;
