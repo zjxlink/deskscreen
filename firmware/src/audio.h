@@ -43,5 +43,22 @@ bool audio_mic_available();
 using CaptureSink = void (*)(const int16_t *mic, const int16_t *ref, size_t n, void *ctx);
 void audio_set_capture_sink(CaptureSink sink, void *ctx);
 
-// 音乐律动用：读最多 max 个采样，最多等 100ms；喇叭在响时返回 0（免得听到自己的声音）
+// 音乐律动用：读最多 max 个采样，最多等 100ms；喇叭在响时返回 0（免得听到自己的声音）。
+// 音乐播放器在放歌时给的是放出去的音乐（16kHz）
 size_t audio_mic_listen(int16_t *mono, size_t max);
+
+// 音乐播放器用：拿到喇叭，把喇叭和麦克风切到歌的采样率 rate（8000～48000，单声道）。
+// 喇叭正被语音回答占着时等最多 1 秒，拿不到返回 false。拿着的时候：
+// - 提示音（整点报时、番茄钟……）叠在音乐上放，音乐压低；
+// - 唤醒词、回声消除照常工作（麦克风的声音转回 16kHz 给它们），音乐律动直接分析放出去的音乐；
+// - 别人要用喇叭（语音回答、影片声音）时 audio_music_wanted() 变成 true，播放器要尽快 audio_music_end()
+bool audio_music_begin(uint32_t rate);
+// 放进喇叭的缓冲（按音量调小），满了就等
+void audio_music_write(const int16_t *mono, size_t n);
+// 缓冲里还有多少采样没放
+size_t audio_music_pending();
+// 暂停、跳转时扔掉缓冲里还没放的
+void audio_music_flush();
+// 让出喇叭（没放完的扔掉），静下来以后切回 16kHz
+void audio_music_end();
+bool audio_music_wanted();

@@ -236,6 +236,25 @@ nav a.on{color:var(--ink);font-weight:600}
 </section>
 </section>
 
+<section class="panel" id="p_music" hidden>
+<section class="card">
+<div class="ch"><h2>TF 卡</h2><span class="meta" id="muUse"></span></div>
+<div class="bar" id="muBar"><i></i></div>
+<p class="hint" id="muNote"></p>
+</section>
+<section class="card" id="muUp" hidden>
+<div class="ch"><h2>上传歌曲</h2></div>
+<div class="fld"><label class="lab" for="muFolder">放进哪个歌单</label><div class="inl"><select class="txt" id="muFolder"></select><button type="button" class="btn g" id="muNew">新建歌单</button></div></div>
+<label class="drop"><span data-ic="music"></span><b>选择歌曲</b><span>MP3、FLAC、WAV，一次能选多个；同名的 .lrc 歌词也可以一起选</span><input type="file" id="muFiles" accept=".mp3,.flac,.wav,.lrc,audio/mpeg,audio/flac,audio/wav,audio/x-wav" multiple></label>
+<div class="bar" id="muUpBar" hidden><i></i></div>
+<p class="hint" id="muMsg">M4A、AAC、APE 这些格式先用电脑上的转换工具（<b>tools/music</b> 里的「转换音乐.bat」）转成 MP3。网易云 .ncm、QQ 音乐 .qmc 和 Apple Music 的歌是加密的，放不了。<br>传的时候板子屏幕显示进度，别的功能先停着，传完自动恢复。</p>
+</section>
+<section class="card" id="muCard" hidden>
+<div class="ch"><h2 id="muCount"></h2></div>
+<div class="mvl" id="muList"></div>
+</section>
+</section>
+
 </main>
 </form>
 <div class="dock">
@@ -277,7 +296,7 @@ const ic=n=>P+ICONS[n]+'</svg>';
 // 底部导航的分区。超过 5 个时手机上会挤，到时候加一个「应用」分区收纳
 const TABS=[['home','概览','home'],['display','显示','screen'],['services','服务','cloud'],['remind','提醒','bell'],['system','系统','sliders']];
 // 不在导航里的子页面：[id, 标题, 返回到哪个分区]
-const SUBS={album:['相册','display'],movies:['影片','display']};
+const SUBS={album:['相册','display'],movies:['影片','display'],music:['音乐','display']};
 
 // 设置卡片：t 放在哪个分区，sw 标题栏右边的总开关，f 字段（k 是提交给 /save 的名字）。
 // 加新功能的设置时在这里加一张卡片，固件的 /api/settings 和 /save 加上同名字段即可
@@ -314,6 +333,9 @@ const CARDS=[
 {t:'display',title:'影片',icon:'film',f:[
  {type:'html',html:'<a class="album" href="#movies"><span class="l"><b id="mvSum">影片</b><small id="mvSub">电脑转好的 .avi 存在 TF 卡的 movies 文件夹里</small></span><span class="go">上传 / 管理 ›</span></a>'}],
  hint:'先用电脑上的转换工具（<b>tools/movie</b> 里的「转换影片.bat」）把电影转成 .avi，再在这里传到板子上，或者用读卡器直接拷进 TF 卡的 movies 文件夹。'},
+{t:'display',title:'音乐',icon:'music',f:[
+ {type:'html',html:'<a class="album" href="#music"><span class="l"><b id="muSum">音乐</b><small id="muSub">MP3、FLAC、WAV 存在 TF 卡的 music 文件夹里</small></span><span class="go">上传 / 管理 ›</span></a>'}],
+ hint:'music 下面的每个文件夹是一个歌单。歌名、歌手和封面从歌曲自带的信息里读，没有时用文件名（「歌手 - 歌名.mp3」会自动拆开）；和歌曲同名的 .lrc 是歌词。离开音乐页也接着放，时钟页和快捷设置里能暂停、换歌。'},
 {t:'services',title:'天气',icon:'cloud',meta:'Open-Meteo',f:[
  {type:'html',html:'<div class="fld"><label class="lab" for="f_city">城市（显示在屏幕上）</label><div class="inl"><input class="txt" id="f_city" name="city" maxlength="16"><button type="button" class="btn g" id="geo">查坐标</button></div><div class="res" id="results"></div></div>'},
  {type:'two',f:[{k:'lat',label:'纬度',dec:1},{k:'lon',label:'经度',dec:1}]}],
@@ -409,6 +431,7 @@ function route(){
  if(sub){$('back').href='#'+sub[1];$('back').innerHTML=ic('left')+TABS.find(t=>t[0]===sub[1])[1];}
  if(id==='album')loadAlbum();
  if(id==='movies')loadMovies();
+ if(id==='music')loadMusic();
  scrollTo(0,0);
 }
 addEventListener('hashchange',route);
@@ -903,6 +926,87 @@ $('mvFiles').onchange=async()=>{
  if(lock)lock.release().catch(()=>{});
  show('上传了 '+ok+' 部'+(bad.length?'，失败：'+bad.join('，'):'')+'。');
  $('mvFiles').value='';loadMovies();
+};
+
+// ---- 音乐 ----
+let muFree=Infinity,muBusy=false;
+const muNewDirs=new Set();  // 刚建、还没有歌的歌单（板子上只列出有歌的文件夹）
+async function loadMusic(){
+ let j;
+ try{j=await (await fetch('/music/list')).json();}catch(e){$('muNote').textContent='读取失败，刷新页面再试';return;}
+ const ok=j.card==='ok',list=j.tracks||[],folders=j.folders||[];
+ $('muUp').hidden=$('muBar').hidden=!ok;$('muCard').hidden=!ok||!list.length;
+ $('muSum').textContent=ok?list.length+' 首歌':j.card==='noslot'?'这块板子没有 TF 卡槽':'没有检测到 TF 卡';
+ if(!ok){$('muUse').textContent='';$('muNote').textContent=j.card==='noslot'?'这块板子没有 TF 卡槽或者喇叭，放不了歌。':'没有检测到 TF 卡。请插入 FAT32 格式的 TF 卡（32GB 以内的卡出厂就是 FAT32），插好后刷新这个页面。';return;}
+ if(j.total){
+  muFree=j.total-j.used;
+  $('muUse').textContent='已用 '+fmt(j.used)+' / 共 '+fmt(j.total);
+  $('muBar').firstChild.style.width=Math.max(1,Math.round(j.used*100/j.total))+'%';
+  $('muSub').textContent='TF 卡剩余 '+fmt(muFree);
+ }
+ $('muNote').textContent='歌存在卡里的 music 文件夹，板子上翻到「音乐」页就能放。最多认 1000 首。'+(list.length?'':'现在还没有歌。');
+ const sel=$('muFolder'),keep=sel.value;
+ sel.textContent='';
+ for(const [v,t] of [['','不分歌单（直接放在 music 里）'],...[...new Set([...folders,...muNewDirs])].map(f=>[f,f])]){const o=document.createElement('option');o.value=v;o.textContent=t;sel.appendChild(o);}
+ if([...sel.options].some(o=>o.value===keep))sel.value=keep;
+ $('muCount').textContent=list.length+' 首歌';
+ const box=$('muList');box.textContent='';
+ list.sort((a,b)=>a.p.localeCompare(b.p,'zh'));
+ for(const m of list){
+  const r=document.createElement('div');r.className='row';
+  const l=document.createElement('span');l.className='l';
+  const b=document.createElement('b');b.textContent=m.t;
+  const k=m.p.indexOf('/'),dir=k>0?m.p.slice(0,k):'';
+  const sm=document.createElement('small');sm.textContent=[m.a,dir&&'歌单 '+dir,m.d?hms(m.d):'',fmt(m.s)].filter(Boolean).join(' · ');
+  l.append(b,sm);
+  const x=document.createElement('button');x.type='button';x.className='btn g s';x.textContent='删除';x.setAttribute('aria-label','删除 '+m.t);
+  x.onclick=async()=>{if(muBusy)return toast('正在上传，传完再删');if(!confirm('从 TF 卡删除「'+m.t+'」？同名的歌词也会删掉。'))return;
+   try{if(!(await post('music/delete',new URLSearchParams({name:m.p}))).ok)toast('删除失败');}catch(e){toast('删除失败');}loadMusic();};
+  r.append(l,x);box.appendChild(r);
+ }
+}
+$('muNew').onclick=async()=>{
+ const n=(prompt('新歌单的名字（会在 music 里建一个同名文件夹）')||'').trim();if(!n)return;
+ try{const j=await post('music/mkdir',new URLSearchParams({name:n}));if(!j.ok)return toast(j.error||'建不了这个歌单');}catch(e){return toast('建不了这个歌单');}
+ muNewDirs.add(n);
+ await loadMusic();
+ const o=[...$('muFolder').options].find(o=>o.value===n);if(o)$('muFolder').value=n;
+ toast('建好了，选歌传进去吧');
+};
+function muUpload(f,folder,onp){
+ return new Promise((ok,no)=>{
+  const fd=new FormData();fd.append('song',f,f.name);
+  const x=new XMLHttpRequest();x.open('POST','/music/upload?folder='+encodeURIComponent(folder));
+  x.upload.onprogress=e=>{if(e.lengthComputable)onp(e.loaded,e.total);};
+  x.onload=()=>{try{ok(JSON.parse(x.responseText));}catch(e){no(err('板子没有回应'));}};
+  x.onerror=()=>no(err('网络断了'));
+  x.send(fd);
+ });
+}
+addEventListener('beforeunload',e=>{if(muBusy){e.preventDefault();e.returnValue='';}});
+$('muFiles').onchange=async()=>{
+ // 歌词放在歌后面传，板子上那首歌先出现
+ const files=[...$('muFiles').files].sort((a,b)=>/\.lrc$/i.test(a.name)-/\.lrc$/i.test(b.name));
+ if(!files.length||muBusy)return;
+ const folder=$('muFolder').value;
+ const show=(t,p)=>{$('muMsg').textContent=t;$('muUpBar').hidden=p===undefined;if(p!==undefined)$('muUpBar').firstChild.style.width=Math.round(p*100)+'%';};
+ let ok=0,lock=null;const bad=[];
+ muBusy=true;
+ try{lock=await navigator.wakeLock.request('screen');}catch(e){}
+ for(let i=0;i<files.length;i++){
+  const f=files[i],tag=files.length>1?'（'+(i+1)+' / '+files.length+'）':'';
+  try{
+   if(!/\.(mp3|flac|wav|lrc)$/i.test(f.name)){bad.push(f.name+'（不是 MP3、FLAC、WAV，请先用电脑上的转换工具转换）');continue;}
+   if(f.size+1048576>muFree){bad.push(f.name+'（TF 卡空间不够）');continue;}
+   show('正在上传「'+f.name+'」'+tag+'…',0);
+   const j=await muUpload(f,folder,(d,t)=>show('正在上传「'+f.name+'」'+tag+' '+Math.round(d*100/t)+'%，请不要关闭这个页面。',d/t));
+   if(j.ok){ok++;muFree-=f.size;}else bad.push(f.name+'（'+j.error+'）');
+  }catch(e){bad.push(f.name+'（'+(e.cn||'上传失败')+'）');}
+ }
+ muBusy=false;
+ if(lock)lock.release().catch(()=>{});
+ show('上传了 '+ok+' 个文件'+(bad.length?'，失败：'+bad.join('，'):'')+'。');
+ $('muFiles').value='';loadMusic();
 };
 
 // 上次上传时网页被重新加载了：回到相册页，说明原因

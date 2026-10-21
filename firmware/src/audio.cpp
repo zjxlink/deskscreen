@@ -22,6 +22,12 @@ uint32_t audio_output_delay() { return 0; }
 bool audio_mic_available() { return false; }
 void audio_set_capture_sink(CaptureSink, void *) {}
 size_t audio_mic_listen(int16_t *, size_t) { return 0; }
+bool audio_music_begin(uint32_t) { return false; }
+void audio_music_write(const int16_t *, size_t) {}
+size_t audio_music_pending() { return 0; }
+void audio_music_flush() {}
+void audio_music_end() {}
+bool audio_music_wanted() { return false; }
 
 #else
 
@@ -31,6 +37,7 @@ size_t audio_mic_listen(int16_t *, size_t) { return 0; }
 #include <esp_heap_caps.h>
 
 #include "audio_sync.h"
+#include "resample.h"
 
 static constexpr int kRate = 16000;            // 提示音用 16kHz 足够
 static constexpr int kMclk = kRate * 256;      // 4.096MHz，ES8311 从 MCLK 引脚取时钟
@@ -53,6 +60,16 @@ static volatile int volume = 60;
 static bool ready = false;
 static bool mic_ready = false;
 static volatile bool speaker_on = false;  // 功放开着（在出声），音乐律动这时不听，免得听到自己的声音
+
+// 放音乐时喇叭和麦克风切到歌的采样率（共用一组时钟），平时是 16kHz。只在功放关着（没声音）时切，免得啪一声
+static volatile uint32_t cur_rate = kRate;
+static volatile uint32_t want_rate = kRate;
+static volatile uint32_t rate_changes = 0;  // 切过几次，采集任务据此重新对齐
+static volatile bool music_active = false;  // 音乐播放器拿着喇叭
+static volatile bool music_yield = false;   // 别人（语音回答、影片声音）要用喇叭，播放器该让出来了
+// 放音乐时来了提示音（整点报时、番茄钟……）：按音乐的采样率合成好，喇叭任务把它叠在压低的音乐上
+static int16_t *volatile overlay = nullptr;
+static volatile uint32_t overlay_len = 0, overlay_pos = 0;
 
 // 喇叭：一个任务一直往 I2S 写（没声音时写静音），这样放出的每个采样都有编号，能和麦克风对齐。
 // 待播放的声音放在 out_ring，放过的存进 ref_ring 当回声消除的参考信号
@@ -230,6 +247,12 @@ static void speaker_task(void *) {
   bool pa = false;
   uint32_t last_sound = 0;
   for (;;) {
+    if (want_rate != cur_rate && !pa) {
+      i2s_set_clk(kI2s, want_rate, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_STEREO);
+      cur_rate = want_rate;
+      rate_changes = rate_changes + 1;
+      log_i("audio: speaker now %u Hz", (unsigned)cur_rate);
+    }
     if (out_flush) {
       out_r = out_w;
       out_hold = true;  // 打断扔掉的不算放空
@@ -251,6 +274,18 @@ static void speaker_task(void *) {
     out_r = r + n;
     out_played = out_played + n;
     for (size_t i = n; i < (size_t)kDmaLen; i++) mono[i] = 0;
+    // 提示音叠在音乐上，音乐压到四分之一
+    int16_t *ov = overlay;
+    uint32_t ov_left = ov ? overlay_len - overlay_pos : 0;
+    if (ov_left > 0) {
+      uint32_t at = overlay_pos;
+      for (int i = 0; i < kDmaLen; i++) {
+        int32_t v = mono[i] / 4 + (i < (int)ov_left ? ov[at + i] : 0);
+        mono[i] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
+      }
+      overlay_pos = at + (ov_left < (uint32_t)kDmaLen ? ov_left : kDmaLen);
+      n = kDmaLen;
+    }
     uint32_t t = tx_count;
     if (n > 0) {
       last_sound = t + kDmaLen;
@@ -260,7 +295,7 @@ static void speaker_task(void *) {
         speaker_on = true;
         digitalWrite(PIN_AUDIO_PA, HIGH);
       }
-    } else if (pa && t - last_sound > kTxQueue + kRate / 5) {
+    } else if (pa && t - last_sound > kTxQueue + cur_rate / 5) {
       pa = false;
       digitalWrite(PIN_AUDIO_PA, LOW);
       speaker_on = false;
@@ -276,6 +311,28 @@ static void speaker_task(void *) {
   }
 }
 
+// 等喇叭切回 16kHz（拿到 out_lock 之后调用：音乐刚让出来时可能还没切回来）
+static void wait_base_rate() {
+  for (int i = 0; i < 400 && (cur_rate != kRate || want_rate != kRate); i++) vTaskDelay(pdMS_TO_TICKS(5));
+}
+
+// 按音乐现在的采样率合成提示音，叠在音乐上放，放完才返回
+static void play_over_music(const Note *notes, int count) {
+  uint32_t rate = cur_rate;
+  size_t n = sound_length(notes, count, rate);
+  auto *pcm = (int16_t *)heap_caps_malloc(n * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!pcm) return;
+  sound_render(notes, count, rate, volume, pcm, n);
+  overlay_pos = 0;
+  overlay_len = n;
+  overlay = pcm;
+  while (overlay_pos < overlay_len) vTaskDelay(pdMS_TO_TICKS(20));
+  vTaskDelay(pdMS_TO_TICKS(kTxQueue * 1000 / rate + 20));  // DMA 里的那一截也放完
+  overlay = nullptr;
+  overlay_len = 0;
+  free(pcm);
+}
+
 static void audio_task(void *) {
   for (;;) {
     SoundId id;
@@ -287,9 +344,18 @@ static void audio_task(void *) {
     if (!pcm) pcm = (int16_t *)malloc(n * sizeof(int16_t));
     if (!pcm) continue;
     sound_render(notes, count, kRate, volume, pcm, n);
-    xSemaphoreTake(out_lock, portMAX_DELAY);
-    out_write(pcm, n);
-    xSemaphoreGive(out_lock);
+    for (;;) {
+      if (xSemaphoreTake(out_lock, pdMS_TO_TICKS(20)) == pdTRUE) {
+        wait_base_rate();
+        out_write(pcm, n);
+        xSemaphoreGive(out_lock);
+        break;
+      }
+      if (music_active) {
+        play_over_music(notes, count);
+        break;
+      }
+    }
     free(pcm);
   }
 }
@@ -299,12 +365,26 @@ static void capture_task(void *) {
   static int16_t buf[kDmaLen * 2];
   static int16_t mic[kDmaLen];
   static int16_t ref[kDmaLen];
+  static int16_t mic16[kDmaLen];
+  static int16_t ref16[kDmaLen];
+  static Resampler16k mic_rs, ref_rs;
   RefAligner aligner;
   uint32_t rx_count = 0;
+  uint32_t seen_changes = 0;
+  uint32_t rate = kRate;
   for (;;) {
     size_t got = 0;
     if (i2s_read(kI2s, buf, sizeof(buf), &got, pdMS_TO_TICKS(100)) != ESP_OK || got == 0) continue;
     size_t frames = got / 4;
+    if (rate_changes != seen_changes) {
+      // 换了采样率：重新量喇叭和麦克风差多少，重新开始转 16kHz
+      seen_changes = rate_changes;
+      rate = cur_rate;
+      aligner = RefAligner();
+      mic_rs.reset(rate);
+      ref_rs.reset(rate);
+    }
+    const int32_t lead = kRefLead * (int32_t)rate / kRate;
     uint32_t t = tx_count;
     rx_count += frames;
     // 刚读到的最后一个采样录下时，喇叭大约正放到 t - kTxQueue
@@ -313,15 +393,26 @@ static void capture_task(void *) {
     uint32_t first = rx_count - frames;
     for (size_t i = 0; i < frames; i++) {
       mic[i] = (int16_t)(((int32_t)buf[2 * i] + buf[2 * i + 1]) / 2);  // 两个麦克风取平均
-      ref[i] = ring_at(ref_ring, kRefRing, t, first + i + offset + kRefLead);
+      ref[i] = ring_at(ref_ring, kRefRing, t, first + i + offset + lead);
     }
-    if (!speaker_on) {
+    // 唤醒词、回声消除、音乐律动都要 16kHz
+    const int16_t *m = mic, *r = ref;
+    size_t n = frames;
+    if (rate != kRate) {
+      n = mic_rs.process(mic, frames, mic16, kDmaLen);
+      ref_rs.process(ref, frames, ref16, kDmaLen);
+      m = mic16;
+      r = ref16;
+    }
+    // 音乐律动：放音乐时直接用放出去的声音，平时听麦克风（喇叭响着时不听，免得听到自己）
+    const int16_t *heard = music_active ? r : speaker_on ? nullptr : m;
+    if (heard) {
       uint32_t w = listen_w;
-      for (size_t i = 0; i < frames; i++) listen_ring[(w + i) & (kListenRing - 1)] = mic[i];
-      listen_w = w + frames;
+      for (size_t i = 0; i < n; i++) listen_ring[(w + i) & (kListenRing - 1)] = heard[i];
+      listen_w = w + n;
     }
     CaptureSink sink = capture_sink;
-    if (sink) sink(mic, ref, frames, capture_ctx);
+    if (sink && n > 0) sink(m, r, n, capture_ctx);
   }
 }
 #endif
@@ -374,14 +465,24 @@ void audio_play(SoundId id) {
 
 void audio_stream_begin() {
   if (!ready) return;
+  if (music_active) music_yield = true;  // 音乐让出来
   xSemaphoreTake(out_lock, portMAX_DELAY);
+  music_yield = false;
+  wait_base_rate();
   out_hold = true;
   out_underruns = 0;
   out_streaming = true;
 }
 
 bool audio_stream_try_begin() {
-  if (!ready || xSemaphoreTake(out_lock, 0) != pdTRUE) return false;
+  if (!ready) return false;
+  // 音乐在放就请它让出来（播放器暂停），等一会儿；AI 聊天在说话时不等
+  bool music = music_active;
+  if (music) music_yield = true;
+  bool ok = xSemaphoreTake(out_lock, music ? pdMS_TO_TICKS(1500) : 0) == pdTRUE;
+  music_yield = false;
+  if (!ok) return false;
+  wait_base_rate();
   out_hold = true;
   out_underruns = 0;
   out_streaming = true;
@@ -442,8 +543,9 @@ size_t audio_mic_listen(int16_t *mono, size_t max) {
   static bool paused = true;
   if (!mic_ready || !ready) return 0;
   // 最多等 100ms 攒够声音
-  for (int i = 0; i < 20 && listen_w - listen_r < max && !speaker_on; i++) vTaskDelay(pdMS_TO_TICKS(5));
-  if (speaker_on) {
+  auto quiet = []() { return !speaker_on || music_active; };
+  for (int i = 0; i < 20 && listen_w - listen_r < max && quiet(); i++) vTaskDelay(pdMS_TO_TICKS(5));
+  if (!quiet()) {
     paused = true;
     return 0;
   }
@@ -456,5 +558,51 @@ size_t audio_mic_listen(int16_t *mono, size_t max) {
   listen_r += n;
   return n;
 }
+
+bool audio_music_begin(uint32_t rate) {
+  if (!ready || rate < 8000 || rate > 48000) return false;
+  if (xSemaphoreTake(out_lock, pdMS_TO_TICKS(1000)) != pdTRUE) return false;
+  music_yield = false;
+  music_active = true;
+  want_rate = rate;
+  // 等喇叭停下来切好采样率（刚响过提示音时要等它放完，大约半秒）
+  for (int i = 0; i < 400 && cur_rate != rate; i++) vTaskDelay(pdMS_TO_TICKS(5));
+  if (cur_rate != rate) {
+    log_w("audio: could not switch to %u Hz", (unsigned)rate);
+    audio_music_end();
+    return false;
+  }
+  return true;
+}
+
+void audio_music_write(const int16_t *mono, size_t n) {
+  if (!music_active) return;
+  // 歌一般已经录得很响：音量 100 时原样放，小于 100 按比例调小
+  int gain = volume * 256 / 100;
+  int16_t buf[256];
+  while (n > 0) {
+    size_t take = n < 256 ? n : 256;
+    for (size_t i = 0; i < take; i++) buf[i] = (int16_t)(mono[i] * gain / 256);
+    out_write(buf, take);
+    mono += take;
+    n -= take;
+  }
+}
+
+size_t audio_music_pending() { return music_active ? out_w - out_r : 0; }
+
+void audio_music_flush() {
+  if (music_active) audio_stream_flush();
+}
+
+void audio_music_end() {
+  if (!music_active) return;
+  audio_stream_flush();
+  want_rate = kRate;  // 功放关了（静下来 0.3 秒）就切回 16kHz
+  music_active = false;
+  xSemaphoreGive(out_lock);
+}
+
+bool audio_music_wanted() { return music_yield; }
 
 #endif
