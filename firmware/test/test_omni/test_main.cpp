@@ -206,6 +206,10 @@ static void test_rt_session_update() {
   JsonDocument doc2;
   TEST_ASSERT_FALSE(deserializeJson(doc2, rt_session_update("Cherry", "x", 700, nullptr)));
   TEST_ASSERT_FALSE(doc2["session"]["input_audio_transcription"].is<JsonObject>());
+  // 音色留空时不发，让服务器用模型默认的
+  JsonDocument doc3;
+  TEST_ASSERT_FALSE(deserializeJson(doc3, rt_session_update("", "x", 700, nullptr)));
+  TEST_ASSERT_FALSE(doc3["session"]["voice"].is<const char *>());
   TEST_ASSERT_EQUAL_STRING("{\"type\":\"response.cancel\"}", rt_event("response.cancel").c_str());
 }
 

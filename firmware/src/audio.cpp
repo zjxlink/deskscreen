@@ -12,6 +12,7 @@ void audio_set_volume(int) {}
 void audio_play(SoundId) {}
 void audio_stream_begin() {}
 void audio_stream_write(const int16_t *, size_t) {}
+void audio_stream_done() {}
 void audio_stream_end() {}
 void audio_stream_flush() {}
 size_t audio_stream_pending() { return 0; }
@@ -40,6 +41,7 @@ static constexpr uint32_t kOutRing = 1 << 19;             // 待播放的声音�
 static constexpr uint32_t kRefRing = 16384;               // 放过的声音（回声消除的参考信号），1 秒
 static constexpr uint32_t kListenRing = 4096;             // 给音乐律动的麦克风声音
 static constexpr int32_t kRefLead = 320;  // 参考信号比回声早 20ms 给，量偏移的误差不会让回声跑到参考信号前面
+static constexpr uint32_t kPrebuffer = kRate * 3 / 10;  // 语音回答攒够 300ms 再放
 
 static QueueHandle_t queue;
 static SemaphoreHandle_t out_lock;  // 提示音和语音回答轮流用喇叭
@@ -53,6 +55,8 @@ static volatile bool speaker_on = false;  // 功放开着（在出声），音�
 static int16_t *out_ring;
 static volatile uint32_t out_w = 0, out_r = 0;
 static volatile bool out_flush = false;
+static volatile bool out_streaming = false;  // 语音回答还在下载
+static volatile bool out_hold = false;       // 在攒声音，先不放
 static int16_t *ref_ring;
 static volatile uint32_t tx_count = 0;  // 已经交给 I2S 的采样数
 
@@ -225,6 +229,10 @@ static void speaker_task(void *) {
     }
     uint32_t r = out_r;
     uint32_t avail = out_w - r;
+    // 语音回答边下边放：放空了就停下来攒，攒够或者下载完了再接着放，免得一卡一卡的
+    if (out_streaming && avail == 0) out_hold = true;
+    if (out_hold && (avail >= kPrebuffer || !out_streaming)) out_hold = false;
+    if (out_hold) avail = 0;
     size_t n = avail < (uint32_t)kDmaLen ? avail : kDmaLen;
     for (size_t i = 0; i < n; i++) mono[i] = out_ring[(r + i) & (kOutRing - 1)];
     out_r = r + n;
@@ -353,6 +361,8 @@ void audio_play(SoundId id) {
 void audio_stream_begin() {
   if (!ready) return;
   xSemaphoreTake(out_lock, portMAX_DELAY);
+  out_hold = true;
+  out_streaming = true;
 }
 
 void audio_stream_write(const int16_t *mono, size_t n) {
@@ -381,8 +391,11 @@ void audio_stream_flush() {
 
 size_t audio_stream_pending() { return ready ? out_w - out_r : 0; }
 
+void audio_stream_done() { out_streaming = false; }
+
 void audio_stream_end() {
   if (!ready) return;
+  out_streaming = false;
   out_drain();
   xSemaphoreGive(out_lock);
 }

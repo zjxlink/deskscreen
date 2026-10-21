@@ -51,6 +51,8 @@ static constexpr uint32_t kReadyMs = 8000;        // 连上以后等配置生效
 static constexpr uint32_t kAnswerMs = 20000;      // 说完一句后等回答的最长时间
 static constexpr uint32_t kEchoMs = 300;          // 没有回声消除时，小橘说完后过这么久才开始听，免得听到自己的尾音
 static constexpr int kSilenceMs = 700;            // 停顿这么久算一句话说完
+static constexpr uint32_t kBargeMs = 400;         // 小橘说话时，本地听到主人连续说这么久就打断
+static constexpr uint32_t kBargeGuardMs = 700;    // 小橘刚开口的这段时间不算（攒声音 300ms，回声消除还要适应一下）
 static constexpr size_t kMaxMessage = 512 * 1024;
 
 static TaskHandle_t task;
@@ -122,12 +124,23 @@ static int16_t *feed_buf;  // 交错的 [麦克风, 参考信号]
 static int feed_chunk = 0;
 static int feed_fill = 0;
 static bool wakenet_on = true;
+static volatile uint32_t speech_since = 0;  // 回声消除后的声音里从这时起一直有人说话，0 表示现在没人说话
 #else
 static void *afe = nullptr;
 #endif
 static Agc raw_agc(8);  // 没有 AFE 时自己放大
 
 static void on_wake();
+
+// 回声消除后的声音里，主人已经连续说了多久
+static uint32_t local_speech_ms(uint32_t now) {
+#ifdef HAS_SR
+  uint32_t since = speech_since;
+  return since && (int32_t)(now - since) > 0 ? now - since : 0;  // 另一个任务刚记下的时间可能比 now 晚
+#else
+  return 0;
+#endif
+}
 
 // 采集任务里调用：每次 256 个采样
 static void on_capture(const int16_t *mic, const int16_t *ref, size_t n, void *) {
@@ -178,6 +191,11 @@ static void fetch_task(void *) {
     afe_fetch_result_t *res = afe_handle->fetch(afe);  // 没有喂数据时会一直等着
     if (!res || res->ret_value == ESP_FAIL) continue;
     if (res->wakeup_state == WAKENET_DETECTED) on_wake();
+    if (res->vad_state != AFE_VAD_SPEECH) {
+      speech_since = 0;
+    } else if (!speech_since) {
+      speech_since = millis() | 1;
+    }
     if (running && res->data && res->data_size > 0) ring_push(res->data, res->data_size / sizeof(int16_t));
   }
 }
@@ -199,7 +217,7 @@ static bool afe_begin() {
   cfg.afe_ns_mode = NS_MODE_SSP;
   cfg.afe_ns_model_name = nullptr;
   cfg.se_init = false;   // 两个麦克风已经取了平均，不做波束分离，省 CPU 和内存
-  cfg.vad_init = false;  // 断句交给服务器
+  cfg.vad_init = true;  // 断句交给服务器；本地只用来在小橘说话时听出主人插话
   cfg.wakenet_init = true;
   cfg.wakenet_model_name = esp_srmodel_filter(get_static_srmodels(), ESP_WN_PREFIX, nullptr);
   cfg.wakenet_mode = DET_MODE_90;
@@ -320,6 +338,7 @@ struct Session {
   uint32_t resume_at = 0;     // 半双工时到这个时间才开始听（避开小橘自己的尾音）
   uint32_t last_activity = 0; // 最近一次有人说话或小橘说完的时间，用来判断要不要挂断
   uint32_t stopped_at = 0;    // 主人一句话说完的时间，用来算回应用了多久
+  uint32_t speak_at = 0;      // 小橘这次开口（收到第一段语音）的时间
   std::string fatal;          // 非空表示要结束这次聊天
 
   explicit Session(RtParser::AudioFn fn) : parser(fn, this) {}
@@ -340,10 +359,10 @@ static void stop_playing(Session &s) {
   s.playing = false;
 }
 
-// 不要当前这次回答了：喇叭里没放的扔掉，告诉服务器停下
+// 不要当前这次回答了：喇叭里没放的扔掉，告诉服务器停下（回答已经收完时服务器那边没什么可停的，不发，免得它报错）
 static void cut_answer(Session &s) {
   if (!s.current_id.empty()) s.drop_id = s.current_id;
-  ws_send_text(s.client, rt_event("response.cancel"));
+  if (!s.current_id.empty() || get_state() != VoiceState::Speaking) ws_send_text(s.client, rt_event("response.cancel"));
   if (s.playing) audio_stream_flush();
   stop_playing(s);
 }
@@ -354,6 +373,7 @@ static void on_audio(const int16_t *pcm, size_t n, void *ctx) {
   if (s.dropped() || hangup) return;
   if (!s.playing) {
     s.playing = true;
+    s.speak_at = millis();
     audio_stream_begin();
     uint32_t latency = s.stopped_at ? millis() - s.stopped_at : 0;
     log_i("voice: first audio %u ms after speech stopped", (unsigned)latency);
@@ -420,6 +440,7 @@ static void on_event(Session &s, RtEvent ev) {
       if (!s.parser.error().empty()) set_text(status.error, sizeof(status.error), s.parser.error());
       if (s.playing) {
         s.finishing = true;  // 等喇叭放完再回到「在听」
+        audio_stream_done();
       } else if (get_state() != VoiceState::Hearing) {
         to_listening(s, now, s.full_duplex ? 0 : kEchoMs);
       }
@@ -644,6 +665,15 @@ static std::string converse(bool &idle, bool &retry) {
         cut_answer(s);
         to_listening(s, now, s.full_duplex ? 0 : kEchoMs);
       }
+      st = get_state();
+    }
+    // 小橘说话时回声消除后主人的声音变小，服务器不一定听得出来是在插话；本地听到主人连续说话就先闭嘴，
+    // 说的话照常上传，服务器会当成新的一句来回答
+    if (s.full_duplex && st == VoiceState::Speaking && now - s.speak_at >= kBargeGuardMs &&
+        local_speech_ms(now) >= kBargeMs) {
+      log_i("voice: local barge-in");
+      cut_answer(s);
+      to_listening(s, now, 0);
       st = get_state();
     }
     if (s.finishing && audio_stream_pending() == 0) {
