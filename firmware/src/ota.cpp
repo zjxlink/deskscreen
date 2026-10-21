@@ -43,12 +43,18 @@ const char *ota_current_version() {
   return FW_VERSION;
 }
 
+static void (*busy_hook)(bool) = nullptr;
+
+void ota_set_busy_hook(void (*hook)(bool busy)) { busy_hook = hook; }
+
 static void set_state(OtaState s, const char *error = nullptr, int progress = -1) {
   xSemaphoreTake(lock, portMAX_DELAY);
+  bool was_busy = status.state == OtaState::Downloading;
   status.state = s;
   if (progress >= 0) status.progress = progress;
   if (error) strlcpy(status.error, error, sizeof(status.error));
   xSemaphoreGive(lock);
+  if (was_busy && (s == OtaState::Failed || s == OtaState::Idle) && busy_hook) busy_hook(false);
 }
 
 static void fail(const char *error) {
@@ -67,6 +73,7 @@ static bool try_claim() {
     status.error[0] = 0;
   }
   xSemaphoreGive(lock);
+  if (ok && busy_hook) busy_hook(true);
   return ok;
 }
 
