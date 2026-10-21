@@ -52,7 +52,9 @@ void settings_begin() {
   current.away_min = prefs.getUChar("away_min", 5);
   current.ai_key = prefs.getString("ai_key", "");
   current.ai_model = prefs.getString("ai_model", "qwen3.8-omni-flash-realtime");
-  current.ai_voice = prefs.getString("ai_voice", "Cherry");
+  current.ai_voice = prefs.getString("ai_voice", "");
+  // 以前的默认音色，现在的实时模型不支持（Voice 'Cherry' is not supported），换成留空用模型默认的
+  if (current.ai_voice == "Cherry") current.ai_voice = "";
   current.wake_on = prefs.getBool("wake_on", true);
   current.barge_on = prefs.getBool("barge_on", true);
   current.album_sec = prefs.getUChar("album_sec", 10);

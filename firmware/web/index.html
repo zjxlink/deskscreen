@@ -299,10 +299,10 @@ const CARDS=[
  hint:'A 股写 6 位代码，指数和深市代码冲突时加前缀，如 <b>sh000001</b> 是上证指数；港股写 5 位代码（如 00700）；美股写代码（如 AAPL）。ETF 和股票写法一样。数据来自东方财富，交易时段每 30 秒刷新。'},
 {t:'services',title:'AI 语音聊天',icon:'mic',meta:'has_ai',f:[
  {type:'secret',k:'ai_key',clear:'ai_clear',label:'阿里云百炼 API Key',ph:'sk-...'},
- {type:'two',f:[{k:'ai_model',label:'模型'},{k:'ai_voice',label:'音色'}]},
+ {type:'two',f:[{k:'ai_model',label:'模型'},{k:'ai_voice',label:'音色',ph:'留空用默认'}]},
  {type:'sw',k:'wake_on',label:'喊「喵喵同学」开始聊天',sub:'在哪一页都行，屏幕熄了也会亮起来；声音只在设备上识别'},
  {type:'sw',k:'barge_on',label:'说话打断',sub:'小橘说话时直接开口就能插话，不用点屏幕'}],
- hint:'喊「喵喵同学」或在「AI 聊天」页点「开始聊天」，之后直接说话就行，说完小橘自动回答，可以一直聊下去；小橘说话时点「打断」或直接开口插话，20 秒没人说话自动挂断。Key 在 <a href="https://bailian.console.aliyun.com/" target="_blank">阿里云百炼控制台</a> 的「API Key」里创建（北京地域），按用量计费。模型默认 qwen3.8-omni-flash-realtime（只能用名字带 realtime 的实时模型，没带会自动补上）；音色默认 Cherry（女声），也可以填 Ethan（男声）等。'},
+ hint:'喊「喵喵同学」或在「AI 聊天」页点「开始聊天」，之后直接说话就行，说完小橘自动回答，可以一直聊下去；小橘说话时点「打断」或直接开口插话，20 秒没人说话自动挂断。Key 在 <a href="https://bailian.console.aliyun.com/" target="_blank">阿里云百炼控制台</a> 的「API Key」里创建（北京地域），按用量计费。模型默认 qwen3.8-omni-flash-realtime（只能用名字带 realtime 的实时模型，没带会自动补上）；音色留空用模型默认的 Tina（女声），也可以填 Ethan（男声）等，可选的见百炼文档「音色列表」。'},
 {t:'services',title:'资讯',icon:'news',meta:'news',f:[
  {type:'picks',label:'新浪新闻',opts:[['yw','要闻'],['gn','国内'],['gj','国际'],['sh','社会'],['kj','科技'],['cj','财经'],['ty','体育'],['yl','娱乐'],['js','军事']]},
  {type:'picks',label:'热榜和网站',opts:[['baidu','百度热搜'],['zhihu','知乎热榜'],['ithome','IT之家']]},
@@ -350,7 +350,7 @@ function field(f){
  case 'time':return `<div class="row">${lab(f)}${time(f.k,f.label)}</div>`;
  case 'span':return `<div class="fld"><span class="lab">${f.label}</span><div class="inl span">${time(f.a,f.label+'开始')}<span class="unit">至</span>${time(f.b,f.label+'结束')}</div></div>`;
  case 'range':return `<div class="fld"><label class="lab" for="f_${f.k}">${f.label}</label><div class="rng"><input type="range" id="f_${f.k}" name="${f.k}" min="${f.min}" max="${f.max}"${f.raw?' data-raw':''}><output></output></div></div>`;
- case 'two':return `<div class="fld"><div class="two">${f.f.map(g=>`<div><label class="lab" for="f_${g.k}">${g.label}</label><input class="txt" id="f_${g.k}" name="${g.k}" maxlength="64"${g.dec?' inputmode="decimal"':''}></div>`).join('')}</div></div>`;
+ case 'two':return `<div class="fld"><div class="two">${f.f.map(g=>`<div><label class="lab" for="f_${g.k}">${g.label}</label><input class="txt" id="f_${g.k}" name="${g.k}" maxlength="64"${g.dec?' inputmode="decimal"':''}${g.ph?` placeholder="${g.ph}"`:''}></div>`).join('')}</div></div>`;
  case 'secret':return `<div class="fld"><label class="lab" for="f_${f.k}">${f.label}（留空表示不修改）</label><div class="inl"><input class="txt" type="password" id="f_${f.k}" name="${f.k}" data-ph="${f.ph}"><button type="button" class="btn g" data-clear="${f.clear}">清除</button></div><input type="checkbox" name="${f.clear}" hidden></div>`;
  case 'chips':return `<div class="fld"><div class="chips" data-chips="${f.k}" data-max="${f.max}"><input class="chipin" placeholder="+ 添加" aria-label="添加股票代码" enterkeyhint="done"></div><input type="hidden" name="${f.k}"></div>`;
  case 'pages':return `<div class="days pages" role="group" aria-label="显示哪些页面" data-pages></div><input type="hidden" name="pg_form" value="1">`;

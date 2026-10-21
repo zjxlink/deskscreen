@@ -293,7 +293,7 @@ static void handle_save() {
   s.ai_model = ai_model.length() > 0 ? ai_model : String("qwen3.8-omni-flash-realtime");
   String ai_voice = server.arg("ai_voice");
   ai_voice.trim();
-  s.ai_voice = ai_voice.length() > 0 ? ai_voice : String("Cherry");
+  s.ai_voice = ai_voice == "Cherry" ? String() : ai_voice;  // 留空用模型默认的
 
   // 复选框不勾选时浏览器不会提交这个字段
   s.night_on = server.hasArg("night_on");

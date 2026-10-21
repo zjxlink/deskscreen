@@ -50,7 +50,7 @@ struct Settings {
   // AI 语音聊天（阿里云百炼）
   String ai_key;             // 百炼 API Key，空表示不用
   String ai_model;           // 默认 qwen3.8-omni-flash-realtime
-  String ai_voice;           // 音色，默认 Cherry
+  String ai_voice;           // 音色，留空用模型默认的（qwen3.5/3.8 是 Tina）
   bool wake_on;              // 喊「喵喵同学」开始聊天
   bool barge_on;             // 小橘说话时主人开口就打断（回声消除）
   // 电子相册（TF 卡）

@@ -20,7 +20,7 @@ std::string rt_session_update(const char *voice, const char *instructions, int s
   JsonObject s = doc["session"].to<JsonObject>();
   s["modalities"].add("text");
   s["modalities"].add("audio");
-  s["voice"] = voice;
+  if (voice && voice[0]) s["voice"] = voice;  // 留空让服务器用模型默认的音色
   s["instructions"] = instructions;
   s["input_audio_format"] = "pcm16";
   s["output_audio_format"] = "pcm24";
