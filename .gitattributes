@@ -1,1 +1,3 @@
-*.bat text eol=crlf
+# Windows 批处理文件在仓库里就存成 CRLF，不做换行转换。
+# 只写 text eol=crlf 的话仓库里存的还是 LF，从 GitHub 网页单独下载的 .bat 是 LF，cmd 会读乱。
+*.bat -text
