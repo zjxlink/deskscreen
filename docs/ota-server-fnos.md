@@ -42,7 +42,7 @@ GitHub Release ──(每小时拉一次)──> 飞牛 NAS 上的 deskscreen-ot
 启动后在「容器」里找到 `deskscreen-ota`，看日志，应该有类似这样的几行：
 
 ```
-提供 /data，端口 18266，仓库 zjxlink/test-repo
+提供 /data，端口 18266，仓库 zjxlink/deskscreen
 发现新版本 v0.15.3，开始下载
   box3: firmware-box3.bin 2720896 字节
   desk_v1: firmware-desk_v1.bin 2571200 字节

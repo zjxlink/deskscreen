@@ -128,7 +128,7 @@ jobs:
           gh release create "$VERSION" dist/* --target "${{ github.sha }}" \
             --title "$VERSION" --notes-file notes.md --generate-notes
 
-  # 网页刷机页面（flash/index.html）和最新固件一起部署到 GitHub Pages：https://zjxlink.github.io/test-repo/
+  # 网页刷机页面（flash/index.html）和最新固件一起部署到 GitHub Pages：https://zjxlink.github.io/deskscreen/
   # 第一次需要在仓库 Settings › Pages 里把 Source 选成 GitHub Actions
   pages:
     needs: release

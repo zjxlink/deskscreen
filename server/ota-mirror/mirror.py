@@ -8,7 +8,7 @@
 
 板子的设置页「自建升级服务器」填 https://你的域名/manifest.json 即可。
 只用 Python 标准库。环境变量：
-  REPO      GitHub 仓库，默认 zjxlink/test-repo
+  REPO      GitHub 仓库，默认 zjxlink/deskscreen
   INTERVAL  检查间隔（秒），默认 3600
   PORT      HTTP 端口，默认 18266
   DATA      存放目录，默认 /data
@@ -26,7 +26,7 @@ import threading
 import time
 import urllib.request
 
-REPO = os.environ.get("REPO", "zjxlink/test-repo")
+REPO = os.environ.get("REPO", "zjxlink/deskscreen")
 INTERVAL = int(os.environ.get("INTERVAL", "3600"))
 PORT = int(os.environ.get("PORT", "18266"))
 DATA = os.environ.get("DATA", "/data")
