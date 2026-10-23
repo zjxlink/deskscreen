@@ -19,7 +19,9 @@ void audio_play(SoundId id);
 // 先攒够 300ms 再开始放，中途放空了就多攒一些（最多 1.5 秒）再接着放，网络时快时慢时声音不会一卡一卡的。
 // end 等声音全部放完才返回。采样率 16kHz 单声道，音量按 audio_set_volume 调整
 void audio_stream_begin();
-// 和 audio_stream_begin 一样，但喇叭正被别人用着（AI 聊天在说话）时不等，返回 false
+// 放视频里的声音（从卡上读，不是边下边放）：和 audio_stream_begin 一样，但喇叭正被别人用着（AI 聊天在说话）
+// 时不等，返回 false。只攒 300ms 就放，也不跟着语音回答学「网络慢要多攒」：那个值最多 1.5 秒，
+// 比视频预读的声音还多时会一直攒不够，画面就卡住不动了
 bool audio_stream_try_begin();
 void audio_stream_write(const int16_t *mono, size_t n);
 // 这次回答的声音都收完了：缓冲里剩的不用再攒，直接放完

@@ -6,6 +6,7 @@
 #include <lvgl.h>
 
 #include "audio.h"
+#include "avplay.h"
 #include "board.h"
 #include "climate.h"
 #include "desk_brief.h"
@@ -719,10 +720,12 @@ static void update_screen() {
 // 写固件期间暂停唤醒词、回声消除和音乐律动：它们一直在算，会拖慢上传，以前上传到一半板子会重启。
 // 在网页上传的处理函数或联网任务里调用，所以只改标志，不碰界面
 static bool ota_busy = false;
+// 在放视频（影片页或相册里的视频）：唤醒词、音乐律动、后台联网都先停一停，CPU、内部 RAM 和 TF 卡都让给视频
+static volatile bool video_mode = false;
 
 static void on_ota_busy(bool busy) {
   ota_busy = busy;
-  voice_pause(busy || movie_playing());
+  voice_pause(busy || video_mode);
   if (busy) player_pause();  // 不接着放：升级完会重启
   update_listen();
 }
@@ -1206,13 +1209,6 @@ static void update_movie() {
   if (!on_page && was_on) movie_pause();  // 提醒、快捷设置、翻到别的页都先暂停
   was_on = on_page;
 
-  // 放片子时不听唤醒词：片子里的对白会误唤醒，回声消除和唤醒词也很吃 CPU
-  static bool was_playing = false;
-  if (movie_playing() != was_playing) {
-    was_playing = !was_playing;
-    voice_pause(ota_busy || was_playing);
-  }
-
   MovieStatus st = movie_status();
   if (st.open != player) {
     player = st.open;
@@ -1264,7 +1260,22 @@ static bool music_list_dirty = true;
 static uint16_t *music_cover = nullptr;
 
 static void update_listen() {
-  listen_set_enabled(!ota_busy && (music_on_setting || player_playing()));
+  listen_set_enabled(!ota_busy && !video_mode && (music_on_setting || player_playing()));
+}
+
+// 放视频时进入「视频模式」：不听唤醒词（对白会误唤醒，回声消除和唤醒词也很吃 CPU）、不算音乐律动、
+// 不跑后台联网（TLS 握手很吃 CPU，必应图片还要写 TF 卡）。停下 3 秒后才恢复，跳进度、暂停一下不来回切
+static void update_video_mode(uint32_t now) {
+  static uint32_t last_active = 0;
+  bool active = avplay_active() || movie_playing();
+  if (active) last_active = now;
+  bool on = active || (video_mode && now - last_active < 3000);
+  if (on == video_mode) return;
+  video_mode = on;
+  log_i("video mode %s", on ? "on" : "off");
+  voice_pause(ota_busy || on);
+  net_jobs_hold(on);
+  update_listen();
 }
 
 static void render_music_list() {
@@ -1762,6 +1773,7 @@ void loop() {
   update_chat();
   update_album();
   update_movie();
+  update_video_mode(millis());
   update_player();
   update_screen();
   update_ota_screen();

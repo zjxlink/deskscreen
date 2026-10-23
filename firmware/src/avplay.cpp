@@ -10,6 +10,11 @@ static constexpr uint32_t kAudioAheadMs = 1000;  // 声音先放进缓冲这么�
 static constexpr uint32_t kStallMs = 800;        // 帧都排满了声音还不走，就不等声音了
 static constexpr int kMaxBadFrames = 10;         // 开头连着这么多帧解不出来就算放不了
 static constexpr size_t kMaxFrameBytes = 512 * 1024;  // 一帧 JPG 再大就不是正常的视频了
+static constexpr uint32_t kReadRetryMs = 3000;   // 读卡出错时最多重试这么久，还不行才停下来
+
+static int active = 0;  // 影片页和相册的任务都可能在放，用原子加减
+
+bool avplay_active() { return __atomic_load_n(&active, __ATOMIC_RELAXED) > 0; }
 
 namespace {
 
@@ -37,7 +42,8 @@ struct Buf {
 }  // namespace
 
 AvPlayResult avplay_run(AviReader &avi, const AvPlayHooks &h, bool sound) {
-  AvPlayResult res = {avi.frame_pos(), 0, false};
+  AvPlayResult res = {avi.frame_pos(), 0, false, false};
+  __atomic_fetch_add(&active, 1, __ATOMIC_RELAXED);
   const uint32_t start_frame = avi.frame_pos();
   const uint32_t frame_us = avi.frame_us();
   const uint32_t start_ms = (uint32_t)((uint64_t)start_frame * frame_us / 1000);
@@ -62,6 +68,7 @@ AvPlayResult avplay_run(AviReader &avi, const AvPlayHooks &h, bool sound) {
   int head = 0, count = 0;
   bool eof = false;
   int bad = 0;
+  uint32_t read_failed_at = 0;  // 读卡开始出错的时间，0 表示没出错
   Buf jpg, raw, pcm;
 
   while (!h.stop(h.ctx)) {
@@ -73,6 +80,16 @@ AvPlayResult avplay_run(AviReader &avi, const AvPlayHooks &h, bool sound) {
       bool ok = true;
       if (c == AviChunk::Audio) ok = raw.fit(len) && avi.read(off, raw.p, len);
       h.lock(h.ctx, false);
+      if (c == AviChunk::ReadError) {
+        // TF 卡偶尔读出错：以前当成放完了，直接跳到结尾。现在等一下再读同一个位置
+        if (!read_failed_at) read_failed_at = millis() | 1;
+        if (millis() - read_failed_at >= kReadRetryMs) {
+          res.read_error = true;
+          eof = true;
+        }
+        break;
+      }
+      read_failed_at = 0;
       if (c == AviChunk::End) {
         eof = true;
         if (audio) audio_stream_done();  // 剩下的声音不用再攒，直接放完
@@ -84,6 +101,7 @@ AvPlayResult avplay_run(AviReader &avi, const AvPlayHooks &h, bool sound) {
         if (pcm.fit(cap * 2)) audio_stream_write((int16_t *)pcm.p, conv.convert(raw.p, len, (int16_t *)pcm.p, cap));
       }
     }
+    if (res.read_error) break;
     if (count == 0) {
       if (eof) {
         res.ended = true;
@@ -111,10 +129,13 @@ AvPlayResult avplay_run(AviReader &avi, const AvPlayHooks &h, bool sound) {
       continue;
     }
     bool ok = p.len <= kMaxFrameBytes && jpg.fit(p.len);
-    if (ok) {
+    for (int tries = 0; ok && tries < 3; tries++) {
       h.lock(h.ctx, true);
-      ok = avi.read(p.off, jpg.p, p.len);
+      bool got = avi.read(p.off, jpg.p, p.len);
       h.lock(h.ctx, false);
+      if (got) break;
+      if (tries == 2) ok = false;
+      else vTaskDelay(pdMS_TO_TICKS(20));
     }
     if (ok && h.show(h.ctx, jpg.p, p.len, p.frame)) {
       res.frame = p.frame;
@@ -135,5 +156,6 @@ AvPlayResult avplay_run(AviReader &avi, const AvPlayHooks &h, bool sound) {
   }
   // 没放到结尾：下次从显示的下一帧接着放
   if (!res.ended && res.shown == 0) res.frame = start_frame;
+  __atomic_fetch_sub(&active, 1, __ATOMIC_RELAXED);
   return res;
 }

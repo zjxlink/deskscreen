@@ -11,7 +11,8 @@
 // 快进快退用文件里的索引：OpenDML 的 indx/ix00，没有时用 idx1，都没有时从头数。
 // 文件一边放一边从 TF 卡读，所以通过 read 回调随机读取，不用整个读进内存
 
-enum class AviChunk : uint8_t { End, Video, Audio };
+// ReadError 是读卡出错（读的位置没变，过一会儿可以再试），和真的放完了（End）分开
+enum class AviChunk : uint8_t { End, Video, Audio, ReadError };
 
 class AviReader {
  public:
@@ -34,7 +35,8 @@ class AviReader {
   uint32_t audio_rate() const { return audio_rate_; }
   int audio_channels() const { return audio_channels_; }
 
-  // 按文件里的顺序取下一块视频或声音数据（声音只在 has_audio 时给），放完了或文件坏了时返回 End
+  // 按文件里的顺序取下一块视频或声音数据（声音只在 has_audio 时给），放完了或文件坏了时返回 End，
+  // 读卡出错时返回 ReadError
   AviChunk next_chunk(uint32_t &off, uint32_t &len);
 
   // 只要视频：下一帧 JPG 数据的位置和长度；放完了或文件坏了时返回 false

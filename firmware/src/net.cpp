@@ -145,12 +145,17 @@ static constexpr int kMaxNetJobs = 8;
 static NetJobSlot net_jobs[kMaxNetJobs];
 static volatile int net_job_count = 0;
 static TaskHandle_t net_worker = nullptr;
+static volatile bool net_held = false;
 
 static void net_worker_task(void *) {
   UBaseType_t min_stack = UINT32_MAX;
   for (;;) {
+    if (net_held) {
+      ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+      continue;
+    }
     uint32_t wait = 60000;
-    for (int i = 0; i < net_job_count; i++) {
+    for (int i = 0; i < net_job_count && !net_held; i++) {
       NetJobSlot &j = net_jobs[i];
       uint32_t now = millis();
       if (j.kicked || (j.wait != kNetJobIdle && (int32_t)(now - j.due) >= 0)) {
@@ -194,4 +199,10 @@ void net_job_kick(int id) {
   if (id < 0 || id >= net_job_count) return;
   net_jobs[id].kicked = true;
   if (net_worker) xTaskNotifyGive(net_worker);
+}
+
+void net_jobs_hold(bool hold) {
+  if (net_held == hold) return;
+  net_held = hold;
+  if (!hold && net_worker) xTaskNotifyGive(net_worker);
 }

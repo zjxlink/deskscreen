@@ -324,6 +324,46 @@ static void test_avi_unsupported_audio() {
   TEST_ASSERT_TRUE(avi.next_chunk(off, len) == AviChunk::End);
 }
 
+// 读卡出错时给 ReadError（不是 End），位置不变，卡好了接着读同一块
+static bool card_broken = false;
+static size_t read_flaky(void *ctx, uint32_t off, uint8_t *buf, size_t len) {
+  return card_broken ? 0 : read_file(ctx, off, buf, len);
+}
+
+static void test_avi_read_error() {
+  file = av_file(1, true, 5);
+  AviReader avi;
+  card_broken = false;
+  TEST_ASSERT_TRUE(avi.open(read_flaky, nullptr, file.size()));
+  uint32_t off, len;
+  TEST_ASSERT_TRUE(avi.next_chunk(off, len) == AviChunk::Video);
+  TEST_ASSERT_TRUE(avi.next_chunk(off, len) == AviChunk::Audio);
+  card_broken = true;
+  TEST_ASSERT_TRUE(avi.next_chunk(off, len) == AviChunk::ReadError);
+  TEST_ASSERT_TRUE(avi.next_chunk(off, len) == AviChunk::ReadError);
+  TEST_ASSERT_EQUAL(1, avi.frame_pos());
+  TEST_ASSERT_FALSE(avi.next(off, len));
+  card_broken = false;
+  TEST_ASSERT_TRUE(avi.next_chunk(off, len) == AviChunk::Video);
+  TEST_ASSERT_EQUAL_STRING("F1", frame_at(off, len).c_str());
+}
+
+// 段比文件长（没写完的文件）：读到文件末尾算放完了，不算读卡出错
+static void test_avi_truncated_end() {
+  file = av_file(1, false, 4);
+  file.resize(file.size() - 6);  // 最后一块声音只剩块头
+  AviReader avi;
+  TEST_ASSERT_TRUE(avi.open(read_file, nullptr, file.size()));
+  uint32_t off, len;
+  AviChunk c;
+  int frames = 0;
+  while ((c = avi.next_chunk(off, len)) != AviChunk::End) {
+    TEST_ASSERT_TRUE(c != AviChunk::ReadError);
+    if (c == AviChunk::Video) frames++;
+  }
+  TEST_ASSERT_EQUAL(4, frames);
+}
+
 // OpenDML（超过 1GB 的文件）：RIFF AVI 段后面接一个 RIFF AVIX 段，视频的 indx 指向每段的 ix00
 static void test_avi_opendml() {
   const int per_seg = 4;
@@ -473,6 +513,8 @@ int main() {
   RUN_TEST(test_avi_audio_and_seek);
   RUN_TEST(test_avi_unsupported_audio);
   RUN_TEST(test_avi_opendml);
+  RUN_TEST(test_avi_read_error);
+  RUN_TEST(test_avi_truncated_end);
   RUN_TEST(test_pcm_16k);
   return UNITY_END();
 }

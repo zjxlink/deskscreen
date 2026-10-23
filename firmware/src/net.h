@@ -50,3 +50,6 @@ static constexpr uint32_t kNetJobIdle = UINT32_MAX;
 int net_job_add(const char *name, NetJob job, uint32_t first_ms = 0);
 // 让这个 job 尽快再跑一轮（设置改了、手动刷新）
 void net_job_kick(int id);
+// 放视频时先不跑后台联网（TLS 握手很吃 CPU，必应图片还要写 TF 卡），放完再接着跑。
+// 正在跑的那一轮照常跑完；到时间的 job 等松开后马上补上
+void net_jobs_hold(bool hold);
