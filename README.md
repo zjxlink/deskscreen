@@ -1,305 +1,152 @@
-# 桌面信息屏
+<div align="center">
 
-基于 ESP32-S3 的桌面小屏幕，显示时间、天气、资讯新闻、GitHub 贡献热力图、自选股行情、番茄钟、像素小猫、电子相册、影片和音乐播放器，能和小猫语音聊天，还有提醒、闹钟和室内温湿度。目标用户是程序员和科技爱好者。各版本的改动见 [CHANGELOG](CHANGELOG.md)。
+# 桌面信息屏 DeskScreen
 
-![界面预览](docs/preview.png)
+**给 ESP32-S3-BOX-3 的开源桌面小屏固件：时钟天气、GitHub 热力图、番茄钟、像素小猫、AI 语音聊天、相册影片音乐，一块板子全包。**
 
-![GitHub 热力图](docs/preview-github.png)
+[![Build](https://github.com/zjxlink/test-repo/actions/workflows/build.yml/badge.svg)](https://github.com/zjxlink/test-repo/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/zjxlink/test-repo?label=%E6%9C%80%E6%96%B0%E7%89%88)](https://github.com/zjxlink/test-repo/releases/latest)
+[![License: GPL-3.0](https://img.shields.io/github/license/zjxlink/test-repo?label=%E8%AE%B8%E5%8F%AF)](LICENSE)
+![ESP32-S3](https://img.shields.io/badge/ESP32--S3-BOX--3-E7352C?logo=espressif&logoColor=white)
+![PlatformIO](https://img.shields.io/badge/PlatformIO-Arduino-F5822A?logo=platformio&logoColor=white)
+![LVGL](https://img.shields.io/badge/UI-LVGL%208-343839)
 
-![自选股](docs/preview-stocks.png)
+**简体中文** · [English](README.en.md)
 
-![番茄钟](docs/preview-pomodoro.png)
+[一键刷机](https://zjxlink.github.io/test-repo/) · [功能详解](docs/features.md) · [更新记录](CHANGELOG.md) · [开发指南](docs/development.md)
 
-![资讯](docs/preview-news.png)
+<img src="docs/images/hero.png" alt="桌面信息屏界面一览" width="860">
 
-## 当前功能（v0.20）
+</div>
 
-- 手机配网：首次开机设备会开一个 WiFi 热点，手机连上后选择家里的 WiFi 即可，不用装 App
-- 时间日期：NTP 自动对时（北京时间）
-- 月相和日出日落：时钟页时间下面一行显示今天的月相（小月亮图标和「盈凸月」这样的名字）和当地的日出、日落时间。月相按日期算，日出日落来自天气预报
-- 天气：当前气温、天气、今日最高和最低气温、湿度。数据来自 [Open-Meteo](https://open-meteo.com)，免费，不需要 API Key，每 15 分钟刷新一次
-- 网页设置：同一 WiFi 下用浏览器打开 `http://deskscreen.local`（或屏幕上显示的 IP），手机上用底部导航在「概览、显示、服务、提醒、系统」之间切换，改完点底部浮出的「保存」。网页源码在 `firmware/web/index.html`，编译时自动压缩进固件。「系统」里的「诊断」显示天气、GitHub、自选股、在线升级、AI 语音聊天、必应每日一图、资讯最近一次请求的结果和失败原因，以及内存（含 PSRAM 总量、剩余和最低剩余）、已运行时间和屏幕自动恢复的次数，出问题时不用接串口也能排查
-- 配对登录：手机第一次打开设置网页时，板子屏幕上会大字显示 6 位配对码，在网页里输入后这台手机就记住了（一年内不用再输，最多记 8 台）。同一个 WiFi 里看不到屏幕的人改不了设置、也传不了固件。手机丢了可以在「系统 › 已配对的手机」里让所有手机重新配对。电脑上用脚本调用接口时，可以把浏览器 Cookie 里 `ds_auth` 的值放进 `X-Auth-Token` 请求头
-- 重新配网：长按 BOOT 键 3 秒，或者在设置页面里点「重新配置 WiFi」
-- GitHub 贡献热力图：最近 24 周的贡献格子（配色和 GitHub 一致），以及今日贡献、连续天数、过去一年总数，每 30 分钟刷新
-- 自选股行情：最多 6 只，支持 A 股、港股、美股和 ETF，红涨绿跌。交易时段每分钟刷新，其余时间 10 分钟一次。数据来自东方财富的公开接口（非官方接口，适合个人使用）；东方财富会按 IP 限流，失败后改用腾讯行情，并暂停请求东方财富 5～30 分钟
-- 夜间自动调暗：默认从当地日落到 7:00 把屏幕调到很暗（日落时间来自天气预报，每天跟着变；可以关掉「日落时开始」改用固定时间，默认 23:00）（亮度可调，可以直接关掉背光），亮度渐变不突兀；夜间固定显示时钟页，点一下屏幕或按 BOOT 键临时恢复正常亮度 30 秒。时间段可在设置页面修改或关闭
-- 屏幕浅色主题：米白底、白卡片，天气、GitHub 格子、雨量这些颜色在白底上也看得清。在设置网页「显示 › 屏幕 › 屏幕主题」里选 自动 / 浅色 / 深色（默认深色）；「自动」是日出到日落用浅色、日落后换深色，还没拿到天气预报时按 7:00～19:00 切换。开机提示、升级进度和相册页一直是深色
-- 番茄钟：专注 25 分钟、短休息 5 分钟，每 4 个番茄长休息 15 分钟（都可以改）。点屏幕中间的圆环开始/暂停，按住 1.5 秒重置；设置页面也有控制按钮（没有触摸屏的板子用这个）。阶段结束时屏幕自动点亮并跳到番茄钟页提示；专注结束自动开始休息，休息结束等你点开始。进行中时自动轮播停在番茄钟页
-- 番茄钟完成数：番茄钟页显示今日完成几个，设置页面还能看到近 7 天的总数。数据存在设备上，重启和升级都不会丢
-- 留言板：在设置网页「概览」里写一句话（最多 60 个字），点「发送到屏幕」，设备立即全屏显示这条留言，可以选择「叮咚」响一声。点屏幕或按 BOOT 键关闭
-- 久坐提醒和喝水提醒：在设置网页「提醒 › 健康提醒」里打开，间隔分别默认 45 分钟和 60 分钟，只在提醒时段（默认 9:00～21:00）内提醒。到点时屏幕全屏提示并响一声，5 分钟没人理会自动关掉。番茄钟专注时先不打扰，等休息时再提醒；开始休息时久坐提醒重新计时
-- 像素小猫「小橘」：一只 16x16 像素画的橘猫，会眨眼、呼吸。心情跟着你走：今天有 GitHub 提交或完成了番茄就开心得蹦起来；自选股平均跌超过 2% 会掉眼泪；下午了还没提交会无聊；夜间时段睡觉打呼。参与自动轮播
-- 小橘对动作有反应（BOX-3）：用板载的姿态传感器，摇一摇它会晕（会跳到小猫页给你看），倒过来会喊「快把我放正」，急刹、急转或者被拿起来时会吓一跳（只在显示小猫页时，开车时不会乱翻页）。不管板子怎么摆、车里斜着装都能用
-- 小游戏「小橘跑酷」：在小猫页点一下小橘开始，点屏幕起跳躲开黄瓜，越跑越快。最高分会保存，点右上角叉、按 BOOT 键或 30 秒不玩自动退出
-- AI 语音聊天（BOX-3）：在「和小橘聊天」页点「开始聊天」接通，之后像打电话一样直接说话，说完小橘自己听出来并马上用语音回答，可以一直聊下去，前面聊过的内容它都记得。也可以直接喊「喵喵同学」开始（在哪一页都行，熄屏时也会亮起来；唤醒词在板子上用乐鑫 esp-sr 识别，不上传）。小橘说话时直接开口或点「打断」都能插话（有回声消除），点「挂断」或 20 秒没人说话就挂断。用的是阿里云百炼的 Qwen-Omni-Realtime 实时接口（边说边上传，按用量计费），在设置网页填上百炼 API Key 就能用；模型和音色也可以在设置网页改。聊天页上是对话气泡（你在右、小橘在左），小橘的话跟着声音一个字一个字亮起来，表情也跟着它说的话变。小橘说话的音量在快捷设置里调。连接断开时屏幕上会显示百炼给的原因（或关闭码），方便排查。打开「喵喵同学可以念新闻」后，问它「今天有什么新闻」会念资讯页的最新标题。这一页不参与自动轮播，点屏幕切换页面时能切到
-- 天气预报：时钟页往后翻一页是「天气」页，上面是未来 12 小时的降水柱状图（柱子高低是降水概率，蓝色的小时会下雨）和一句话说明几点开始下、几点停，下面是未来 3 天的天气、最低/最高气温和降水概率。时钟页天气卡片在 12 小时内有雨时显示「17:00 有雨」。下雨提醒：快下雨或正在下雨时全屏提醒带伞，同一场雨只提醒一次，夜间时段不提醒，在设置网页「提醒 › 下雨提醒」里开关
-- 音乐律动（BOX-3）：麦克风听到音乐时，小橘页底部出现 16 根跳动的频谱条，小橘跟着节拍左右摇摆。一分钟没碰屏幕时会自动切到小橘页，音乐停了再切回原来的页面（番茄钟、相册、聊天、夜间和熄屏时不切）。能分辨音乐和说话、风扇声。声音只在板子上分析，不录音也不上传；AI 聊天在用麦克风、或者喇叭在响时自动暂停。在设置网页「显示 › 音乐律动」里开关
-- 电子相册（BOX-3 插 SENSOR 底座和 TF 卡）：点屏幕切到「相册」页，轮播 TF 卡 photos 文件夹里的 JPG、PNG 照片（默认每张 10 秒、随机顺序），大照片会自动缩小居中，手机原图也能放，只是每张要读一两秒。在设置网页「显示 › 相册与屏保」里点「上传 / 管理」，可以一次选多张照片上传（手机上先缩小到 320x240 再传，iPhone 的 HEIC 也会转成 JPG），也能看缩略图、删除。卡要是 FAT32 格式（32GB 以内的卡出厂就是），照片放在卡的 photos 文件夹，也可以用读卡器直接拷进去。在设置网页打开「屏保」后，多少分钟没碰屏幕（默认 5 分钟）自动进入相册，碰一下回到原来的页面；番茄钟进行中、夜间时段和没人熄屏时不启动
-- GIF 动图和视频：相册里可以混着放 GIF 和 MJPEG 视频（.avi），放在同一个 photos 文件夹。动图至少放「每张照片显示」的秒数，视频从头放到尾再换下一张，比屏幕小的动图按整数倍放大。在管理页直接选手机里的视频，浏览器会先转成 320×240、每秒 15 帧的 MJPEG 再上传，声音转成 16kHz 单声道一起带上（最长 5 分钟，1 分钟约 12 MB，转换时别锁屏；浏览器读不出声音的视频只传画面，会提示）；GIF 原样上传，最大 640×480、8 MB。视频的声音可以在「显示 › 相册与屏保 › 视频放出声音」里关掉。电脑上也可以用影片页的转换工具转好再拷进 photos 文件夹。上传大视频时板子屏幕会停顿到传完
-- 影片（BOX-3 插 SENSOR 底座和 TF 卡）：「影片」页列出 TF 卡 movies 文件夹里的片子，点一部开始全屏放，带声音。放的时候点一下屏幕出控制条（返回列表、音量、快退/快进 10 秒、暂停、进度条点哪跳哪），3 秒后自动藏起来；列表上下滑动翻屏，进度条显示上次看到哪，下次接着放。放片子时屏幕不熄灭（夜里也不会），整点报时不响，唤醒词暂停；翻到别的页、来了提醒或闹钟会先暂停。电影要先在电脑上转换：Windows 把电影文件拖到 `tools/movie/转换影片.bat` 上，macOS / Linux 运行 `tools/movie/convert_movie.sh 电影.mp4`（都要装 ffmpeg），转好的在旁边的 movies 文件夹，整个拷到 TF 卡根目录。转好的是 320×240、每秒 20 帧的 MJPEG 加 16kHz 单声道声音，2 小时的电影约 1.5 GB，超过 1 GB 的大文件也能放和快进。也可以不拔卡：在设置网页「显示 › 影片 › 上传 / 管理」里选转好的 .avi 直接传（走 WiFi 比读卡器慢，整部电影可能要十几到几十分钟，传的时候板子屏幕显示进度、别的功能先停着），这个页面也能看片子列表和删除
-- 音乐（BOX-3 插 SENSOR 底座和 TF 卡）：「音乐」页放 TF 卡 music 文件夹里的 MP3、FLAC、WAV（16/24 位），music 下的每个文件夹是一个歌单。屏幕上有封面、歌名、歌手、专辑、两行滚动歌词（和歌曲同名的 .lrc，UTF-8 和 GBK 都行）、频谱、进度条（点哪跳哪），底下一排是播放顺序（列表循环、随机、单曲循环）、上一首、播放/暂停、下一首和歌曲列表；列表上面点歌单切换，上下滑动翻屏。左上角「定时」是睡眠定时，每点一下换 15、30、60 分钟、关，到时间前 10 秒慢慢变小声然后暂停。歌名、歌手、封面从歌曲自带的信息里读，没有时用文件名（「歌手 - 歌名.mp3」会自动拆开）；最多认 1000 首，第一次读卡时会慢一点，之后有缓存。离开音乐页也接着放：时钟页的日出日落那一行换成迷你播放条（点歌名回到音乐页，右边暂停、下一首），长按屏幕的快捷设置左上角也有上一首、播放/暂停、下一首。记住放到哪一首、哪一秒，开机不自动放。和别的声音的关系：AI 聊天时先停下、聊完接着放；整点报时、提示音压低音乐叠在上面；闹钟、影片、相册视频的声音会让音乐暂停；升级固件时暂停。放歌时「音乐律动」的频谱直接用歌曲的声音。上传：设置网页「显示 › 音乐 › 上传 / 管理」里可以选歌单、一次传好几首（连同 .lrc 歌词）、新建歌单、删除；也可以用读卡器直接拷。M4A、AAC、APE 这些先在电脑上转：Windows 把歌拖到 `tools/music/转换音乐.bat` 上，macOS / Linux 运行 `tools/music/convert_music.sh 歌.m4a`（都要装 ffmpeg），会转成 MP3 并保留歌名、歌手和封面。网易云 .ncm、QQ 音乐 .qmc 和 Apple Music 的歌是加密的，放不了
-- 必应每日一图：相册的第二个图片来源，每天自动从 cn.bing.com 下载一张 320×240 的风景壁纸，存在 TF 卡的 bing 文件夹（最多 60 张，满了先删最早的），没插卡时只在内存里放当天这一张。「放自己的照片」和「放必应每日一图」是两个独立开关（在「显示 › 相册与屏保」里），都开时交替播放；图片底部的标题和地点可以关掉；管理页里能删掉不喜欢的，删掉的不会再下载回来
-- 资讯：在设置网页「服务 › 资讯」里勾选来源后，天气页后面多一页「资讯」。来源有新浪新闻的各个分类（要闻、国内、国际、社会、科技、财经、体育、娱乐、军事）、百度热搜、知乎热榜、IT之家，还能填最多 3 条自定义 RSS / Atom 地址（比如自己 NAS 上的 RSSHub）。每个来源是一个频道，每 30 分钟更新一次，夜间不更新。资讯页可以选「列表」（一屏 4 条，带来源和发布时间）或「一屏一条」（多两三行摘要）；每 12 秒翻一批，上下滑动翻上一批 / 下一批，点顶上的频道名换频道，左右照常翻页。时钟页时间下面那一行可以和日出日落每 10 秒轮流显示一条要闻。打开「喵喵同学可以念新闻」后，聊天时问「今天有什么新闻」，小橘会挑最新的标题念。字库里没有的生僻字和表情会去掉
-- 整点报时和闹钟：在设置网页「提醒 › 闹钟」里打开（默认关闭）。整点报时每到整点叮一声，夜间时段不响；闹钟可以选时间和星期几（默认周一到周五 7:30），响时屏幕全屏提示、每隔几秒响一次，夜里也会响，点屏幕或按 BOOT 键关掉，5 分钟后自动停止。量产板没有喇叭，只在屏幕上提示
-- 室内温湿度（BOX-3 插 SENSOR 底座）：时钟页时间下面显示底座测到的温度和湿度，每 5 秒更新。温度超过 30°C 或湿度超过 80% 持续 3 分钟，全屏提醒「有点热了」「有点闷了」，同一种提醒 1 小时最多一次，降下来以后才会再提醒，夜间时段不提醒。阈值和温度校准在设置网页「提醒 › 太热 / 太闷提醒」里改，人体感应在「显示 › 人体感应」里
-- 没人熄屏、有人亮屏（BOX-3 插 SENSOR 底座）：用底座的毫米波雷达感应有没有人，5 分钟没感应到动作就关掉背光，有人回来自动亮起（夜间只恢复到夜间亮度）。熄屏时点屏幕或按 BOOT 键也能亮，有提醒时自动亮屏。离开时间可改，也可以关掉。没插底座时这两项自动不启用
-- 番茄钟提示音（BOX-3）：专注结束播放下行三个音，休息结束播放上行三个音；音量可调，默认夜间时段不响。设置页面可以试听
-- 在线升级（OTA）：设备每天检查一次 GitHub Release（也可以设置自建服务器，先试那边），有新版本时在凌晨 3～5 点自动安装（可关闭）；也可以在设置页面手动检查、立即升级，或者直接上传固件文件。升级时屏幕显示进度，写入后校验 MD5，失败不会影响旧固件。新固件启动后要连续正常运行 30 秒才算升级成功，在那之前重启（崩溃、卡死）会自动退回旧固件，「诊断」里会提示。升级期间（在线升级和网页上传）会自动暂停唤醒词、回声消除和音乐律动，免得拖慢写入，结束后自动恢复
-- 白屏、花屏自动恢复：屏幕控制芯片被供电抖动或静电干扰后会白屏或花屏，设备每 2 秒读一次屏幕状态，连续两次不对就重新初始化屏幕，几秒内恢复；另外每分钟整屏重画一次。读不出状态的屏幕改为每 10 分钟重新初始化一次。恢复次数显示在设置网页「系统」的「诊断」里
-- 快捷设置（BOX-3）：在任意页面按住屏幕 2 秒（番茄钟圆环上按住是重置番茄钟），打开快捷设置页，可以调亮度和音量（每次加减 10，调完「叮」一声试听）、开关提示音和「没人熄屏」，改完立即保存。页面上还有一个二维码，手机扫码直接打开网页设置，不用记 IP。点右上角的叉、按 BOOT 键或 30 秒不操作自动关闭。点「显示页面 ›」可以选哪些页面参与翻页（时钟页一直显示），页面多了可以上下滑动
-- 多页面：点屏幕右半边到下一页、左半边回到上一页，也可以在屏幕上任意位置左右滑动翻页（手指往左滑到下一页，往右滑回上一页）。页面左右边缘有淡淡的 < > 提示。番茄钟圆环、小橘、聊天按钮这些点中间的东西是操作它们，点两边空白才翻页（BOX-3，松手时才切换，这样按住不会先翻页），短按 BOOT 键到下一页，页面滑动时连续快点也不会重启；也可以在设置页面设定自动轮播间隔（默认 15 秒，只轮播已经设置好的页面）。不想看的页面可以隐藏：快捷设置里点「显示页面 ›」，或者在设置网页「显示 › 显示哪些页面」里改，隐藏的页面翻页和轮播都会跳过（时钟页一直显示）
+## ✨ 亮点
 
-### 设置 GitHub 热力图
+- **不用装软件就能刷机**：电脑上用 Chrome 打开[刷机页面](https://zjxlink.github.io/test-repo/)，插上 USB 点一下按钮
+- **手机配网、网页设置**：第一次开机用手机连热点选 WiFi，之后在浏览器里打开 `http://deskscreen.local` 改所有设置，不用 App
+- **给程序员的信息屏**：GitHub 贡献热力图、自选股、新闻热榜、天气预报，加上番茄钟和久坐提醒
+- **会陪你的像素小猫「小橘」**：心情跟着你的提交、番茄和股票走，摇一摇会晕，还能玩跑酷小游戏
+- **能聊天的 AI 小猫**：喊「喵喵同学」就能对话，实时语音、可以随时插话（阿里云百炼 Qwen-Omni）
+- **小小的影音中心**：TF 卡相册（照片、GIF、视频）、带声音的影片、带歌词和封面的音乐播放器
+- **省心**：自动在线升级、失败自动回滚，白屏花屏自动恢复，出问题网页上就能看诊断
 
-1. 打开 https://github.com/settings/tokens/new?description=DeskScreen 创建一个 classic Token，**不用勾选任何权限**（这样的 Token 只能读公开信息，泄露了也改不了你的任何东西），有效期按需选择
-2. 在设置网页「服务 › GitHub 贡献热力图」里粘贴 Token 并保存
+## 📸 截图
 
-设备用内置的根证书校验 api.github.com 的 HTTPS 证书，Token 不会被中间人截获。Token 只保存在设备上，设置页面不会显示它。如果想统计私有仓库的贡献，需要在 GitHub 个人主页的贡献图设置里打开「Private contributions」。
+> 截图来自在电脑上运行的同一套界面代码，和板子上显示的一致。
 
-### 设置 AI 语音聊天
+<table>
+  <tr>
+    <td align="center"><img src="docs/images/screen-clock.png" width="260"><br>时钟、月相、日出日落</td>
+    <td align="center"><img src="docs/images/screen-weather.png" width="260"><br>12 小时降水和 3 天预报</td>
+    <td align="center"><img src="docs/images/screen-github.png" width="260"><br>GitHub 贡献热力图</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/images/screen-stocks.png" width="260"><br>自选股（A 股、港股、美股）</td>
+    <td align="center"><img src="docs/images/screen-news.png" width="260"><br>资讯热榜和 RSS</td>
+    <td align="center"><img src="docs/images/screen-pomodoro.png" width="260"><br>番茄钟</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/images/screen-pet.png" width="260"><br>像素小猫「小橘」</td>
+    <td align="center"><img src="docs/images/screen-runner.png" width="260"><br>小游戏「小橘跑酷」</td>
+    <td align="center"><img src="docs/images/screen-chat.png" width="260"><br>和小橘语音聊天</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/images/screen-music.png" width="260"><br>音乐播放器</td>
+    <td align="center"><img src="docs/images/screen-movie.png" width="260"><br>影片</td>
+    <td align="center"><img src="docs/images/screen-light.png" width="260"><br>浅色主题</td>
+  </tr>
+</table>
 
-1. 打开 [阿里云百炼控制台](https://bailian.console.aliyun.com/)（北京地域），在「API Key」里创建一个 Key。按用量计费，新用户有免费额度
-2. 在设置网页「服务 › AI 语音聊天」里粘贴 Key 并保存。模型默认 `qwen3.8-omni-flash-realtime`，音色留空用模型默认的 `Tina`（女声），也可以填 `Ethan`（男声）等（见百炼文档「音色列表」）
+<details>
+<summary>手机上的设置网页（点开看）</summary>
+<br>
+<img src="docs/images/web-settings.png" alt="设置网页">
+</details>
 
-Key 只保存在设备上，设置网页不会显示它。
+## 🧩 功能
 
-### 设置自选股
-
-在设置网页「服务 › 自选股」里点「+ 添加」，一次输入一个代码，点代码旁的叉删除：
-
-| 写法 | 含义 |
+| 分类 | 功能 |
 |---|---|
-| `600519`、`000001`、`510300` | A 股和 ETF，6 位代码，自动判断沪市/深市/北交所 |
-| `sh000001` | 加前缀指定市场，例如上证指数（和深市的 000001 平安银行区分） |
-| `00700` 或 `hk700` | 港股 |
-| `AAPL`、`BRK.B` | 美股，会自动在纳斯达克、纽交所、美交所里查找 |
+| 信息 | 时钟（NTP 对时）、月相和日出日落、天气和 3 天预报（[Open-Meteo](https://open-meteo.com)，免 Key）、下雨提醒、GitHub 贡献热力图、自选股、资讯（新浪分类、百度热搜、知乎热榜、IT之家、自定义 RSS）、室内温湿度 |
+| 效率 | 番茄钟（带统计和提示音）、久坐和喝水提醒、整点报时、闹钟、留言板（手机发一句话到屏幕） |
+| 小橘 | 像素小猫，心情随你的提交、番茄和股票变化；摇一摇、倒过来、急刹都会有反应；跑酷小游戏；跟着音乐节拍摇摆 |
+| AI 语音 | 唤醒词「喵喵同学」（在板子上识别，不上传），实时语音对话，回声消除可插话，对话气泡和字幕，能念新闻 |
+| 影音 | TF 卡相册（JPG、PNG、GIF、MJPEG 视频，手机直接上传）、必应每日一图、屏保；影片页（带声音、快进、记住看到哪）；音乐播放器（MP3、FLAC、WAV，歌单、封面、歌词、后台播放、睡眠定时） |
+| 屏幕 | 点左右半边或滑动翻页、长按出快捷设置、选择显示哪些页面、深色 / 浅色 / 按日出日落自动切换、日落后自动调暗、没人自动熄屏（毫米波雷达） |
+| 系统 | 网页设置（配对码登录）、在线升级（GitHub 或自建服务器，失败自动回滚）、白屏花屏自动恢复、网页诊断页 |
 
-### 设置资讯
+每个功能的完整说明和设置方法见 **[功能详解](docs/features.md)**。
 
-在设置网页「服务 › 资讯」里勾选想看的来源，保存后过二十秒左右，天气页后面就会多一页「资讯」。每个来源是一个频道，每 30 分钟更新一次，夜间不更新。
+## 🔧 硬件
 
-| 来源 | 内容 |
+| | 说明 |
 |---|---|
-| 新浪新闻 | 要闻、国内、国际、社会、科技、财经、体育、娱乐、军事，每个分类单独勾选，带摘要和发布时间 |
-| 百度热搜、知乎热榜 | 当前热榜前几条，没有发布时间 |
-| IT之家 | 科技新闻（RSS） |
-| 自定义 RSS | 最多 3 条 RSS / Atom 地址，一行一个，频道名自动用订阅源自己的名字 |
+| 主板 | [乐鑫 ESP32-S3-BOX-3](https://github.com/espressif/esp-box)（ESP32-S3，16 MB Flash，16 MB PSRAM，2.4 寸 320×240 触摸屏，双麦克风，喇叭，姿态传感器） |
+| 选配 | BOX-3 SENSOR 底座：温湿度、毫米波雷达（没人熄屏）、TF 卡槽（相册、影片、音乐）。没插底座时这些功能自动不启用 |
+| TF 卡 | FAT32 格式（32 GB 以内的卡出厂就是），放 `photos`、`movies`、`music` 文件夹 |
 
-在资讯页上：每 12 秒自动翻一批；上下滑动翻上一批 / 下一批，一个频道翻完自动进入下一个频道；点顶上的「资讯 · 科技」直接换到下一个频道；左右点按或滑动照常翻页。「资讯页样式」可以选列表（一屏 4 条）或一屏一条（标题加两三行摘要）。「时钟页显示要闻」打开后，时钟页时间下面那一行和日出日落每 10 秒轮流显示。「喵喵同学可以念新闻」打开后，聊天时问「今天有什么新闻」「科技新闻有啥」，小橘会挑最新的标题念。
+固件依赖 16 MB PSRAM（唤醒词、TLS、相册、影片和界面都放在 PSRAM 里）。仓库里还有一个给自制 PCB 准备的 `desk_v1` 编译环境，目前只停留在配置阶段，详见[开发指南](docs/development.md)。
 
-自定义 RSS 可以试试这些（都是媒体官方的订阅源，还没在板子上逐个实测过）：
+## 🚀 快速上手
 
-| 订阅源 | 地址 |
-|---|---|
-| 中国新闻网 滚动新闻 | `https://www.chinanews.com.cn/rss/scroll-news.xml` |
-| 人民网 时政 | `http://www.people.com.cn/rss/politics.xml` |
-| FT中文网 | `https://www.ftchinese.com/rss/news` |
-| 36氪 | `https://36kr.com/feed` |
-| 少数派 | `https://sspai.com/feed` |
+**1. 刷机**：用电脑上的 Chrome 或 Edge 打开 **<https://zjxlink.github.io/test-repo/>**，用 USB-C 连上 BOX-3，点「连接板子并刷机」，几分钟就好。页面上有每一步的说明。
 
-BBC 中文、纽约时报中文这类国内直连不上的，可以在自己的 NAS 上部署 RSSHub 中转，再把 RSSHub 的地址填进来。
+**2. 配网**：板子开机后屏幕会显示一个 `DeskScreen-XXXX` 的 WiFi 热点。手机连上它，在弹出的页面里选你家的 WiFi（没弹出就用浏览器打开 `192.168.4.1`）。以后要换 WiFi，长按 BOOT 键 3 秒。
 
-注意：
-- 只支持 UTF-8 编码的订阅源，GBK 编码的会是乱码
-- 网站把 http 跳转到 https 时板子可能跟不过去，有 https 地址就填 https
-- 订阅源再大也没关系，板子拿到前 8 条就停止下载
-- 只读标题，不校验 HTTPS 证书（和天气一样）
-- 字库里没有的生僻字、繁体字和表情会直接去掉
-- 哪个频道显示「获取失败」，原因在设置网页「系统 › 诊断」的「资讯」一项里
+<img src="docs/images/screen-wifi-setup.png" width="320" alt="首次配网提示">
 
-### 发布新版本（OTA）
+**3. 打开设置网页**：手机和板子在同一个 WiFi 下，用浏览器打开 `http://deskscreen.local`（或屏幕上显示的 IP），输入屏幕上显示的 6 位配对码。也可以长按屏幕 2 秒打开快捷设置，扫里面的二维码。
 
-两种方式任选一种：
+**4. 按需填写服务**：城市、[GitHub Token](docs/features.md#设置-github-热力图)、[自选股](docs/features.md#设置自选股)、[资讯来源](docs/features.md#设置资讯)、[AI 语音聊天的百炼 API Key](docs/features.md#设置-ai-语音聊天)，都在设置网页的「服务」里。
 
-- **网页（手机也行）**：打开仓库的 Actions → Release → Run workflow，填写版本号（如 `v0.5.0`），点运行。会在 `main` 的最新提交上创建标签
-- **命令行**：`git tag v0.5.0 && git push origin v0.5.0`
+> 只想用时钟、天气、番茄钟和小猫的话，第 4 步可以跳过。
 
-之后 GitHub Actions 会检查版本号、跑单元测试、编译两个板子的固件、生成 `manifest.json` 并创建 Release。设备从 `releases/latest/download/manifest.json` 检查更新，只有正式版本号（vX.Y.Z）之间才会自动升级；本地编译的开发版不会被自动覆盖，但可以在设置页面手动装上最新正式版。
+## 🔄 在线升级
 
-Release 里每个板子有两个文件：
+- 板子每天检查一次 [GitHub Release](https://github.com/zjxlink/test-repo/releases)，有新版本时在凌晨 3～5 点自动安装（可以关掉），也可以在设置网页「系统 › 固件升级」里手动升级或上传固件
+- 新固件启动后要连续正常运行 30 秒才算升级成功，在那之前崩溃会自动退回旧固件
+- 访问 GitHub 慢的话，可以在自己的 NAS 或服务器上跑 [OTA 镜像服务](server/ota-mirror/README.md)（[飞牛 fnOS 部署教程](docs/ota-server-fnos.md)），再在设置网页「自建升级服务器」里填上它的地址，板子会先试它
 
-| 文件 | 用途 |
-|---|---|
-| `firmware-box3-merged.bin` | 第一次烧录，用网页工具写到 `0x0` |
-| `firmware-box3.bin` | 已经装过的设备，在设置页面上传升级（OTA 也下载这个） |
+## 🛠️ 从源码编译
 
-国内访问 GitHub 慢、或者所在网络连不上 GitHub 的下载地址时，可以在自己的服务器（比如家里的 NAS）上跑 [`server/ota-mirror`](server/ota-mirror/README.md)（飞牛 fnOS 部署见 [docs/ota-server-fnos.md](docs/ota-server-fnos.md)），它会自动同步 Release 里的固件；然后在设置网页「系统 › 固件升级 › 自建升级服务器」填上它的 manifest.json 地址。板子先试自建服务器，连不上再用 GitHub。
-
-## 硬件
-
-| 板子 | 屏幕 | 编译环境 |
-|---|---|---|
-| 乐鑫 ESP32-S3-BOX-3（开发用） | 2.4 寸 ILI9342C，320×240 | `box3` |
-| 自己画的 PCB（量产用） | 2.0 寸 IPS ST7789，240×320 横屏使用 | `desk_v1` |
-
-目前只有 BOX-3 实际做出来并测试过，`desk_v1` 还停留在配置阶段。注意：现在的固件把语音唤醒、TLS、相册、影片和界面对象都放在 PSRAM 里，依赖 BOX-3 的 16MB PSRAM，自己画板子时模组至少要选 ESP32-S3-WROOM-1-N16R8，`desk_v1` 里写的 N8R2 跑不动全部功能。SENSOR 底座是选配，没有它时温湿度、雷达熄屏、TF 卡相关功能不可用。
-
-两种板子的界面都按 320×240 横屏设计，UI 代码通用。量产板的引脚在 `firmware/include/board.h` 中，目前和 BOX-3 保持一致，画 PCB 时如有改动，改这里就行。
-
-## 编译和烧录
-
-需要安装 [PlatformIO](https://platformio.org)（VS Code 插件或命令行都可以）。
+需要 [PlatformIO](https://platformio.org)（VS Code 插件或命令行都行）：
 
 ```bash
-cd firmware
+git clone https://github.com/zjxlink/test-repo.git
+cd test-repo/firmware
 pio run -e box3 -t upload    # 编译并烧录到 BOX-3
-pio device monitor           # 查看串口日志
+pio device monitor           # 看串口日志
+pio test -e native           # 在电脑上跑单元测试
 ```
 
-BOX-3 用 USB-C 连电脑就能烧录。如果烧录失败，按住 BOOT 键再按一下 RESET 键进入下载模式后重试。
+目录结构、发布流程、刷开发版和中文字体生成见 **[开发指南](docs/development.md)**。
 
-### 不装软件，用网页一键刷机
+## 🗺️ 路线图
 
-用电脑上的 Chrome 或 Edge 打开 https://zjxlink.github.io/test-repo/ ，连上 BOX-3 点按钮就能刷最新正式版，页面上有每一步的说明。这个页面在每次发布 Release 时自动更新（源文件 `flash/index.html`）。
-
-### 刷开发版
-
-每次推送代码，GitHub Actions 都会自动编译，并生成一个合并好的 `firmware-merged.bin`（在 Actions 页面对应运行记录底部的 Artifacts 里下载，`firmware-box3` 是 BOX-3 用的）。
-
-1. 用 Chrome 或 Edge 打开 https://espressif.github.io/esptool-js/
-2. 用 USB-C 连上设备，点 **Connect**，选择设备的串口
-3. Flash Address 填 `0x0`，选择 `firmware-merged.bin`，点 **Program**
-4. 烧完按一下 RESET 键
-
-本地编译时，这个文件也会生成在 `firmware/.pio/build/<环境名>/firmware-merged.bin`。
-
-## 目录结构
-
-```
-firmware/
-  platformio.ini       编译配置（box3 / desk_v1 固件，native 单元测试）
-  include/board.h      各板子的引脚定义
-  include/lv_conf.h    LVGL 配置
-  src/main.cpp         启动流程、主循环
-  src/pages.cpp        页面名字和「显示哪些页面」设置的读写（有单元测试）
-  src/display.cpp      屏幕驱动（LovyanGFX）和 LVGL 对接
-  src/ui.cpp           界面
-  src/weather.cpp      后台拉取天气
-  src/weather_parse.cpp 天气预报解析、下雨判断和提醒（有单元测试）
-  src/weather_codes.cpp WMO 天气代码对应的文字和颜色（深色、浅色两套）
-  src/web_config.cpp   局域网设置页面
-  src/github.cpp       后台拉取 GitHub 贡献日历（GraphQL API）
-  src/github_parse.cpp 解析贡献日历、计算连续天数（不依赖硬件，有单元测试）
-  src/root_ca.h        访问 GitHub 用的根证书
-  src/ota.cpp          在线升级和网页上传升级
-  src/ota_util.cpp     版本号比较、manifest 解析、固件格式检查（有单元测试）
-  src/stock.cpp        后台拉取自选股行情
-  src/stock_parse.cpp  解析股票代码和行情（不依赖硬件，有单元测试）
-  src/night.cpp        夜间模式的时间计算（有单元测试）
-  src/astro.cpp        月相计算、日出日落时间解析（有单元测试）
-  src/screen_ctrl.cpp  亮度渐变、夜间点亮、页面轮播的状态机（不依赖硬件，有按时间线模拟的场景测试）
-  src/pomodoro.cpp     番茄钟状态机（有单元测试）
-  src/sound_synth.cpp  提示音合成（有单元测试）
-  src/audio.cpp        BOX-3 的 ES8311 解码芯片和 I2S 播放
-  src/settings.cpp     设置保存（NVS）
-  src/screen_load.cpp  切换页面（先收尾没播完的滑动动画，避开 LVGL 8.3 快速连点会重启的问题）
-  src/panel_watch.cpp  屏幕控制芯片看门狗，白屏、花屏时重新初始化（有单元测试）
-  src/pomo_stats.cpp   番茄钟近 7 天完成数（有单元测试）
-  src/reminder.cpp     久坐、喝水提醒的计时（有单元测试）
-  src/clock_events.cpp 整点报时和闹钟（有单元测试）
-  src/pet.cpp          像素小猫的心情和图案（有单元测试）
-  src/sensors.cpp      SENSOR 底座的温湿度传感器和人体感应雷达
-  src/climate.cpp      温湿度解析和「有点热」「有点闷」提醒（有单元测试）
-  src/net.cpp          网络和内存诊断
-  src/imu.cpp          板载加速度计
-  src/motion.cpp       认出摇一摇、急刹急转、倒过来（有单元测试）
-  src/runner.cpp       小游戏「小橘跑酷」（有单元测试）
-  src/voice.cpp        AI 语音聊天：唤醒词、回声消除、WebSocket 连接、播放、打断和挂断
-  src/sr_model.cpp     把编进固件的唤醒词模型交给 esp-sr（tools/esp_sr.py 编译前下载库和模型）
-  src/music.cpp        音乐律动：频谱、节拍和音乐识别（有单元测试）
-  src/listen.cpp       音乐律动的后台任务，和 AI 聊天轮流用麦克风
-  src/realtime.cpp     百炼实时语音接口的事件拼装和解析、麦克风自动增益（有单元测试）
-  src/ws.cpp           WebSocket 帧的收发拆包（有单元测试）
-  src/omni.cpp         base64、重采样等语音聊天的小工具（有单元测试）
-  src/dashscope_ca.h   访问百炼用的根证书
-  src/photos.cpp       电子相册：读 TF 卡、解码、轮播、屏保
-  src/album.cpp        相册里不依赖硬件的部分：文件名、文件类型、轮播顺序（有单元测试）
-  src/gif.cpp          GIF 动图解码、缩放到屏幕（有单元测试）
-  src/avi.cpp          MJPEG 视频（.avi）文件解析、索引跳转、声音转 16kHz（有单元测试）
-  src/avplay.cpp       放视频：画面跟着声音走，相册和影片页共用
-  src/movie.cpp        影片页：读 movies 文件夹、播放、暂停、快进、记住看到哪里，网页上传和删除
-  src/movie_util.cpp   影片页里不依赖硬件的部分：看到哪里的记录、时间格式、上传的文件名（有单元测试）
-  src/player.cpp       音乐页：读 music 文件夹、后台播放、播放顺序、睡眠定时、记住放到哪里，网页上传和删除
-  src/song_decoder.cpp 解码 MP3（minimp3）、FLAC（dr_flac）、WAV，跳到某一秒（可在电脑上测试）
-  src/track.cpp        音乐里不依赖硬件的部分：歌曲标签和封面、.lrc 歌词、目录缓存、播放顺序、上传的文件名（有单元测试）
-  src/text_conv.cpp    GBK、UTF-16、Latin-1 转 UTF-8（老 MP3 标签和歌词常是 GBK，有单元测试）
-  src/resample.cpp     放歌时把麦克风和喇叭的声音转回 16kHz，给唤醒词和音乐律动用（有单元测试）
-  src/bing.cpp         必应每日一图的下载和存储
-  src/bing_parse.cpp   解析必应接口返回（有单元测试）
-  src/bing_ca.h        访问 cn.bing.com 用的根证书
-  src/news.cpp         资讯：按设置的来源轮流拉新闻（共用联网任务）
-  src/news_parse.cpp   解析新浪、百度热搜、知乎热榜、RSS / Atom（有单元测试）
-  src/fonts/           中文字体（自动生成，不要手改）
-  lib/minimp3/         MP3 解码库（改了一处，见里面的 README）
-  lib/dr_flac/         FLAC 解码库
-  web/index.html       设置网页（编译时压缩进固件）
-  tools/gen_fonts.py   中文字体生成脚本
-  tools/merge_bin.py   编译后生成单文件固件
-  tools/version.py     编译前从 git 标签生成版本号
-  tools/check_image.py 检查编译出的固件格式（CI 用）
-  tools/make_manifest.py 发布时生成 OTA 的 manifest.json
-  tools/web_gz.py      编译前把 web/index.html 压缩成固件里的数据
-  tools/gen_gbk.py     生成 GBK 转 Unicode 的对照表 src/gbk_table.h
-  test/                单元测试（pio test -e native，在电脑上运行）
-```
-
-## 中文字体
-
-LVGL 自带的中文字体以繁体和日文为主，缺很多简体字，所以用 [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC)（SIL OFL 协议，可以商用）自己生成：
-
-- `font_cn_16`：GB2312 全部汉字（6763 个）加上界面用到的字，用于普通文字、城市名和股票名
-- `font_cn_24`：只含界面用到的字，用于标题和天气描述
-
-**改了界面上的中文后要重新生成字体**，否则新的字会显示成方框：
-
-```bash
-cd firmware
-npm install lv_font_conv@1.5.2 @expo-google-fonts/noto-sans-sc@0.4.4
-python3 tools/gen_fonts.py node_modules/@expo-google-fonts/noto-sans-sc/400Regular/NotoSansSC_400Regular.ttf
-```
-
-## 路线图
-
-- [x] v0.1 时间、天气、配网、网页设置
-- [x] GitHub 贡献热力图
-- [ ] GitHub Star 数、仓库动态
-- [x] 自选股行情
-- [ ] 场外基金估值
-- [x] 多页面切换（触摸或按键）
-- [x] 番茄钟
-- [x] 番茄钟提示音（BOX-3）
-- [x] 留言板
-- [x] 久坐和喝水提醒
-- [x] 像素小猫「小橘」
-- [x] 整点报时和闹钟
-- [x] 室内温湿度、没人熄屏（BOX-3 SENSOR 底座）
-- [x] 快捷设置页（长按屏幕）
-- [x] 像素小游戏「小橘跑酷」
-- [x] AI 语音聊天（阿里云百炼）
-- [x] 电子相册（TF 卡、手机上传、屏保）
-- [x] 相册播放 GIF 动图和 MJPEG 视频（手机上传时自动转换）
-- [x] 未来 3 天天气预报和下雨提醒
-- [x] 音乐律动（频谱 + 小橘跟着节拍摇）
-- [x] 月相和日出日落，夜间模式跟着日落开始
-- [x] 必应每日一图
-- [x] 小橘对动作有反应（姿态传感器）
-- [x] 设置网页改版（分区和底部导航）
-- [x] 屏幕浅色主题（可按日出日落自动切换）
-- [x] 资讯新闻（新浪分类、热榜、自定义 RSS，小橘能念）
-- [x] 选择显示哪些页面（快捷设置和设置网页）
-- [x] 影片页（电脑转换、带声音、快进快退、记住看到哪里），相册视频带声音
-- [x] 音乐播放器（歌单、封面、歌词、后台播放、睡眠定时、网页上传）
-- [ ] 量产板加蜂鸣器
+- [x] 时钟天气、GitHub、自选股、资讯、番茄钟、提醒和闹钟
+- [x] 像素小猫、跑酷小游戏、AI 语音聊天
+- [x] 相册、影片、音乐播放器
+- [x] 网页刷机、配对码登录、升级失败自动回滚
+- [ ] 语音控制板子（调音量、开番茄钟、定闹钟）和聊天记忆
 - [ ] 待办事项
-- [x] OTA 在线升级
-- [x] 夜间自动调暗（按时间；量产板可加光敏电阻按环境光调）
-- [ ] 量产板 PCB 和外壳
+- [ ] 自制 PCB 和外壳
 
-## 开源许可
+各版本的改动见 [CHANGELOG](CHANGELOG.md)。
+
+## 🤝 参与贡献
+
+欢迎提 Issue 和 Pull Request！提问题前可以先看看设置网页「系统 › 诊断」，附上里面的信息能更快定位。贡献代码前请读 [CONTRIBUTING](CONTRIBUTING.md)。
+
+## 📄 开源许可
 
 本项目以 [GPL-3.0](LICENSE) 协议开源：可以自由使用、修改和分发，但分发修改后的版本（包括预装在硬件里出售）时必须同样以 GPL-3.0 公开源代码。
 
-用到的第三方代码和资源各自遵循原来的协议：LVGL（MIT）、LovyanGFX（FreeBSD）、WiFiManager（MIT）、ArduinoJson（MIT）、Noto Sans SC 字体（SIL OFL 1.1）、乐鑫 esp-sr 唤醒词库和模型（乐鑫协议，只能用在乐鑫芯片上）。
+## 🙏 致谢
+
+用到的第三方代码和资源各自遵循原来的协议：
+
+- [LVGL](https://lvgl.io)（MIT）、[LovyanGFX](https://github.com/lovyan03/LovyanGFX)（FreeBSD）、[WiFiManager](https://github.com/tzapu/WiFiManager)（MIT）、[ArduinoJson](https://arduinojson.org)（MIT）
+- [minimp3](https://github.com/lieff/minimp3)（CC0）、[dr_flac](https://github.com/mackron/dr_libs)（公有领域 / MIT-0）
+- [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC) 字体（SIL OFL 1.1）
+- [乐鑫 esp-sr](https://github.com/espressif/esp-sr) 唤醒词库和模型（乐鑫协议，只能用在乐鑫芯片上）
 
 天气、行情、资讯、必应图片等数据来自各家的公开接口，仅供个人使用，版权和使用条款归原网站所有。
