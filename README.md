@@ -4,16 +4,16 @@
 
 **给 ESP32-S3-BOX-3 的开源桌面小屏固件：时钟天气、GitHub 热力图、番茄钟、像素小猫、AI 语音聊天、相册影片音乐，一块板子全包。**
 
-[![Build](https://github.com/zjxlink/test-repo/actions/workflows/build.yml/badge.svg)](https://github.com/zjxlink/test-repo/actions/workflows/build.yml)
-[![Release](https://img.shields.io/github/v/release/zjxlink/test-repo?label=%E6%9C%80%E6%96%B0%E7%89%88)](https://github.com/zjxlink/test-repo/releases/latest)
-[![License: GPL-3.0](https://img.shields.io/github/license/zjxlink/test-repo?label=%E8%AE%B8%E5%8F%AF)](LICENSE)
+[![Build](https://github.com/zjxlink/deskscreen/actions/workflows/build.yml/badge.svg)](https://github.com/zjxlink/deskscreen/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/zjxlink/deskscreen?label=%E6%9C%80%E6%96%B0%E7%89%88)](https://github.com/zjxlink/deskscreen/releases/latest)
+[![License: GPL-3.0](https://img.shields.io/github/license/zjxlink/deskscreen?label=%E8%AE%B8%E5%8F%AF)](LICENSE)
 ![ESP32-S3](https://img.shields.io/badge/ESP32--S3-BOX--3-E7352C?logo=espressif&logoColor=white)
 ![PlatformIO](https://img.shields.io/badge/PlatformIO-Arduino-F5822A?logo=platformio&logoColor=white)
 ![LVGL](https://img.shields.io/badge/UI-LVGL%208-343839)
 
 **简体中文** · [English](README.en.md)
 
-[一键刷机](https://zjxlink.github.io/test-repo/) · [功能详解](docs/features.md) · [更新记录](CHANGELOG.md) · [开发指南](docs/development.md)
+[一键刷机](https://zjxlink.github.io/deskscreen/) · [功能详解](docs/features.md) · [更新记录](CHANGELOG.md) · [开发指南](docs/development.md)
 
 <img src="docs/images/hero.png" alt="桌面信息屏界面一览" width="860">
 
@@ -21,7 +21,7 @@
 
 ## ✨ 亮点
 
-- **不用装软件就能刷机**：电脑上用 Chrome 打开[刷机页面](https://zjxlink.github.io/test-repo/)，插上 USB 点一下按钮
+- **不用装软件就能刷机**：电脑上用 Chrome 打开[刷机页面](https://zjxlink.github.io/deskscreen/)，插上 USB 点一下按钮
 - **手机配网、网页设置**：第一次开机用手机连热点选 WiFi，之后在浏览器里打开 `http://deskscreen.local` 改所有设置，不用 App
 - **给程序员的信息屏**：GitHub 贡献热力图、自选股、新闻热榜、天气预报，加上番茄钟和久坐提醒
 - **会陪你的像素小猫「小橘」**：心情跟着你的提交、番茄和股票走，摇一摇会晕，还能玩跑酷小游戏
@@ -88,7 +88,7 @@
 
 ## 🚀 快速上手
 
-**1. 刷机**：用电脑上的 Chrome 或 Edge 打开 **<https://zjxlink.github.io/test-repo/>**，用 USB-C 连上 BOX-3，点「连接板子并刷机」，几分钟就好。页面上有每一步的说明。
+**1. 刷机**：用电脑上的 Chrome 或 Edge 打开 **<https://zjxlink.github.io/deskscreen/>**，用 USB-C 连上 BOX-3，点「连接板子并刷机」，几分钟就好。页面上有每一步的说明。
 
 **2. 配网**：板子开机后屏幕会显示一个 `DeskScreen-XXXX` 的 WiFi 热点。手机连上它，在弹出的页面里选你家的 WiFi（没弹出就用浏览器打开 `192.168.4.1`）。以后要换 WiFi，长按 BOOT 键 3 秒。
 
@@ -102,7 +102,7 @@
 
 ## 🔄 在线升级
 
-- 板子每天检查一次 [GitHub Release](https://github.com/zjxlink/test-repo/releases)，有新版本时在凌晨 3～5 点自动安装（可以关掉），也可以在设置网页「系统 › 固件升级」里手动升级或上传固件
+- 板子每天检查一次 [GitHub Release](https://github.com/zjxlink/deskscreen/releases)，有新版本时在凌晨 3～5 点自动安装（可以关掉），也可以在设置网页「系统 › 固件升级」里手动升级或上传固件
 - 新固件启动后要连续正常运行 30 秒才算升级成功，在那之前崩溃会自动退回旧固件
 - 访问 GitHub 慢的话，可以在自己的 NAS 或服务器上跑 [OTA 镜像服务](server/ota-mirror/README.md)（[飞牛 fnOS 部署教程](docs/ota-server-fnos.md)），再在设置网页「自建升级服务器」里填上它的地址，板子会先试它
 
@@ -111,8 +111,8 @@
 需要 [PlatformIO](https://platformio.org)（VS Code 插件或命令行都行）：
 
 ```bash
-git clone https://github.com/zjxlink/test-repo.git
-cd test-repo/firmware
+git clone https://github.com/zjxlink/deskscreen.git
+cd deskscreen/firmware
 pio run -e box3 -t upload    # 编译并烧录到 BOX-3
 pio device monitor           # 看串口日志
 pio test -e native           # 在电脑上跑单元测试

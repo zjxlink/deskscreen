@@ -19,7 +19,7 @@
 
 | 名字 | 默认 | 说明 |
 | --- | --- | --- |
-| `REPO` | `zjxlink/test-repo` | 从哪个仓库拉固件 |
+| `REPO` | `zjxlink/deskscreen` | 从哪个仓库拉固件 |
 | `INTERVAL` | `3600` | 检查间隔（秒） |
 | `PORT` | `18266` | HTTP 端口 |
 | `KEEP` | `3` | 保留最近几个版本 |

@@ -13,7 +13,7 @@ services:
       - ./mirror.py:/app/mirror.py:ro
       - ./data:/data
     environment:
-      REPO: zjxlink/test-repo
+      REPO: zjxlink/deskscreen
       INTERVAL: "3600"
       PORT: "18266"
       # GH_PREFIX: https://你的加速地址/   # 家里连 GitHub 也慢时再填

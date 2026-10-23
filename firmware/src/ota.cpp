@@ -20,7 +20,7 @@
 
 // 最新 Release 里的 manifest.json。设置里填了自己的升级服务器时先试那边，失败了再来这里
 #ifndef OTA_MANIFEST_URL
-#define OTA_MANIFEST_URL "https://github.com/zjxlink/test-repo/releases/latest/download/manifest.json"
+#define OTA_MANIFEST_URL "https://github.com/zjxlink/deskscreen/releases/latest/download/manifest.json"
 #endif
 
 static constexpr uint32_t kFirstCheckMs = 60 * 1000;            // 开机 1 分钟后第一次检查
