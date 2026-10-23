@@ -52,6 +52,10 @@ static volatile int st_index = -1;
 static const char *volatile st_error = nullptr;
 static char playing_name[kMovieNameMax];
 static uint32_t last_save = 0;
+static int reopen_tries = 0;  // 读卡出错后重新打开过几次（这次播放）
+static constexpr int kMaxReopen = 3;
+// Arduino 的 File::seek 用 32 位有符号数，超过 2GB 的位置跳不过去，后半部分读不出来
+static constexpr uint32_t kMaxFileBytes = 0x7FFFFFFF;
 
 // 两帧轮流用：一帧在屏幕上显示，另一帧给后台解码
 static LGFX_Sprite frames[2];
@@ -196,8 +200,19 @@ static bool show_frame(const uint8_t *jpg, size_t len) {
   }
   int back = frame_shown == 0 ? 1 : 0;
   LGFX_Sprite &spr = frames[back];
-  spr.fillScreen(TFT_BLACK);
-  if (!spr.drawJpg(jpg, len, 0, 0, SCREEN_W, SCREEN_H, 0, 0, 0.0f, 0.0f, lgfx::datum_t::middle_center)) return false;
+  // 解码时要临时借 3.9KB 内部 RAM，内部 RAM 紧的时候偶尔借不到，等一下再试一次
+  bool ok = false;
+  for (int tries = 0; !ok && tries < 2; tries++) {
+    if (tries) vTaskDelay(pdMS_TO_TICKS(10));
+    spr.fillScreen(TFT_BLACK);
+    ok = spr.drawJpg(jpg, len, 0, 0, SCREEN_W, SCREEN_H, 0, 0, 0.0f, 0.0f, lgfx::datum_t::middle_center);
+  }
+  if (!ok) {
+    log_w("movie: can't decode frame (%u bytes), internal RAM free %u, largest %u", (unsigned)len,
+          (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+          (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
+    return false;
+  }
   // 精灵里的像素是给 SPI 屏幕用的高低字节对调格式，LVGL 要的是正常字节序
   auto *px = (uint16_t *)spr.getBuffer();
   for (int i = 0; i < SCREEN_W * SCREEN_H; i++) px[i] = __builtin_bswap16(px[i]);
@@ -263,15 +278,18 @@ static void open_movie(int index) {
   st_pos = 0;
   st_dur = m.dur_ms;
   strlcpy(playing_name, m.name, sizeof(playing_name));
-  bool ok = false;
+  bool ok = false, too_big = false;
+  reopen_tries = 0;
   if (photos_card_lock()) {
     file = SD_MMC.open(path_of(m.name));
-    ok = file && avi.open(file_read, &file, file.size());
+    too_big = file && file.size() > kMaxFileBytes;
+    ok = file && !too_big && avi.open(file_read, &file, file.size());
   }
   photos_card_unlock();
   if (!ok) {
     close_file();
-    st_error = "打不开这个文件。请用电脑上的转换工具转成 MJPEG 的 .avi";
+    st_error = too_big ? "文件超过 2GB，板子放不了后半部分。请在电脑上分成几段再转换"
+                       : "打不开这个文件。请用电脑上的转换工具转成 MJPEG 的 .avi";
     st_loading = false;
     return;
   }
@@ -282,6 +300,20 @@ static void open_movie(int index) {
   if (start + kMovieEndSlackMs >= st_dur) start = 0;
   if (start > 0) seek(start);
   last_save = millis();
+}
+
+// 读卡一直出错：关掉文件重新打开，从 frame 接着放。打不开时返回 false
+static bool reopen_at(uint32_t frame) {
+  close_file();
+  vTaskDelay(pdMS_TO_TICKS(200));
+  bool ok = false;
+  if (photos_card_lock()) {
+    file = SD_MMC.open(path_of(playing_name));
+    ok = file && avi.open(file_read, &file, file.size()) && avi.seek_frame(frame);
+  }
+  photos_card_unlock();
+  log_w("movie: read error, reopened at frame %u: %s", (unsigned)frame, ok ? "ok" : "failed");
+  return ok;
 }
 
 static void movie_task(void *) {
@@ -315,7 +347,14 @@ static void movie_task(void *) {
     AvPlayResult r = avplay_run(avi, hooks, true);
     st_loading = false;
     if (r.shown > 0) st_pos = frame_ms(r.frame);
-    if (r.ended) {
+    if (r.read_error) {
+      // 以前读卡出错会当成放完了，直接跳到结尾，还把「看到哪里」记成看完了
+      uint32_t at = r.shown > 0 ? r.frame + 1 : r.frame;
+      if (++reopen_tries <= kMaxReopen && reopen_at(at)) continue;
+      save_progress(playing_name, st_pos);
+      close_file();
+      st_error = "读 TF 卡一直出错，放不下去了。可以换张卡试试，或者在电脑上检查一下卡";
+    } else if (r.ended) {
       st_ended = true;
       st_pos = st_dur;
       save_progress(playing_name, st_dur);
@@ -478,8 +517,8 @@ bool movie_upload_begin(uint64_t size) {
     upload_err = "这块板子没有 TF 卡槽";
     return false;
   }
-  if (size >= 0xFFFFFFFFull) {
-    upload_err = "文件超过 4GB，TF 卡（FAT32）存不下这么大的文件";
+  if (size > kMaxFileBytes) {
+    upload_err = "文件超过 2GB，板子放不了后半部分。请在电脑上分成几段再转换";
     return false;
   }
   if (!upload_buf) upload_buf = (uint8_t *)heap_caps_malloc(kUploadBuf, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);

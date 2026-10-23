@@ -80,6 +80,7 @@ static volatile bool out_streaming = false;  // 语音回答还在下载
 static volatile bool out_hold = false;       // 在攒声音，先不放
 static volatile uint32_t out_target = kPrebufferMin;  // 要攒够多少采样才放：放空一次就多攒一点，一直顺就慢慢减回来
 static volatile uint32_t out_underruns = 0;           // 这次回答中途放空了几次
+static volatile bool out_local = false;  // 在放视频的声音：只攒最少的，放空了也不多攒
 static int16_t *ref_ring;
 static volatile uint32_t tx_count = 0;  // 已经交给 I2S 的采样数
 static volatile uint32_t out_played = 0;  // 从 out_ring 取走去放的采样数（扔掉的不算）
@@ -265,9 +266,10 @@ static void speaker_task(void *) {
       out_hold = true;
       out_underruns = out_underruns + 1;
       uint32_t t = out_target + kPrebufferMin;
-      out_target = t < kPrebufferMax ? t : kPrebufferMax;
+      if (!out_local) out_target = t < kPrebufferMax ? t : kPrebufferMax;
     }
-    if (out_hold && (avail >= out_target || !out_streaming)) out_hold = false;
+    uint32_t target = out_local ? kPrebufferMin : out_target;
+    if (out_hold && (avail >= target || !out_streaming)) out_hold = false;
     if (out_hold) avail = 0;
     size_t n = avail < (uint32_t)kDmaLen ? avail : kDmaLen;
     for (size_t i = 0; i < n; i++) mono[i] = out_ring[(r + i) & (kOutRing - 1)];
@@ -469,6 +471,7 @@ void audio_stream_begin() {
   xSemaphoreTake(out_lock, portMAX_DELAY);
   music_yield = false;
   wait_base_rate();
+  out_local = false;
   out_hold = true;
   out_underruns = 0;
   out_streaming = true;
@@ -483,6 +486,7 @@ bool audio_stream_try_begin() {
   music_yield = false;
   if (!ok) return false;
   wait_base_rate();
+  out_local = true;
   out_hold = true;
   out_underruns = 0;
   out_streaming = true;
@@ -525,10 +529,15 @@ void audio_stream_end() {
   if (!ready) return;
   out_streaming = false;
   out_drain();
-  uint32_t t = out_target;
-  if (out_underruns == 0 && t > kPrebufferMin) out_target = t - kRate / 10;
-  log_i("audio: answer done, ran dry %u times, now buffering %u ms", (unsigned)out_underruns,
-        (unsigned)(out_target * 1000 / kRate));
+  if (out_local) {
+    log_i("audio: video sound done, ran dry %u times", (unsigned)out_underruns);
+    out_local = false;
+  } else {
+    uint32_t t = out_target;
+    if (out_underruns == 0 && t > kPrebufferMin) out_target = t - kRate / 10;
+    log_i("audio: answer done, ran dry %u times, now buffering %u ms", (unsigned)out_underruns,
+          (unsigned)(out_target * 1000 / kRate));
+  }
   xSemaphoreGive(out_lock);
 }
 

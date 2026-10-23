@@ -23,7 +23,11 @@ struct AvPlayResult {
   uint32_t frame;   // 最后显示的是第几帧（一帧都没显示时是开始的那一帧）
   int shown;        // 显示了几帧
   bool ended;       // 放到了结尾
+  bool read_error;  // 读卡一直出错，没放完就停了（不是放到了结尾）
 };
 
 // 从 avi 现在的位置开始放。sound 为 false 或者喇叭正被 AI 聊天占着时不放声音
 AvPlayResult avplay_run(AviReader &avi, const AvPlayHooks &hooks, bool sound);
+
+// 正在放视频（影片页或相册里的视频），主循环据此让其他后台工作（联网、听音乐律动、唤醒词）先停一停
+bool avplay_active();

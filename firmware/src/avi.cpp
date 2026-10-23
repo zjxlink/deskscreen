@@ -179,7 +179,8 @@ AviChunk AviReader::next_chunk(uint32_t &off, uint32_t &len) {
       if (++seg_ < seg_count_) pos_ = segs_[seg_].start;
       continue;
     }
-    if (!read_at(pos_, h, 8)) return AviChunk::End;
+    if (size_ < 8 || pos_ > size_ - 8) return AviChunk::End;  // 文件没写完（段比文件长）
+    if (!read_at(pos_, h, 8)) return AviChunk::ReadError;
     uint32_t n = le32(h + 4);
     if (memcmp(h, "LIST", 4) == 0) {  // rec 列表：里面是一帧的视频和声音，进去接着找
       pos_ += 12;
@@ -209,7 +210,7 @@ AviChunk AviReader::next_chunk(uint32_t &off, uint32_t &len) {
 bool AviReader::next(uint32_t &off, uint32_t &len) {
   for (;;) {
     AviChunk c = next_chunk(off, len);
-    if (c == AviChunk::End) return false;
+    if (c == AviChunk::End || c == AviChunk::ReadError) return false;
     if (c == AviChunk::Video) return true;
   }
 }
