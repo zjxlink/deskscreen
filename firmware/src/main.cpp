@@ -827,6 +827,14 @@ static void close_quick() {
 }
 
 // 快捷设置页上点了一下：改完立即保存，和在网页上改一样
+static bool chat_paused_music = false;  // AI 聊天时自动暂停的，聊完接着放
+
+// 音乐页、时钟页迷你播放条、快捷设置的播放键都走这里：自己按过就不再在聊完天后自动接着放
+static void music_toggle() {
+  chat_paused_music = false;
+  player_toggle();
+}
+
 static void quick_tap(int x, int y, uint32_t now) {
   quick_last = now;
   bool was_dimmed = screen.dimmed();
@@ -841,7 +849,7 @@ static void quick_tap(int x, int y, uint32_t now) {
   if (h == QuickHit::MusicPrev || h == QuickHit::MusicPlay || h == QuickHit::MusicNext) {
     if (h == QuickHit::MusicPrev) player_prev();
     else if (h == QuickHit::MusicNext) player_next();
-    else player_toggle();
+    else music_toggle();
     return;  // 播放键的图标在 update_quick 里跟着播放状态换
   }
   if (h == QuickHit::Pages || h == QuickHit::Back) {
@@ -1253,7 +1261,6 @@ static constexpr uint32_t kMusicBarKeepMs = 10 * 60000;  // 暂停后时钟页�
 static int music_list_page = 0;
 static int music_chip_first = 0;
 static bool music_list_dirty = true;
-static bool chat_paused_music = false;  // AI 聊天时自动暂停的，聊完接着放
 static uint16_t *music_cover = nullptr;
 
 static void update_listen() {
@@ -1332,8 +1339,7 @@ static bool music_tap(int x, int y, uint32_t now) {
     case MusicHit::Prev: player_prev(); break;
     case MusicHit::Next: player_next(); break;
     case MusicHit::PlayPause:
-      chat_paused_music = false;
-      player_toggle();
+      music_toggle();
       break;
     case MusicHit::Progress: {
       PlayerStatus st = player_status();
@@ -1380,7 +1386,7 @@ static bool music_bar_tap(int x, int y, uint32_t now) {
   if (h == MusicBarHit::None) return false;
   screen.activity(now);
   if (h == MusicBarHit::Open) screen.go_to(PAGE_MUSIC, now);
-  else if (h == MusicBarHit::PlayPause) player_toggle();
+  else if (h == MusicBarHit::PlayPause) music_toggle();
   else player_next();
   return true;
 }
