@@ -1261,8 +1261,10 @@ static constexpr int kMusicTextX = kMusicCoverX + kPlayerCover + 14;
 static constexpr int kMusicBars = 8;  // 16 根频谱两两合成一根，放在封面右边
 static constexpr int kMusicBarW = 6, kMusicBarGap = 3, kMusicBarMaxH = 18;
 static constexpr int kMusicBarsX = 226, kMusicBarsBase = 124;
-static constexpr int kMusicProgX = 58, kMusicProgY = 187, kMusicProgW = 204;
+static constexpr int kMusicProgX = 58, kMusicProgY = 178, kMusicProgW = 204;
 static constexpr int kMusicBtnY = 214;  // 底下一排按钮的中心
+// 进度条和按钮的触摸分界线：上面算进度条，下面算按钮，两边不重叠（以前进度条压住了播放键的上半截）
+static constexpr int kMusicSplitY = 188;
 static constexpr int kMusicBtnX[5] = {40, 100, 160, 220, 280};  // 播放顺序、上一首、播放、下一首、列表
 static constexpr int kMusicRowTop = 66, kMusicRowH = 38, kMusicRowGap = 4;
 static constexpr int kMusicChipY = 34, kMusicChipH = 26;
@@ -1394,8 +1396,8 @@ static void build_music() {
     lv_obj_set_size(l, SCREEN_W - 40, 20);
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
   }
-  lv_obj_set_pos(lbl_music_lyric, 20, 134);
-  lv_obj_set_pos(lbl_music_lyric_next, 20, 156);
+  lv_obj_set_pos(lbl_music_lyric, 20, 128);
+  lv_obj_set_pos(lbl_music_lyric_next, 20, 149);
 
   lbl_music_pos = make_label(music_player_box, &lv_font_montserrat_14, COLOR_SUBTLE);
   lv_obj_set_pos(lbl_music_pos, 16, kMusicProgY - 7);
@@ -1693,6 +1695,11 @@ void ui_set_music_list(const char *msg, const char *const *chips, int nchips, in
   lv_obj_align(lbl_music_count, LV_ALIGN_TOP_RIGHT, -26, 9);
 }
 
+float ui_music_progress_frac(int x) {
+  float f = (float)(x - kMusicProgX) / kMusicProgW;
+  return f < 0 ? 0 : f > 1 ? 1 : f;
+}
+
 MusicHit ui_music_hit(int x, int y, float *frac, int *index) {
   if (music_list_on) {
     if (y < kMusicChipY - 2) return x < 120 ? MusicHit::Back : MusicHit::None;
@@ -1724,19 +1731,17 @@ MusicHit ui_music_hit(int x, int y, float *frac, int *index) {
     if (x < sx - 6) return MusicHit::List;
     return MusicHit::None;
   }
-  if (y >= kMusicProgY - 14 && y < kMusicProgY + 12 && x >= kMusicProgX - 12 && x < kMusicProgX + kMusicProgW + 12) {
-    if (frac) {
-      float f = (float)(x - kMusicProgX) / kMusicProgW;
-      *frac = f < 0 ? 0 : f > 1 ? 1 : f;
-    }
-    return MusicHit::Progress;
-  }
-  if (y >= kMusicBtnY - 26) {
+  if (y >= kMusicSplitY) {
     static const MusicHit kBtns[5] = {MusicHit::Mode, MusicHit::Prev, MusicHit::PlayPause, MusicHit::Next,
                                       MusicHit::List};
     for (int i = 0; i < 5; i++) {
-      if (abs(x - kMusicBtnX[i]) <= 28) return kBtns[i];
+      if (abs(x - kMusicBtnX[i]) <= 30) return kBtns[i];
     }
+    return MusicHit::None;
+  }
+  if (y >= kMusicProgY - 14 && x >= kMusicProgX - 12 && x < kMusicProgX + kMusicProgW + 12) {
+    if (frac) *frac = ui_music_progress_frac(x);
+    return MusicHit::Progress;
   }
   return MusicHit::None;
 }
