@@ -1265,6 +1265,9 @@ static constexpr int kMusicProgX = 58, kMusicProgY = 178, kMusicProgW = 204;
 static constexpr int kMusicBtnY = 214;  // 底下一排按钮的中心
 // 进度条和按钮的触摸分界线：上面算进度条，下面算按钮，两边不重叠（以前进度条压住了播放键的上半截）
 static constexpr int kMusicSplitY = 188;
+// 音量条：盖在两行歌词的位置，左右两头是 － ＋
+static constexpr int kMusicVolY = 126, kMusicVolH = 42;
+static constexpr int kMusicVolBarX = 70, kMusicVolBarW = 180;
 static constexpr int kMusicBtnX[5] = {40, 100, 160, 220, 280};  // 播放顺序、上一首、播放、下一首、列表
 static constexpr int kMusicRowTop = 66, kMusicRowH = 38, kMusicRowGap = 4;
 static constexpr int kMusicChipY = 34, kMusicChipH = 26;
@@ -1274,6 +1277,12 @@ static lv_obj_t *music_player_box;  // 播放画面的东西都放在这里面
 static lv_obj_t *lbl_music_head;
 static lv_obj_t *lbl_music_queue;
 static lv_obj_t *music_sleep;
+static lv_obj_t *music_vol;      // 顶栏的音量按钮「🔈 60」
+static lv_obj_t *lbl_music_vol;
+static lv_obj_t *music_vol_row;  // 点音量按钮后盖在歌词上的「－ 音量条 ＋」
+static lv_obj_t *music_vol_fill;
+static lv_obj_t *music_vol_knob;
+static bool music_vol_open = false;
 static lv_obj_t *lbl_music_sleep;
 static lv_obj_t *music_cover_art;  // 没有封面时的音符图
 static lv_obj_t *music_cover_img;
@@ -1348,6 +1357,10 @@ static void build_music() {
   lv_obj_center(lbl_music_sleep);
   lbl_music_queue = make_label(music_player_box, &lv_font_montserrat_14, COLOR_SUBTLE);
   lv_obj_align(lbl_music_queue, LV_ALIGN_TOP_RIGHT, -26, 11);
+  music_vol = make_box(music_player_box, 54, 22, pal->flat, LV_OPA_COVER, 11);
+  lv_obj_set_pos(music_vol, 120, 7);
+  lbl_music_vol = make_label(music_vol, &lv_font_montserrat_14, COLOR_SUBTLE);
+  lv_obj_center(lbl_music_vol);
 
   // 封面：默认是橙到紫的渐变上一个大音符
   music_cover_art = make_box(music_player_box, kPlayerCover, kPlayerCover, 0xF2A65A, LV_OPA_COVER, 12);
@@ -1398,6 +1411,23 @@ static void build_music() {
   }
   lv_obj_set_pos(lbl_music_lyric, 20, 128);
   lv_obj_set_pos(lbl_music_lyric_next, 20, 149);
+
+  music_vol_row = make_box(music_player_box, SCREEN_W - 32, kMusicVolH, pal->flat, LV_OPA_COVER, 14);
+  lv_obj_set_pos(music_vol_row, 16, kMusicVolY);
+  lv_obj_add_flag(music_vol_row, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_t *minus = make_label(music_vol_row, &lv_font_montserrat_20, lv_color_hex(kMovieOrange));
+  lv_label_set_text(minus, LV_SYMBOL_MINUS);
+  lv_obj_align(minus, LV_ALIGN_LEFT_MID, 18, 0);
+  lv_obj_t *plus = make_label(music_vol_row, &lv_font_montserrat_20, lv_color_hex(kMovieOrange));
+  lv_label_set_text(plus, LV_SYMBOL_PLUS);
+  lv_obj_align(plus, LV_ALIGN_RIGHT_MID, -18, 0);
+  lv_obj_t *vtrack = make_box(music_vol_row, kMusicVolBarW, 6, pal->bg, LV_OPA_COVER, 3);
+  lv_obj_set_pos(vtrack, kMusicVolBarX - 16, kMusicVolH / 2 - 3);
+  music_vol_fill = make_box(vtrack, 0, 6, kMovieOrange, LV_OPA_COVER, 3);
+  music_vol_knob = make_box(music_vol_row, 16, 16, 0xFFFFFF, LV_OPA_COVER, LV_RADIUS_CIRCLE);
+  lv_obj_set_style_border_width(music_vol_knob, 1, 0);
+  lv_obj_set_style_border_color(music_vol_knob, lv_color_hex(0xC9D1D9), 0);
+  lv_obj_set_y(music_vol_knob, kMusicVolH / 2 - 8);
 
   lbl_music_pos = make_label(music_player_box, &lv_font_montserrat_14, COLOR_SUBTLE);
   lv_obj_set_pos(lbl_music_pos, 16, kMusicProgY - 7);
@@ -1553,7 +1583,24 @@ void ui_set_music(const MusicPageView &v) {
   int qx = lv_label_get_text(lbl_music_queue)[0] ? lv_obj_get_x(lbl_music_queue) : SCREEN_W - 26;
   int sx = qx - 8 - lv_obj_get_width(music_sleep);
   lv_obj_set_x(music_sleep, sx);
-  lv_obj_set_width(lbl_music_head, sx - 36 - 6);
+  // 音量按钮挨着定时按钮，打开音量条时变成橙色
+  int vol = v.volume < 0 ? 0 : v.volume > 100 ? 100 : v.volume;
+  lv_label_set_text_fmt(lbl_music_vol, "%s %d", vol == 0 ? LV_SYMBOL_MUTE : LV_SYMBOL_VOLUME_MAX, vol);
+  lv_obj_set_style_bg_color(music_vol, v.volume_open ? lv_color_hex(kMovieOrange) : COLOR_FLAT, 0);
+  lv_obj_set_style_text_color(lbl_music_vol, v.volume_open ? lv_color_hex(0x1A1A1A) : COLOR_SUBTLE, 0);
+  lv_obj_update_layout(lbl_music_vol);
+  lv_obj_set_width(music_vol, lv_obj_get_width(lbl_music_vol) + 18);
+  lv_obj_center(lbl_music_vol);
+  int vx = sx - 6 - lv_obj_get_width(music_vol);
+  lv_obj_set_x(music_vol, vx);
+  lv_obj_set_width(lbl_music_head, vx - 36 - 6);
+  music_vol_open = v.volume_open;
+  set_hidden(music_vol_row, !v.volume_open);
+  set_hidden(lbl_music_lyric, v.volume_open);
+  set_hidden(lbl_music_lyric_next, v.volume_open);
+  int vw = kMusicVolBarW * vol / 100;
+  lv_obj_set_width(music_vol_fill, vw);
+  lv_obj_set_x(music_vol_knob, kMusicVolBarX - 16 + vw - 8);
 
   if (v.loaded) {
     lv_label_set_text(lbl_music_title, v.title);
@@ -1727,9 +1774,20 @@ MusicHit ui_music_hit(int x, int y, float *frac, int *index) {
   if (lv_obj_has_flag(music_player_box, LV_OBJ_FLAG_HIDDEN)) return MusicHit::None;
   if (y < 32) {
     int sx = lv_obj_get_x(music_sleep);
-    if (x >= sx - 6 && x < sx + lv_obj_get_width(music_sleep) + 6) return MusicHit::Sleep;
-    if (x < sx - 6) return MusicHit::List;
+    int vx = lv_obj_get_x(music_vol);
+    if (x >= sx - 3 && x < sx + lv_obj_get_width(music_sleep) + 6) return MusicHit::Sleep;
+    if (x >= vx - 6 && x < sx - 3) return MusicHit::Volume;
+    if (x < vx - 6) return MusicHit::List;
     return MusicHit::None;
+  }
+  if (music_vol_open && y >= kMusicVolY - 6 && y < kMusicVolY + kMusicVolH + 4) {
+    if (x < kMusicVolBarX - 14) return MusicHit::VolumeDown;
+    if (x >= kMusicVolBarX + kMusicVolBarW + 14) return MusicHit::VolumeUp;
+    if (frac) {
+      float f = (float)(x - kMusicVolBarX) / kMusicVolBarW;
+      *frac = f < 0 ? 0 : f > 1 ? 1 : f;
+    }
+    return MusicHit::VolumeBar;
   }
   if (y >= kMusicSplitY) {
     static const MusicHit kBtns[5] = {MusicHit::Mode, MusicHit::Prev, MusicHit::PlayPause, MusicHit::Next,
