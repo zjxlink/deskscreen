@@ -1358,6 +1358,22 @@ static bool music_tap(int x, int y, uint32_t now) {
   return true;
 }
 
+// 音乐页上按下后手指挪动了：从进度条上开始的拖动跳到松手的位置（不翻页）；
+// 在按钮上按下、手指挪得不远（不够滑动翻页）时照样算点了按钮，免得按键偶尔没反应
+static bool music_drag(int down_x, int down_y, int up_x, int up_y, uint32_t now) {
+  MusicHit h = ui_music_hit(down_x, down_y, nullptr, nullptr);
+  if (h == MusicHit::Progress) {
+    float frac = ui_music_progress_frac(up_x);  // 只看横向位置，手指往上下偏了也照样跳
+    screen.activity(now);
+    screen.stay(now);
+    PlayerStatus st = player_status();
+    if (st.loaded && st.dur_ms) player_seek_to((uint32_t)(frac * st.dur_ms));
+    return true;
+  }
+  if (h == MusicHit::None || abs(up_x - down_x) >= kSwipePx || abs(up_y - down_y) >= kSwipePx) return false;
+  return music_tap(down_x, down_y, now);
+}
+
 // 时钟页的迷你播放条：点歌名打开音乐页，点右边暂停、下一首
 static bool music_bar_tap(int x, int y, uint32_t now) {
   MusicBarHit h = ui_music_bar_hit(x, y);
@@ -1573,9 +1589,13 @@ static void check_touch() {
     // 滑动：横着滑够远才翻页；资讯页上竖着滑翻新闻（往上滑下一批），别的页面竖着滑什么也不做
     int dx = last_x - down_x;
     int dy = last_y - down_y;
+    bool on_music = screen.started() && !screen.dimmed() && !ota_screen && !alert_on && !game_on &&
+                    screen.page() == PAGE_MUSIC && !ui_music_list_shown();
     if (quick_on) {
       quick_last = now;
       ui_quick_drag_end();
+    } else if (on_music && music_drag(down_x, down_y, last_x, last_y, now)) {
+      // 音乐页：在进度条上拖动、手指在按钮上稍微挪了一点
     } else if (abs(dx) >= kSwipePx && abs(dx) > abs(dy)) {
       on_tap(now, dx > 0);
     } else if (abs(dy) >= kSwipePx && screen.page() == PAGE_NEWS && screen.started() && !screen.dimmed() &&
