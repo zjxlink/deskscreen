@@ -212,6 +212,8 @@ void ui_set_music_list(const char *msg, const char *const *chips, int nchips, in
 enum class MusicHit { None, List, Sleep, Mode, Prev, PlayPause, Next, Progress, Back, Chip, ChipMore, Row };
 // 点到了什么：Progress 时 frac 是位置（0～1），Chip 时 index 是第几个歌单，Row 时 index 是这一屏的第几行
 MusicHit ui_music_hit(int x, int y, float *frac, int *index);
+// 进度条上横坐标 x 对应的位置（0～1），超出两头时取 0 或 1
+float ui_music_progress_frac(int x);
 
 // 时钟页上的迷你播放条（代替日出日落那一行）：show 为 false 时换回去
 void ui_set_music_bar(bool show, bool playing, const char *title, const char *artist);

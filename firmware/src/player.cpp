@@ -967,9 +967,27 @@ void player_play_view(int i) {
   send_play(kCmdPlayView);
 }
 
-void player_toggle() { send_play(kCmdToggle); }
+// 按屏幕上看到的状态决定暂停还是播放（和各处的播放键图标一致），后按的覆盖先按的：
+// 播放任务还没来得及处理时连点、或者在音乐页、时钟页、快捷设置几处先后点，结果都是最后一下
+void player_toggle() {
+  if (!ready || !st.loaded) {
+    send_play(kCmdToggle);  // 还没有当前的歌：接着上次放到的地方放
+    return;
+  }
+  portENTER_CRITICAL(&cmd_mux);
+  uint32_t pending = cmds & (kCmdPause | kCmdResume);
+  cmds &= ~(kCmdToggle | kCmdPause | kCmdResume);
+  portEXIT_CRITICAL(&cmd_mux);
+  bool pause = pending ? (pending & kCmdResume) != 0 : player_playing();
+  if (pause) send(kCmdPause);
+  else send_play(kCmdResume);
+}
 void player_pause() {
-  if (want_play) send(kCmdPause);
+  portENTER_CRITICAL(&cmd_mux);
+  bool resuming = cmds & kCmdResume;
+  cmds &= ~(kCmdToggle | kCmdResume);  // 还没处理的「播放」作废，暂停优先
+  portEXIT_CRITICAL(&cmd_mux);
+  if (want_play || resuming) send(kCmdPause);
 }
 void player_resume() { send_play(kCmdResume); }
 void player_next() { send_play(kCmdNext); }
