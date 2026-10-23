@@ -52,6 +52,7 @@ static constexpr uint32_t kAlarmRepeatMs = 2500;        // 闹钟铃声的间隔
 static constexpr uint32_t kQuickHoldMs = 2000;          // 长按屏幕打开快捷设置
 static constexpr uint32_t kQuickIdleMs = 30000;         // 快捷设置页没人操作多久自动关掉
 static constexpr int kMoveSlop = 20;   // 手指移动超过这么多像素就不算点、也不算长按
+static constexpr uint32_t kMusicVolOpenMs = 4000;  // 音量条不碰它这么久就收起
 static constexpr int kSwipePx = 40;    // 左右滑动超过这么多像素算翻页
 
 static WiFiManager wm;
@@ -1257,6 +1258,7 @@ static constexpr uint32_t kMusicBarKeepMs = 10 * 60000;  // 暂停后时钟页�
 static int music_list_page = 0;
 static int music_chip_first = 0;
 static bool music_list_dirty = true;
+static uint32_t music_vol_until = 0;  // 音量条开到什么时候（不碰它几秒后自己收起）
 static uint16_t *music_cover = nullptr;
 
 static void update_listen() {
@@ -1346,6 +1348,26 @@ static bool music_tap(int x, int y, uint32_t now) {
     case MusicHit::List: music_open_list(); break;
     case MusicHit::Back: ui_music_show_list(false); break;
     case MusicHit::Sleep: player_cycle_sleep(); break;
+    case MusicHit::Volume:
+      music_vol_until = music_vol_until ? 0 : (now + kMusicVolOpenMs) | 1;  // 再点一下收起
+      break;
+    case MusicHit::VolumeDown:
+    case MusicHit::VolumeUp:
+    case MusicHit::VolumeBar: {
+      // 和快捷设置、影片页是同一个音量
+      Settings s = settings_get();
+      int v = s.sound_volume;
+      if (h == MusicHit::VolumeDown) v = v > 10 ? (v - 1) / 10 * 10 : 0;
+      else if (h == MusicHit::VolumeUp) v = v < 90 ? v / 10 * 10 + 10 : 100;
+      else v = (int)lroundf(frac * 20) * 5;  // 点在条上：按 5 一格
+      music_vol_until = (now + kMusicVolOpenMs) | 1;
+      if (v == s.sound_volume) break;
+      s.sound_volume = v;
+      settings_save(s);
+      apply_settings();
+      if (!player_playing()) audio_play(SoundId::Chime);  // 没在放歌时叮一声听听多大
+      break;
+    }
     case MusicHit::Mode: player_cycle_mode(); break;
     case MusicHit::Prev: player_prev(); break;
     case MusicHit::Next: player_next(); break;
@@ -1387,6 +1409,7 @@ static bool music_drag(int down_x, int down_y, int up_x, int up_y, uint32_t now)
     if (st.loaded && st.dur_ms) player_seek_to((uint32_t)(frac * st.dur_ms));
     return true;
   }
+  if (h == MusicHit::VolumeBar) return music_tap(up_x, down_y, now);  // 拖音量条：停在松手的位置
   if (h == MusicHit::None || abs(up_x - down_x) >= kSwipePx || abs(up_y - down_y) >= kSwipePx) return false;
   return music_tap(down_x, down_y, now);
 }
@@ -1417,6 +1440,7 @@ static void update_player() {
   if (on_page && !was_on) player_rescan();  // 刚拷进去、传上来的歌也能看到
   if (!on_page && was_on && screen.page() != PAGE_MUSIC) ui_music_show_list(false);  // 下次进来先看播放画面
   was_on = on_page;
+  if (!on_page) music_vol_until = 0;  // 离开音乐页时音量条收起
 
   // AI 聊天时先停下，聊完接着放；小橘回答时自己让出喇叭的也算
   VoiceState vs = voice_status().state;
@@ -1493,6 +1517,9 @@ static void update_player() {
   v.lyric_cur = lyr ? cur : nullptr;
   v.lyric_next = lyr ? next : nullptr;
   v.bands = music.bands;
+  if (music_vol_until && (int32_t)(now - music_vol_until) >= 0) music_vol_until = 0;
+  v.volume = settings_get().sound_volume;
+  v.volume_open = music_vol_until != 0;
   ui_set_music(v);
 }
 

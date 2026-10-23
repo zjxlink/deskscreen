@@ -189,6 +189,8 @@ struct MusicPageView {
   const char *lyric_cur;   // nullptr 表示没有歌词
   const char *lyric_next;
   const float *bands;      // kMusicBands 根频谱条（0～1），nullptr 表示不画
+  int volume;              // 0～100，和快捷设置里的是同一个音量
+  bool volume_open;        // 歌词那里换成音量条
 };
 void ui_set_music(const MusicPageView &v);
 // 封面：kPlayerCover x kPlayerCover 的 RGB565，nullptr 表示用默认的音符图
@@ -209,8 +211,9 @@ struct MusicRow {
 // msg 不为空时只显示提示（没插卡、没有歌）；count 是这个歌单一共几首，page、pages 是第几屏、一共几屏
 void ui_set_music_list(const char *msg, const char *const *chips, int nchips, int sel, int first, const MusicRow *rows,
                        int n, int count, int page, int pages);
-enum class MusicHit { None, List, Sleep, Mode, Prev, PlayPause, Next, Progress, Back, Chip, ChipMore, Row };
-// 点到了什么：Progress 时 frac 是位置（0～1），Chip 时 index 是第几个歌单，Row 时 index 是这一屏的第几行
+enum class MusicHit { None, List, Sleep, Mode, Prev, PlayPause, Next, Progress, Back, Chip, ChipMore, Row, Volume,
+                      VolumeDown, VolumeUp, VolumeBar };
+// 点到了什么：Progress、VolumeBar 时 frac 是位置（0～1），Chip 时 index 是第几个歌单，Row 时 index 是这一屏的第几行
 MusicHit ui_music_hit(int x, int y, float *frac, int *index);
 // 进度条上横坐标 x 对应的位置（0～1），超出两头时取 0 或 1
 float ui_music_progress_frac(int x);
