@@ -38,7 +38,7 @@ bool ota_is_newer(const char *current, const char *latest) {
 static bool is_md5_hex(const char *s) {
   if (!s || strlen(s) != 32) return false;
   for (; *s; s++) {
-    if (!isdigit((unsigned char)*s) && !(*s >= 'a' && *s <= 'f')) return false;
+    if (!isdigit((unsigned char)*s) && !isxdigit((unsigned char)*s)) return false;
   }
   return true;
 }
@@ -120,7 +120,7 @@ bool ota_parse_manifest(JsonDocument &doc, const char *board, OtaManifest &out, 
   strncpy(out.version, version, sizeof(out.version) - 1);
   out.version[sizeof(out.version) - 1] = 0;
   strcpy(out.url, url);
-  strcpy(out.md5, md5);
+  for (int i = 0; i < 33; i++) out.md5[i] = (char)tolower((unsigned char)md5[i]);  // Update.setMD5 比较时区分大小写
   out.size = size;
   return true;
 }
@@ -129,4 +129,32 @@ bool ota_looks_like_app_image(const uint8_t *data, size_t len) {
   if (len < 36 || data[0] != 0xE9) return false;  // ESP 镜像头的魔数
   // 镜像头 24 字节 + 第一个段头 8 字节之后，是应用描述信息 esp_app_desc_t，以 0xABCD5432 开头（小端）
   return data[32] == 0x32 && data[33] == 0x54 && data[34] == 0xCD && data[35] == 0xAB;
+}
+
+void ota_board_tag_feed(OtaBoardTag &t, const uint8_t *data, size_t len) {
+  static const char kNeedle[] = {'D', 'S', 'B', 'O', 'A', 'R', 'D', ':'};  // 不写成字符串，免得这里也成了一个空名字的标记
+  for (size_t i = 0; i < len && !t.found; i++) {
+    char c = (char)data[i];
+    if (t.got >= 0) {
+      if (c == 0 && t.got > 0) {
+        t.name[t.got] = 0;
+        t.found = true;
+      } else if (c > ' ' && c < 0x7F && t.got < (int)sizeof(t.name) - 1) {
+        t.name[t.got++] = c;
+        continue;
+      } else {
+        t.got = -1;  // 不是标记（名字太长或有怪字符）
+      }
+      t.match = 0;
+      if (t.found) break;
+    }
+    if (c == kNeedle[t.match]) {
+      if (++t.match == (int)sizeof(kNeedle)) {
+        t.got = 0;
+        t.match = 0;
+      }
+    } else {
+      t.match = c == kNeedle[0] ? 1 : 0;
+    }
+  }
 }

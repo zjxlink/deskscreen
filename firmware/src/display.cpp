@@ -134,9 +134,20 @@ void display_init() {
 
   lv_init();
 
-  size_t buf_bytes = SCREEN_W * kBufLines * sizeof(lv_color_t);
-  auto *buf = (lv_color_t *)heap_caps_malloc(buf_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-  lv_disp_draw_buf_init(&draw_buf, buf, nullptr, SCREEN_W * kBufLines);
+  // 内部 RAM 不够时少画几行，慢一点总比空指针死机强
+  uint32_t lines = kBufLines;
+  lv_color_t *buf = nullptr;
+  for (; lines >= 8; lines /= 2) {
+    buf = (lv_color_t *)heap_caps_malloc(SCREEN_W * lines * sizeof(lv_color_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (buf) break;
+  }
+  if (!buf) {
+    log_e("no internal RAM for the draw buffer, restarting");
+    delay(1000);
+    ESP.restart();
+  }
+  if (lines != kBufLines) log_w("draw buffer cut to %u lines", (unsigned)lines);
+  lv_disp_draw_buf_init(&draw_buf, buf, nullptr, SCREEN_W * lines);
 
   lv_disp_drv_init(&disp_drv);
   disp_drv.hor_res = SCREEN_W;

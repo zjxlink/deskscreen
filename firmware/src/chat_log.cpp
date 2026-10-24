@@ -85,7 +85,11 @@ void ChatLog::cut_reply(size_t chars) {
     remove(at);
     return;
   }
-  if (n + sizeof(kPending) > kChatLineLen) n = utf8_prefix(t, chars - 2);
+  // 放不下「……」就往回退整字，直到放得下（按字节算，英文一个字只省 1 字节）
+  while (n > 0 && n + sizeof(kPending) > kChatLineLen) {
+    do n--;
+    while (n > 0 && ((uint8_t)t[n] & 0xC0) == 0x80);
+  }
   strcpy(t + n, kPending);
   rev_++;
 }

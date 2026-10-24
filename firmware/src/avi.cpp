@@ -318,6 +318,10 @@ bool AviReader::seek_frame(uint32_t frame) {
     uint32_t p = pos_, f = frame_pos_;
     AviChunk c = next_chunk(o, n);
     if (c == AviChunk::End) break;
+    if (c == AviChunk::ReadError) {  // 读卡出错位置不会前进，再数下去就原地打转：放弃这次跳转
+      any = false;
+      break;
+    }
     if (c != AviChunk::Video) continue;
     any = true;
     prev_seg = s;

@@ -115,6 +115,17 @@ jobs:
             --base-url "${{ github.server_url }}/${{ github.repository }}/releases/download/$VERSION" \
             box3=dist/firmware-box3.bin desk_v1=dist/firmware-desk_v1.bin > dist/manifest.json
           cat dist/manifest.json
+      - name: Pack converters
+        # 影片、音乐转换工具单独打个包，Windows 用户下载解压后把文件拖到 .bat 上就行（不用下载整个仓库）。
+        # 用 Python 打包：中文文件名带 UTF-8 标记，Windows 资源管理器解压不乱码
+        run: |
+          python3 - <<'PY'
+          import pathlib, zipfile
+          with zipfile.ZipFile("dist/deskscreen-tools.zip", "w", zipfile.ZIP_DEFLATED) as z:
+              for d in ("movie", "music"):
+                  for f in sorted(pathlib.Path("tools", d).iterdir()):
+                      z.write(f, f"deskscreen-tools/{d}/{f.name}")
+          PY
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -123,6 +134,7 @@ jobs:
           **烧录方法**
           - 第一次烧录：用 Chrome 打开 https://espressif.github.io/esptool-js/ ，地址填 `0x0`，选择 `firmware-板子名-merged.bin`
           - 已经装过的设备：会自动在线升级；也可以在设置页面上传 `firmware-板子名.bin`（不带 merged 的那个）
+          - 影片、音乐转换工具：下载 `deskscreen-tools.zip`，解压后把文件拖到 `转换影片.bat` / `转换音乐.bat` 上（需要 ffmpeg）
           NOTES
           # 手动运行时标签还不存在，--target 让 GitHub 在这次编译的提交上创建它
           gh release create "$VERSION" dist/* --target "${{ github.sha }}" \

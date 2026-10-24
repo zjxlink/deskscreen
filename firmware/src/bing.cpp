@@ -1,4 +1,5 @@
 #include "bing.h"
+#include "psram_alloc.h"
 
 #include <HTTPClient.h>
 #include <WiFi.h>
@@ -126,7 +127,7 @@ static bool fetch(bool &card) {
   if (get(kApiPath, kMaxJsonBytes, body, len) != HTTP_CODE_OK) return false;
   JsonDocument filter;
   bing_build_filter(filter);
-  JsonDocument doc;
+  JsonDocument doc(psram_json());
   DeserializationError err = deserializeJson(doc, (const char *)body, len, DeserializationOption::Filter(filter));
   free(body);
   if (err) {

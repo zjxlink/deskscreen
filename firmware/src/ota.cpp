@@ -1,4 +1,5 @@
 #include "ota.h"
+#include "psram_alloc.h"
 
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
@@ -22,6 +23,10 @@
 #ifndef OTA_MANIFEST_URL
 #define OTA_MANIFEST_URL "https://github.com/zjxlink/deskscreen/releases/latest/download/manifest.json"
 #endif
+
+// 网页上传固件时用它认出是哪块板子的固件（见 ota_board_tag_feed）。ota_upload_end 引用了它，链接时不会被丢掉
+extern "C" const char ds_board_tag[] = "DSBOARD:" BOARD_NAME;
+static OtaBoardTag upload_tag;
 
 static constexpr uint32_t kFirstCheckMs = 60 * 1000;            // 开机 1 分钟后第一次检查
 static constexpr uint32_t kCheckIntervalMs = 24 * 3600 * 1000;  // 之后每天检查一次
@@ -162,7 +167,7 @@ static bool fetch_manifest(const char *url, OtaManifest &m, char *err, size_t n)
     snprintf(err, n, "HTTP %d", code);
     return false;
   }
-  JsonDocument doc;
+  JsonDocument doc(psram_json());
   DeserializationError e = deserializeJson(doc, c.http.getString());
   c.http.end();
   if (e || !ota_parse_manifest(doc, BOARD_NAME, m, url)) {
@@ -177,14 +182,24 @@ static bool fetch_manifest(const char *url, OtaManifest &m, char *err, size_t n)
 static bool check() {
   set_state(OtaState::Checking, "");
   String own = settings_get().ota_url;
-  OtaManifest m;
+  OtaManifest m = {};
   bool mirror = false;
   char own_err[32] = "", gh_err[32] = "";
   if (own.length() > 0) {
     mirror = fetch_manifest(own.c_str(), m, own_err, sizeof(own_err));
+    if (!mirror) m = {};  // 失败时可能只填了一半
     if (!mirror) log_w("ota: own server failed (%s), trying GitHub", own_err);
   }
-  if (!mirror && !fetch_manifest(OTA_MANIFEST_URL, m, gh_err, sizeof(gh_err))) {
+  if (mirror && !ota_is_newer(FW_VERSION, m.version)) {
+    // 自建服务器说没有新版本：可能是它还没同步到最新的，再问一下 GitHub，那边有新的就用那边的
+    OtaManifest gh = {};
+    if (fetch_manifest(OTA_MANIFEST_URL, gh, gh_err, sizeof(gh_err)) && ota_is_newer(m.version, gh.version)) {
+      log_w("ota: own server has %s, GitHub has %s", m.version, gh.version);
+      m = gh;
+      mirror = false;
+    }
+  }
+  if (!mirror && !m.version[0] && !fetch_manifest(OTA_MANIFEST_URL, m, gh_err, sizeof(gh_err))) {
     char err[64];
     if (own.length() > 0) {
       snprintf(err, sizeof(err), "检查更新失败（自建 %s，GitHub %s）", own_err, gh_err);
@@ -243,7 +258,14 @@ static void download() {
   }
   Update.setMD5(m.md5);
 
-  static uint8_t buf[4096];
+  static constexpr size_t kBuf = 4096;
+  static uint8_t *buf = (uint8_t *)psram_malloc(kBuf);  // 不常驻内部内存
+  if (!buf) {
+    Update.abort();
+    http.end();
+    fail("内存不够");
+    return;
+  }
   WiFiClient *stream = http.getStreamPtr();
   uint32_t written = 0;
   uint32_t last_data = millis();
@@ -254,7 +276,7 @@ static void download() {
       delay(2);
       continue;
     }
-    size_t want = avail < sizeof(buf) ? avail : sizeof(buf);
+    size_t want = avail < kBuf ? avail : kBuf;
     if (want > m.size - written) want = m.size - written;
     size_t n = stream->readBytes(buf, want);
     if (Update.write(buf, n) != n) {
@@ -344,10 +366,12 @@ bool ota_upload_begin(const uint8_t *first, size_t len, size_t total) {
   }
   upload_done = 0;
   upload_total = total;
+  upload_tag = OtaBoardTag();
   return ota_upload_write(first, len);
 }
 
 bool ota_upload_write(const uint8_t *data, size_t len) {
+  ota_board_tag_feed(upload_tag, data, len);
   if (Update.write((uint8_t *)data, len) != len) {
     Update.abort();
     fail(Update.errorString());
@@ -363,6 +387,14 @@ bool ota_upload_write(const uint8_t *data, size_t len) {
 }
 
 bool ota_upload_end() {
+  if (upload_tag.found && strcmp(upload_tag.name, ds_board_tag + 8) != 0) {
+    Update.abort();
+    char msg[96];
+    snprintf(msg, sizeof(msg), "这是 %s 板子的固件，本机是 %s，请上传 firmware-%s.bin", upload_tag.name, BOARD_NAME,
+             BOARD_NAME);
+    fail(msg);
+    return false;
+  }
   if (!Update.end(true)) {
     fail(Update.errorString());
     return false;

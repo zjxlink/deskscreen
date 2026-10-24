@@ -2,7 +2,7 @@
 # 把歌转成桌面信息屏能放的格式（macOS / Linux）。用法：
 #   ./convert_music.sh 歌1.m4a 歌2.ape ...
 # 转好的文件在这个脚本旁边的 music 文件夹里，把整个 music 文件夹拷到 TF 卡的根目录就行
-# （也可以在网页设置的「音乐管理」里上传）。同名的 .lrc 歌词会一起拷过去。
+# （也可以在网页设置的「显示 › 音乐」里上传）。同名的 .lrc 歌词会一起拷过去。
 # 需要 ffmpeg：macOS 用 brew install ffmpeg，Ubuntu 用 sudo apt install ffmpeg
 #
 # 格式：MP3 192kbps、44.1kHz 立体声，保留歌名、歌手、专辑；封面缩到 300 像素以内、存成普通 JPG（板子上解得动）。

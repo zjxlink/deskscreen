@@ -1,4 +1,5 @@
 #include "github.h"
+#include "psram_alloc.h"
 
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
@@ -53,7 +54,7 @@ static GithubStatus fetch(const String &token, GithubData &out, int &error) {
   http.end();
   JsonDocument filter;
   github_build_filter(filter);
-  JsonDocument doc;
+  JsonDocument doc(psram_json());
   DeserializationError err = deserializeJson(doc, body, DeserializationOption::Filter(filter));
   if (err) {
     String detail = String("JSON: ") + err.c_str() + ", " + body.length() + " bytes";

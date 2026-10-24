@@ -34,6 +34,7 @@ struct VoiceStatus {
 static constexpr uint16_t kSpokenAll = 0xFFFF;
 
 static constexpr uint32_t kVoiceIdleHangupMs = 20000;  // 这么久没人说话就挂断
+static constexpr uint32_t kVoiceHearingMaxMs = 60000;  // 一句话听了这么久还没完（一直有背景噪音）也挂断
 
 bool voice_available();
 void voice_begin();

@@ -28,18 +28,20 @@ if not exist "%OUT%" mkdir "%OUT%"
 :next
 if "%~1"=="" goto done
 echo.
-echo 正在转换：%~nx1
+echo 正在转换："%~nx1"
 "%FFMPEG%" -hide_banner -loglevel error -stats -y -i "%~1" -map 0:v:0 -map "0:a:0?" -sn -vf "scale=320:240:force_original_aspect_ratio=decrease:force_divisible_by=2,fps=20" -c:v mjpeg -q:v 5 -pix_fmt yuvj420p -af "aresample=16000,dynaudnorm=f=250:g=15,asetnsamples=n=800:p=0" -c:a pcm_s16le -ac 1 -ar 16000 -max_interleave_delta 0 -f avi "%OUT%\%~n1.avi"
-if errorlevel 1 (
-  echo 转换失败：%~nx1
-  if exist "%OUT%\%~n1.avi" del "%OUT%\%~n1.avi"
-) else (
-  echo 好了：%OUT%\%~n1.avi
-)
+rem 文件名里有括号或 and 符号时放在 if (...) 块里会出错，所以用跳转，名字也都加引号
+if errorlevel 1 goto failed
+echo 好了："%OUT%\%~n1.avi"
+goto converted
+:failed
+echo 转换失败："%~nx1"
+if exist "%OUT%\%~n1.avi" del "%OUT%\%~n1.avi"
+:converted
 shift
 goto next
 
 :done
 echo.
-echo 全部转完了。把 %OUT% 整个拷到 TF 卡的根目录，插回板子，打开「影片」页就能看到。
+echo 全部转完了。把 "%OUT%" 整个拷到 TF 卡的根目录，插回板子，打开「影片」页就能看到。
 pause

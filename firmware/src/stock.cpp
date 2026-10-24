@@ -1,4 +1,5 @@
 #include "stock.h"
+#include "psram_alloc.h"
 
 #include <HTTPClient.h>
 #include <WiFi.h>
@@ -72,7 +73,7 @@ static StockStatus fetch_eastmoney(const StockCode *codes, int n, StockData &out
     error = status;
     return StockStatus::Error;
   }
-  JsonDocument doc;
+  JsonDocument doc(psram_json());
   DeserializationError err = deserializeJson(doc, body);
   if (err) {
     detail = String("JSON: ") + err.c_str() + ", " + body.length() + " bytes";

@@ -1,4 +1,5 @@
 #include "web_config.h"
+#include "psram_alloc.h"
 
 #include <ArduinoJson.h>
 #include <Preferences.h>
@@ -69,17 +70,28 @@ static void load_tokens() {
 // 浏览器用 Cookie，电脑上的脚本可以用 X-Auth-Token 头
 static bool authed() {
   char token[kWebAuthTokenLen + 1];
-  if (web_auth_cookie(server.header("Cookie").c_str(), kAuthCookie, token, sizeof(token)) &&
-      web_auth_check(auth, token)) {
-    return true;
+  String cookie = server.header("Cookie");
+  // 浏览器里可能留着一个旧的（已失效）令牌排在前面，挨个试
+  for (int i = 0; i < 4; i++) {
+    if (web_auth_cookie(cookie.c_str(), kAuthCookie, token, sizeof(token), i) && web_auth_check(auth, token)) {
+      return true;
+    }
   }
   return web_auth_check(auth, server.header("X-Auth-Token").c_str());
 }
 
 using Handler = std::function<void()>;
 
+// Host 不是局域网地址（DNS 重绑定的恶意网页）：一律拒绝
+static bool bad_host() {
+  if (web_auth_host_ok(server.hostHeader().c_str())) return false;
+  server.send(403, "text/plain", "Forbidden");
+  return true;
+}
+
 static Handler guard(Handler h) {
   return [h] {
+    if (bad_host()) return;
     if (!authed()) {
       server.send(401, "application/json", "{\"ok\":false,\"error\":\"需要配对\"}");
       return;
@@ -91,23 +103,44 @@ static Handler guard(Handler h) {
 // 上传时没配对的请求直接丢掉数据，结束时由 guard 过的完成回调返回 401
 static Handler guard_upload(Handler h) {
   return [h] {
-    if (authed()) h();
+    if (web_auth_host_ok(server.hostHeader().c_str()) && authed()) h();
   };
+}
+
+static void send_locked() {
+  uint32_t wait = web_auth_locked_ms(auth, millis());
+  JsonDocument doc(psram_json());
+  doc["ok"] = false;
+  doc["error"] = String("配对码输错太多次，") + ((wait + 59999) / 60000) + " 分钟后再试";
+  doc["expired"] = true;
+  String out;
+  serializeJson(doc, out);
+  server.send(429, "application/json", out);
 }
 
 // 网页打不开接口时调用：屏幕上显示配对码
 static void handle_pair_start() {
+  if (bad_host()) return;
   const char *code = web_auth_start(auth, millis(), hw_random);
   if (pair_hook) pair_hook(code);
+  if (!code) {
+    send_locked();
+    return;
+  }
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
 static void handle_pair() {
+  if (bad_host()) return;
   char token[kWebAuthTokenLen + 1];
   if (!web_auth_pair(auth, server.arg("code").c_str(), millis(), hw_random, token)) {
     bool active = web_auth_code_active(auth, millis());
     if (!active && pair_hook) pair_hook(nullptr);
-    JsonDocument doc;
+    if (!active && web_auth_locked_ms(auth, millis())) {
+      send_locked();
+      return;
+    }
+    JsonDocument doc(psram_json());
     doc["ok"] = false;
     doc["error"] = active ? "配对码不对，再看一下屏幕" : "配对码已失效，请重新获取";
     doc["expired"] = !active;
@@ -185,7 +218,7 @@ static void send_ok() {
 // 字段名和 /save 提交的名字一致，网页按名字填进表单
 static void handle_api_settings() {
   Settings s = settings_get();
-  JsonDocument doc;
+  JsonDocument doc(psram_json());
   char hhmm[8];
   auto put_time = [&](const char *key, uint16_t minutes) {
     night_format_hhmm(minutes, hhmm, sizeof(hhmm));
@@ -282,7 +315,7 @@ static const char *ota_state_name(OtaState s) {
 }
 
 static void handle_api_status() {
-  JsonDocument doc;
+  JsonDocument doc(psram_json());
   doc["ver"] = ota_current_version();
   doc["uptime"] = millis() / 1000;
   JsonObject wifi = doc["wifi"].to<JsonObject>();
@@ -341,6 +374,12 @@ static void handle_api_status() {
 
 static void handle_save() {
   Settings s = settings_get();
+  // 没勾的复选框浏览器不会提交。只有设置页整张表单（带 full）提交时才把没提交的当成关掉，
+  // 脚本只传几个字段时其他开关保持原样
+  bool full = server.hasArg("full");
+  auto flag = [full](const char *name, bool &field) {
+    if (full || server.hasArg(name)) field = server.hasArg(name);
+  };
   String city = server.arg("city");
   city.trim();
   if (city.length() > 0) s.city = city;
@@ -389,25 +428,29 @@ static void handle_save() {
   } else if (ai_key.length() > 0) {
     s.ai_key = ai_key;
   }
-  String ai_model = server.arg("ai_model");
-  ai_model.trim();
-  s.ai_model = ai_model.length() > 0 ? ai_model : String("qwen3.8-omni-flash-realtime");
-  String ai_voice = server.arg("ai_voice");
-  ai_voice.trim();
-  s.ai_voice = ai_voice == "Cherry" ? String() : ai_voice;  // 留空用模型默认的
+  if (full || server.hasArg("ai_model")) {
+    String ai_model = server.arg("ai_model");
+    ai_model.trim();
+    s.ai_model = ai_model.length() > 0 ? ai_model : String("qwen3.8-omni-flash-realtime");
+  }
+  if (full || server.hasArg("ai_voice")) {
+    String ai_voice = server.arg("ai_voice");
+    ai_voice.trim();
+    s.ai_voice = ai_voice == "Cherry" ? String() : ai_voice;  // 留空用模型默认的
+  }
 
   // 复选框不勾选时浏览器不会提交这个字段
-  s.night_on = server.hasArg("night_on");
-  s.night_sun = server.hasArg("night_sun");
-  s.auto_update = server.hasArg("auto_update");
+  flag("night_on", s.night_on);
+  flag("night_sun", s.night_sun);
+  flag("auto_update", s.auto_update);
   if (server.hasArg("ota_url")) {
     String ota_url = server.arg("ota_url");
     ota_url.trim();
     // 填错了就当没填，照样用 GitHub；网页上会提示格式
     s.ota_url = ota_is_valid_source_url(ota_url.c_str()) ? ota_url : String("");
   }
-  s.sound_on = server.hasArg("sound_on");
-  s.sound_quiet_night = server.hasArg("sound_quiet");
+  flag("sound_on", s.sound_on);
+  flag("sound_quiet", s.sound_quiet_night);
   long vol = server.arg("sound_volume").toInt();
   if (server.hasArg("sound_volume") && vol >= 0 && vol <= 100) s.sound_volume = vol;
   int start = night_parse_hhmm(server.arg("night_start").c_str());
@@ -431,14 +474,14 @@ static void handle_save() {
   minutes_arg("pomo_every", s.pomo_every, 1, 8);
   minutes_arg("sit_min", s.sit_min, 10, 240);
   minutes_arg("water_min", s.water_min, 10, 240);
-  s.sit_on = server.hasArg("sit_on");
-  s.water_on = server.hasArg("water_on");
-  s.rain_on = server.hasArg("rain_on");
-  s.music_on = server.hasArg("music_on");
-  s.wake_on = server.hasArg("wake_on");
-  s.barge_on = server.hasArg("barge_on");
-  s.chime_on = server.hasArg("chime_on");
-  s.alarm_on = server.hasArg("alarm_on");
+  flag("sit_on", s.sit_on);
+  flag("water_on", s.water_on);
+  flag("rain_on", s.rain_on);
+  flag("music_on", s.music_on);
+  flag("wake_on", s.wake_on);
+  flag("barge_on", s.barge_on);
+  flag("chime_on", s.chime_on);
+  flag("alarm_on", s.alarm_on);
   int at = night_parse_hhmm(server.arg("alarm_time").c_str());
   if (at >= 0) s.alarm_time = at;
   if (server.hasArg("alarm_time")) {  // 确认是设置表单提交的，再更新星期
@@ -560,7 +603,7 @@ static void handle_upload_chunk() {
 }
 
 static void handle_upload_done() {
-  JsonDocument doc;
+  JsonDocument doc(psram_json());
   doc["ok"] = upload_ok;
   if (!upload_ok) doc["error"] = String(ota_status().error);
   send_doc(doc);
@@ -576,7 +619,7 @@ static const char *photo_error = "";
 static String photo_name;
 
 static void send_json(bool ok, const char *error) {
-  JsonDocument doc;
+  JsonDocument doc(psram_json());
   doc["ok"] = ok;
   if (!ok) doc["error"] = error;
   if (ok && photo_name.length()) doc["name"] = photo_name;
@@ -646,7 +689,7 @@ static char movie_saved[kMovieNameMax];
 
 static void handle_movie_list() {
   movie_rescan_now();  // 刚用读卡器拷进去的片子也能看到
-  JsonDocument doc;
+  JsonDocument doc(psram_json());
   MovieCard c = movie_card();
   doc["card"] = c == MovieCard::NoSlot ? "noslot" : c == MovieCard::NoCard ? "none" : "ok";
   uint64_t total = 0, used = 0;
@@ -692,7 +735,7 @@ static void handle_movie_chunk() {
 
 static void handle_movie_done() {
   if (movie_hook) movie_hook(0, 0);  // 出错时没走到 END，这里也收起进度画面
-  JsonDocument doc;
+  JsonDocument doc(psram_json());
   doc["ok"] = movie_ok;
   if (movie_ok) doc["name"] = movie_saved;
   else doc["error"] = movie_upload_error();
@@ -729,7 +772,7 @@ static void handle_music_chunk() {
 
 static void handle_music_done() {
   if (music_hook) music_hook(0, 0);  // 收完、出错都收起进度画面
-  JsonDocument doc;
+  JsonDocument doc(psram_json());
   doc["ok"] = music_ok;
   if (music_ok) doc["name"] = music_saved;
   else doc["error"] = player_upload_error();
@@ -786,7 +829,7 @@ void web_config_begin() {
   server.on("/movies/list", HTTP_GET, guard(handle_movie_list));
   server.on("/movies/upload", HTTP_POST, guard(handle_movie_done), guard_upload(handle_movie_chunk));
   server.on("/movies/delete", HTTP_POST, guard([] {
-    JsonDocument doc;
+    JsonDocument doc(psram_json());
     bool ok = movie_delete(server.arg("name").c_str());
     doc["ok"] = ok;
     if (!ok) doc["error"] = "删除失败";
@@ -799,14 +842,14 @@ void web_config_begin() {
   }));
   server.on("/music/upload", HTTP_POST, guard(handle_music_done), guard_upload(handle_music_chunk));
   server.on("/music/delete", HTTP_POST, guard([] {
-    JsonDocument doc;
+    JsonDocument doc(psram_json());
     bool ok = player_delete(server.arg("name").c_str());
     doc["ok"] = ok;
     if (!ok) doc["error"] = "删除失败";
     send_doc(doc);
   }));
   server.on("/music/mkdir", HTTP_POST, guard([] {
-    JsonDocument doc;
+    JsonDocument doc(psram_json());
     bool ok = player_mkdir(server.arg("name").c_str());
     doc["ok"] = ok;
     if (!ok) doc["error"] = "建不了这个歌单，换个名字试试";

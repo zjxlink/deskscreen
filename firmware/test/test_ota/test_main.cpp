@@ -69,11 +69,9 @@ static void test_reject_bad_manifest() {
   // 不是 https
   check_bad_manifest("{\"version\":\"v1.0.0\",\"boards\":{\"box3\":{\"url\":\"http://x/f.bin\","
                      "\"md5\":\"0123456789abcdef0123456789abcdef\",\"size\":1}}}");
-  // MD5 不对（长度、大写、非十六进制）
+  // MD5 不对（长度、非十六进制）
   check_bad_manifest("{\"version\":\"v1.0.0\",\"boards\":{\"box3\":{\"url\":\"https://x/f.bin\","
                      "\"md5\":\"0123\",\"size\":1}}}");
-  check_bad_manifest("{\"version\":\"v1.0.0\",\"boards\":{\"box3\":{\"url\":\"https://x/f.bin\","
-                     "\"md5\":\"0123456789ABCDEF0123456789ABCDEF\",\"size\":1}}}");
   check_bad_manifest("{\"version\":\"v1.0.0\",\"boards\":{\"box3\":{\"url\":\"https://x/f.bin\","
                      "\"md5\":\"0123456789abcdef0123456789abcdeg\",\"size\":1}}}");
   // 大小为 0、版本号不对、缺字段
@@ -83,6 +81,16 @@ static void test_reject_bad_manifest() {
                      "\"md5\":\"0123456789abcdef0123456789abcdef\",\"size\":1}}}");
   check_bad_manifest("{\"version\":\"v1.0.0\"}");
   check_bad_manifest("{}");
+}
+
+static void test_upper_md5() {
+  // 大写的 MD5 也收，存成小写
+  JsonDocument doc;
+  deserializeJson(doc, "{\"version\":\"v1.0.0\",\"boards\":{\"box3\":{\"url\":\"https://x/f.bin\","
+                       "\"md5\":\"0123456789ABCDEF0123456789ABCDEF\",\"size\":1}}}");
+  OtaManifest m{};
+  TEST_ASSERT_TRUE(ota_parse_manifest(doc, "box3", m));
+  TEST_ASSERT_EQUAL_STRING("0123456789abcdef0123456789abcdef", m.md5);
 }
 
 static void check_resolve(const char *base, const char *ref, const char *want) {
@@ -155,12 +163,35 @@ static void test_app_image_check() {
   TEST_ASSERT_FALSE(ota_looks_like_app_image(app, 35));  // 太短
 }
 
+// 上传的固件里找板子标记，标记跨两段收到也要找得到
+static void test_board_tag() {
+  const char img[] = "\xE9junk DSBOARD more DSBOARD:desk_v1\0tail";
+  for (size_t cut = 0; cut < sizeof(img); cut++) {
+    OtaBoardTag t;
+    ota_board_tag_feed(t, (const uint8_t *)img, cut);
+    ota_board_tag_feed(t, (const uint8_t *)img + cut, sizeof(img) - cut);
+    TEST_ASSERT_TRUE(t.found);
+    TEST_ASSERT_EQUAL_STRING("desk_v1", t.name);
+  }
+  OtaBoardTag none;
+  const char old[] = "\xE9 no tag here DSBOARD:\0 DDSBOARD:box3";  // 空名字不算；没有结尾 0 也不算
+  ota_board_tag_feed(none, (const uint8_t *)old, sizeof(old) - 1);
+  TEST_ASSERT_FALSE(none.found);
+  OtaBoardTag dd;
+  const char dbl[] = "DDSBOARD:box3";
+  ota_board_tag_feed(dd, (const uint8_t *)dbl, sizeof(dbl));
+  TEST_ASSERT_TRUE(dd.found);
+  TEST_ASSERT_EQUAL_STRING("box3", dd.name);
+}
+
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(test_board_tag);
   RUN_TEST(test_parse_version);
   RUN_TEST(test_is_newer);
   RUN_TEST(test_parse_manifest);
   RUN_TEST(test_reject_bad_manifest);
+  RUN_TEST(test_upper_md5);
   RUN_TEST(test_resolve_url);
   RUN_TEST(test_source_url);
   RUN_TEST(test_mirror_manifest);

@@ -24,6 +24,8 @@ static constexpr const char *kState = "/music/.state";
 static constexpr const char *kStateTmp = "/music/.state.tmp";
 static constexpr uint32_t kAheadMs = 500;         // 喇叭的缓冲里攒着这么多（暂停时扔掉的也就这么多）
 static constexpr size_t kChunk = 1152;            // 一次解这么多采样
+static constexpr uint32_t kMinRate = 4000;        // 低于它要重复 5 次以上，pcm 缓冲（kChunk * 4）放不下
+static constexpr uint32_t kMaxRate = 192000;
 static constexpr uint32_t kSaveEveryMs = 30000;   // 放的时候每 30 秒记一次放到哪里
 static constexpr uint32_t kRestartPrevMs = 3000;  // 放了 3 秒以上点「上一首」是从头放这首
 static constexpr uint32_t kFadeMs = 10000;        // 睡眠定时到点前 10 秒慢慢变小
@@ -69,7 +71,8 @@ static int view_n = 0;
 
 // ---- 播放（播放任务写，主循环读） ----
 
-static TaskHandle_t task;     // 播放任务，第一次要放歌时才建（省下 10KB 内部内存，开机时 WiFi 和 TLS 要用）
+static TaskHandle_t task;     // 播放任务，第一次要放歌时才建，停了 10 分钟自己退出（省下 10KB 内部内存，WiFi 和 TLS 要用）
+static constexpr uint32_t kTaskIdleExitMs = 10 * 60 * 1000;
 static bool ready = false;    // player_begin 成功了
 static void start_player_task();
 static portMUX_TYPE cmd_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -98,12 +101,15 @@ static SongDecoder dec;
 static uint32_t song_rate = 0;   // 歌的采样率
 static uint32_t io_rate = 0;     // 喇叭的采样率
 static int up = 1;               // 采样率低于 16kHz 的歌每个采样重复几次
-static bool down = false;        // 高于 48kHz 的歌两个采样取一个
+static int down = 1;             // 高于 48kHz 的歌几个采样并成一个（1、2 或 4）
 static bool music_on = false;    // 拿着喇叭
 static uint32_t music_rate = 0;
 static bool at_end = false;
 static uint32_t last_save = 0;
 static int bad_in_row = 0;       // 连着几首打不开
+static bool song_silent = true;  // 这首打开后还一个采样都没解出来
+static int silent_in_row = 0;    // 连着几首打开了却解不出声音（只有文件头的空文件等）
+static int read_retries = 0;     // 歌没放到头就读不出来了（读卡出错）：已经从断点重开了几次
 
 // 放的时候播放任务和扫描任务都要读卡：每次读之前拿锁
 static size_t file_read(void *ctx, uint32_t off, uint8_t *buf, size_t len) {
@@ -126,17 +132,26 @@ static uint32_t take_cmds() {
   return c;
 }
 
+// 播放任务会自己退出，task 要在 cmd_mux 里读写
+static void notify_task() {
+  portENTER_CRITICAL(&cmd_mux);
+  TaskHandle_t t = task;
+  portEXIT_CRITICAL(&cmd_mux);
+  if (t) xTaskNotifyGive(t);
+}
+
 static void send(uint32_t cmd) {
   portENTER_CRITICAL(&cmd_mux);
   cmds |= cmd;
   portEXIT_CRITICAL(&cmd_mux);
-  if (task) xTaskNotifyGive(task);
+  notify_task();
 }
 
-// 主循环和网页发来的命令：播放任务还没建时先建好（列表变了这种不用放歌的命令不建，等它建好后一起处理）
+// 主循环和网页发来的命令：播放任务还没建时建好（列表变了这种不用放歌的命令不建，等它建好后一起处理）。
+// 先记下命令再建：任务正好在退出时，看到有命令就不退了
 static void send_play(uint32_t cmd) {
-  start_player_task();
   send(cmd);
+  start_player_task();
 }
 
 static void *psram_calloc(size_t n, size_t size) {
@@ -541,13 +556,22 @@ static bool open_song(int id, uint32_t start_ms) {
     return false;
   }
   song_rate = dec.rate();
-  down = song_rate > 48000;
-  uint32_t r = down ? song_rate / 2 : song_rate;
+  // 4kHz 以下重复采样会超出 pcm 缓冲（最多放大 4 倍），192kHz 以上也不支持
+  if (song_rate < kMinRate || song_rate > kMaxRate) {
+    close_song();
+    st.error = "这首歌的采样率不支持（要在 4kHz 到 192kHz 之间）";
+    st.loading = false;
+    return false;
+  }
+  down = 1;
+  while (song_rate / down > 48000) down *= 2;
+  uint32_t r = song_rate / down;
   up = 1;
   while (r * up < 16000) up++;
   io_rate = r * up;
   if (p.dur_ms) st.dur_ms = p.dur_ms;
   at_end = false;
+  song_silent = true;
   if (lrc) {
     xSemaphoreTake(meta_lock, portMAX_DELAY);
     lrc_parse(lrc, lrc_len, lyrics);
@@ -752,6 +776,7 @@ static int sleep_gain() {
 static int16_t *pcm;  // 解出来的声音（kChunk * 4 个采样，放在 PSRAM）
 
 static void player_task(void *) {
+  uint32_t idle_since = 0;
   for (;;) {
     // 睡眠定时到了：暂停（暂停着也照样倒计时）
     uint32_t until = sleep_until;
@@ -769,10 +794,23 @@ static void player_task(void *) {
     if (!playing) {
       stop_music();
       st.playing = false;
+      if (!idle_since) idle_since = millis();
       ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
       handle_cmds(take_cmds());
+      // 停了很久又没开睡眠定时：退出，把栈还给内部 RAM。歌、进度这些都在全局变量里，下次建好接着用
+      if (millis() - idle_since >= kTaskIdleExitMs) {
+        portENTER_CRITICAL(&cmd_mux);
+        bool quit = cmds == 0 && !sleep_until;
+        if (quit) task = nullptr;
+        portEXIT_CRITICAL(&cmd_mux);
+        if (quit) {
+          log_i("player: idle, task exits");
+          vTaskDelete(nullptr);
+        }
+      }
       continue;
     }
+    idle_since = 0;
     uint32_t c = take_cmds();
     if (c) {
       handle_cmds(c);
@@ -809,16 +847,48 @@ static void player_task(void *) {
     size_t n = dec.read(pcm, kChunk);
     photos_card_unlock();
     if (n == 0) {
+      if (song_silent) {
+        // 一个声音都解不出来：当成坏文件跳过，不然单曲循环或只有一首时会不停重开它
+        if (++silent_in_row >= queue_n || silent_in_row >= 20) {
+          silent_in_row = 0;
+          want_play = false;
+          close_song();
+          st.error = "这首歌没有声音，可能文件坏了";
+          st.loading = false;
+          continue;
+        }
+        vTaskDelay(pdMS_TO_TICKS(300));
+        play_order(order->next(true), true);
+        continue;
+      }
+      // 离结尾还远就读不出来了：多半是读卡出错，等一下从断点重开，别当成放完跳到下一首
+      uint32_t at = dec.pos_ms();
+      if (st.dur_ms > 5000 && at + 3000 < st.dur_ms && read_retries < 3 && order->current() >= 0) {
+        read_retries++;
+        vTaskDelay(pdMS_TO_TICKS(500));
+        if (open_song(queue_ids[order->current()], at)) {
+          song_silent = false;  // 前面放出过声音，不是空文件
+          continue;
+        }
+      }
+      read_retries = 0;
       // 这首放完了：单曲循环再放一遍，否则下一首（缓冲里剩的声音照常放完，几乎没有空隙）
       st.pos_ms = st.dur_ms;
       int next = order->next(false);
       play_order(next, true);
       continue;
     }
+    song_silent = false;
+    silent_in_row = 0;
+    read_retries = 0;
     st.loading = false;
-    if (down) {
-      for (size_t i = 0; i < n / 2; i++) pcm[i] = (int16_t)(((int32_t)pcm[2 * i] + pcm[2 * i + 1]) >> 1);
-      n /= 2;
+    if (down > 1) {
+      for (size_t i = 0; i < n / down; i++) {
+        int32_t sum = 0;
+        for (int k = 0; k < down; k++) sum += pcm[i * down + k];
+        pcm[i] = (int16_t)(sum / down);
+      }
+      n /= down;
     }
     if (up > 1) {
       for (size_t i = n; i-- > 0;) {
@@ -867,17 +937,26 @@ void player_begin() {
 }
 
 static void start_player_task() {
-  if (!ready || task) return;  // 只在主循环里调用（按钮、网页），不会同时建两个
-  // 刚建好的任务先看一遍列表（还没建时扫完的那几次没发给它），再处理命令
+  if (!ready) return;  // 只在主循环里调用（按钮、网页），不会同时建两个
+  static bool first = true;
   portENTER_CRITICAL(&cmd_mux);
-  cmds |= kCmdListChanged;
+  bool have = task != nullptr;
+  // 第一次建好的任务先看一遍列表（恢复上次放到哪），再处理命令。之后再建的不用：
+  // 列表变了的命令没有任务时也记着，重看一遍会把随机顺序打乱
+  if (!have && first) cmds |= kCmdListChanged;
   portEXIT_CRITICAL(&cmd_mux);
+  if (have) return;
+  first = false;
   // 解码在 1 号核（界面那个核，0 号核上有 WiFi 和唤醒词），比界面优先级高一点，放歌不卡；
   // 栈要装下 dr_flac 打开文件时的 5KB 左右
-  if (xTaskCreatePinnedToCore(player_task, "player", 10240, nullptr, 3, &task, 1) != pdPASS) {
-    task = nullptr;
+  TaskHandle_t t = nullptr;
+  if (xTaskCreatePinnedToCore(player_task, "player", 10240, nullptr, 3, &t, 1) != pdPASS) {
     log_e("player: no memory for task");
+    return;
   }
+  portENTER_CRITICAL(&cmd_mux);
+  task = t;
+  portEXIT_CRITICAL(&cmd_mux);
 }
 
 bool player_supported() { return ready; }
@@ -1003,13 +1082,16 @@ void player_seek_to(uint32_t ms) {
 void player_cycle_mode() { send_play(kCmdMode); }
 
 void player_cycle_sleep() {
-  start_player_task();  // 倒计时在播放任务里走
+  // 倒计时在播放任务里走
   int m = sleep_next_choice(sleep_minutes);
   sleep_minutes = m;
   uint32_t until = m ? millis() + (uint32_t)m * 60000 : 0;
+  portENTER_CRITICAL(&cmd_mux);
   sleep_until = until == 0 && m ? 1 : until;
+  portEXIT_CRITICAL(&cmd_mux);
   st.sleep_left_s = m * 60;
-  if (task) xTaskNotifyGive(task);
+  start_player_task();  // 放在设好之后：任务正要退出时看到有定时就不退了
+  notify_task();
 }
 
 PlayerStatus player_status() {

@@ -348,6 +348,22 @@ static void test_avi_read_error() {
   TEST_ASSERT_EQUAL_STRING("F1", frame_at(off, len).c_str());
 }
 
+// 跳转时读卡出错：放弃这次跳转（返回 false、位置不变），不能原地打转
+static void test_avi_seek_read_error() {
+  file = av_file(1, true, 5);
+  AviReader avi;
+  card_broken = false;
+  TEST_ASSERT_TRUE(avi.open(read_flaky, nullptr, file.size()));
+  uint32_t off, len;
+  TEST_ASSERT_TRUE(avi.next_chunk(off, len) == AviChunk::Video);
+  card_broken = true;
+  TEST_ASSERT_FALSE(avi.seek_frame(3));
+  card_broken = false;
+  TEST_ASSERT_EQUAL(1, avi.frame_pos());
+  TEST_ASSERT_TRUE(avi.seek_frame(3));
+  TEST_ASSERT_EQUAL(3, avi.frame_pos());
+}
+
 // 段比文件长（没写完的文件）：读到文件末尾算放完了，不算读卡出错
 static void test_avi_truncated_end() {
   file = av_file(1, false, 4);
@@ -514,6 +530,7 @@ int main() {
   RUN_TEST(test_avi_unsupported_audio);
   RUN_TEST(test_avi_opendml);
   RUN_TEST(test_avi_read_error);
+  RUN_TEST(test_avi_seek_read_error);
   RUN_TEST(test_avi_truncated_end);
   RUN_TEST(test_pcm_16k);
   return UNITY_END();

@@ -95,10 +95,61 @@ static void test_cookie() {
   TEST_ASSERT_FALSE(web_auth_cookie("", "ds_auth", v, sizeof(v)));
   TEST_ASSERT_FALSE(web_auth_cookie(nullptr, "ds_auth", v, sizeof(v)));
   TEST_ASSERT_FALSE(web_auth_cookie("ds_auth=0123456789", "ds_auth", v, 5));  // 放不下
+  // 同名的有两个：skip 取后面那个
+  TEST_ASSERT_TRUE(web_auth_cookie("ds_auth=old; x=1; ds_auth=new", "ds_auth", v, sizeof(v), 1));
+  TEST_ASSERT_EQUAL_STRING("new", v);
+  TEST_ASSERT_FALSE(web_auth_cookie("ds_auth=old; x=1; ds_auth=new", "ds_auth", v, sizeof(v), 2));
+}
+
+// 输错作废一个码后要等，越错等得越久，配对成功后清零
+static void test_lockout_after_burned_codes() {
+  WebAuth a;
+  char token[kWebAuthTokenLen + 1];
+  uint32_t now = 0;
+  auto burn = [&]() {
+    char code[7], wrong[7];
+    strcpy(code, web_auth_start(a, now, fake_rand));
+    strcpy(wrong, code);
+    wrong[0] = wrong[0] == '9' ? '0' : wrong[0] + 1;
+    for (int i = 0; i < kWebAuthMaxTries; i++) web_auth_pair(a, wrong, now, fake_rand, token);
+  };
+  burn();
+  TEST_ASSERT_NULL(web_auth_start(a, now + 1, fake_rand));
+  TEST_ASSERT_EQUAL(kWebAuthLockMs - 1, web_auth_locked_ms(a, now + 1));
+  now += kWebAuthLockMs;
+  TEST_ASSERT_NOT_NULL(web_auth_start(a, now, fake_rand));
+  burn();
+  TEST_ASSERT_NULL(web_auth_start(a, now + kWebAuthLockMs, fake_rand));  // 第二次要等 60 秒
+  now += 2 * kWebAuthLockMs;
+  for (int i = 0; i < 20; i++) {  // 一直错下去最多等 1 小时
+    burn();
+    now += kWebAuthLockMaxMs;
+  }
+  char code[7];
+  strcpy(code, web_auth_start(a, now, fake_rand));
+  TEST_ASSERT_TRUE(web_auth_pair(a, code, now, fake_rand, token));
+  TEST_ASSERT_EQUAL(0, web_auth_locked_ms(a, now));
+  // 平均要猜 50 万次：每小时最多 5 次时远远猜不完
+}
+
+static void test_host_ok() {
+  TEST_ASSERT_TRUE(web_auth_host_ok("192.168.0.81"));
+  TEST_ASSERT_TRUE(web_auth_host_ok("192.168.0.81:80"));
+  TEST_ASSERT_TRUE(web_auth_host_ok("deskscreen.local"));
+  TEST_ASSERT_TRUE(web_auth_host_ok("DeskScreen.Local"));
+  TEST_ASSERT_TRUE(web_auth_host_ok("deskscreen"));
+  TEST_ASSERT_TRUE(web_auth_host_ok("deskscreen.lan"));
+  TEST_ASSERT_TRUE(web_auth_host_ok("[fe80::1]"));
+  TEST_ASSERT_TRUE(web_auth_host_ok(""));
+  TEST_ASSERT_FALSE(web_auth_host_ok("evil.example.com"));
+  TEST_ASSERT_FALSE(web_auth_host_ok("192.168.0.81.evil.com"));
+  TEST_ASSERT_FALSE(web_auth_host_ok("local.evil.com"));
 }
 
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(test_host_ok);
+  RUN_TEST(test_lockout_after_burned_codes);
   RUN_TEST(test_code_reused_until_expired);
   RUN_TEST(test_pair_and_check);
   RUN_TEST(test_wrong_code_limit);

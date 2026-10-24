@@ -367,11 +367,11 @@ bool probe_flac(const Src &src, TrackProbe &out) {
       size_t n = len < sizeof(b) ? len : sizeof(b);
       if (src.get(body, b, n)) {
         uint32_t mlen = be32(b + 4);
-        if (8 + mlen + 4 <= n) {
+        if (mlen <= n && 8 + mlen + 4 <= n) {
           char mime[32] = {};
           memcpy(mime, b + 8, mlen < sizeof(mime) - 1 ? mlen : sizeof(mime) - 1);
           uint32_t dlen = be32(b + 8 + mlen);
-          uint32_t p = 8 + mlen + 4 + dlen + 16;
+          uint64_t p = 8ull + mlen + 4 + dlen + 16;
           if (p + 4 <= n && is_jpeg_mime(mime)) {
             uint32_t size = be32(b + p);
             if (size <= len - p - 4) {
@@ -423,6 +423,7 @@ bool probe_wav(const Src &src, TrackProbe &out) {
       out.dur_ms = (uint32_t)((uint64_t)(out.data_len / align) * 1000 / out.rate);
       return true;
     }
+    if (len > src.size - at - 8) break;  // 块长度超出文件：坏文件，别让 at 绕回去原地打转
     at += 8 + len + (len & 1);
   }
   return false;

@@ -107,8 +107,39 @@ static void test_utf8_helpers() {
   TEST_ASSERT_EQUAL(0, utf8_prefix("你好", 0));
 }
 
+// 记录满了以后，很长的英文回答被打断：截断后接「……」不能写出这一句（以前会改坏 count）
+static void test_cut_long_ascii_reply() {
+  ChatLog log;
+  for (int i = 0; i < 3; i++) {
+    log.user_heard("hi");
+    log.reply_started();
+    log.reply_text("hello");
+  }
+  TEST_ASSERT_EQUAL(kChatLines, log.count());
+  std::string longer(kChatLineLen - 1, 'a');
+  log.reply_started();
+  log.reply_text(longer);
+  int n = log.count();
+  log.cut_reply(kChatLineLen - 3);
+  TEST_ASSERT_EQUAL(n, log.count());
+  const char *t = log.line(n - 1).text;
+  size_t len = strlen(t);
+  TEST_ASSERT_TRUE(len < kChatLineLen);
+  TEST_ASSERT_EQUAL_STRING("……", t + len - strlen("……"));
+  // 中文也一样，不能切出半个字
+  std::string cn;
+  while (cn.size() + 3 < kChatLineLen) cn += "好";
+  log.reply_started();
+  log.reply_text(cn);
+  log.cut_reply(utf8_chars(cn.c_str()) - 1);
+  t = log.line(log.count() - 1).text;
+  TEST_ASSERT_TRUE(strlen(t) < kChatLineLen);
+  TEST_ASSERT_EQUAL(0, (strlen(t) - strlen("……")) % 3);
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
+  RUN_TEST(test_cut_long_ascii_reply);
   RUN_TEST(test_order_with_late_transcript);
   RUN_TEST(test_barge_in_keeps_reply_line);
   RUN_TEST(test_cut_before_speaking_removes_line);

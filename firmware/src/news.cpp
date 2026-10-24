@@ -39,19 +39,21 @@ static PsramAllocator psram_alloc;
 // 按设置重新排频道：内置来源按 kNewsSources 的顺序，然后是自定义 RSS。地址没变的频道保留已经拉到的新闻
 static void rebuild(NewsData &d) {
   Settings s = settings_get();
-  static NewsData *old = (NewsData *)heap_caps_malloc(sizeof(NewsData), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  static NewsData *old = nullptr;
   static String old_urls[kNewsMaxChannels];
-  memcpy(old, &d, sizeof(NewsData));
+  if (!old) old = (NewsData *)heap_caps_malloc(sizeof(NewsData), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  // 分不到内存就不保留旧新闻，各频道重新拉
+  if (old) memcpy(old, &d, sizeof(NewsData));
   for (int i = 0; i < kNewsMaxChannels; i++) old_urls[i] = urls[i];
 
   memset(&d, 0, sizeof(NewsData));
-  d.updated = old->updated;
+  d.updated = old ? old->updated : 0;
   auto add = [&](const char *name, NewsKind kind, const String &url) {
     if (d.nch >= kNewsMaxChannels) return;
     int i = d.nch++;
     urls[i] = url;
     kinds[i] = kind;
-    for (int j = 0; j < old->nch; j++) {
+    for (int j = 0; old && j < old->nch; j++) {
       if (old_urls[j] == url) {
         d.ch[i] = old->ch[j];
         break;

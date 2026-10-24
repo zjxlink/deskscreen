@@ -32,7 +32,7 @@ static const Palette kLight = {
     0xF3F1EC, 0xFAFAF7, 0x1F2328, 0x6E7781, 0x0969DA, 0x2DA44E, 0xE5534B, 0xD8DCE1, 0xE4E2DC, 0x1E88D6, 0xA9CBE6,
     {0xE6E8EB, 0x9BE9A8, 0x40C463, 0x30A14E, 0x216E39},
     0xE0B33A, 0xD3D7DD,
-    0x6E7781,
+    0x424A53,  // 浅灰底上用深一点的灰，看得清
 };
 static const Palette *pal = &kDark;
 
@@ -780,6 +780,8 @@ static void build_github() {
 
   lbl_gh_login = make_label(scr, &font_cn_16, COLOR_SUBTLE);
   lv_label_set_text(lbl_gh_login, "GitHub");
+  lv_obj_set_width(lbl_gh_login, SCREEN_W - 12 - 32);  // 用户名最长 39 个字符，别压到右上角的 WiFi 点
+  lv_label_set_long_mode(lbl_gh_login, LV_LABEL_LONG_DOT);
   lv_obj_align(lbl_gh_login, LV_ALIGN_TOP_LEFT, 12, 10);
   dot_wifi[PAGE_GITHUB] = make_wifi_dot(scr);
 
@@ -1016,6 +1018,7 @@ static constexpr int kMovieRowH = 42;
 static constexpr int kMovieRowTop = 46;
 static constexpr int kMovieRowGap = 4;
 static constexpr uint32_t kMovieOrange = 0xF2A65A;  // 和网页设置一样的橙色，不跟主题变
+static constexpr uint32_t kLyricLight = 0xA65413;   // 浅色主题下的当前歌词：橙色加深，浅底上才看得清
 static constexpr int kMovieBarX = 14, kMovieBarY = 204, kMovieBarW = SCREEN_W - 28;
 static constexpr int kMovieBtnY = 120;               // 中间三个按钮的中心
 static constexpr int kMovieBtnDx = 84;               // 快退、快进离中间多远
@@ -1158,9 +1161,28 @@ static void set_hidden(lv_obj_t *o, bool hidden) {
   else lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
 }
 
+// 提示文字里标题用 #E6EDF3 ...# 着色（深色主题的字色），浅色主题时换成浅色主题的字色，不然白字白底看不见
+static const char *movie_msg = nullptr;
+
+static void show_movie_msg() {
+  if (!lbl_movie_msg) return;
+  set_hidden(lbl_movie_msg, !movie_msg);
+  if (!movie_msg) return;
+  static const char kDarkText[] = "#E6EDF3 ";
+  const char *at = strstr(movie_msg, kDarkText);
+  if (!at || pal == &kDark) {
+    lv_label_set_text(lbl_movie_msg, movie_msg);
+    return;
+  }
+  char buf[320];
+  snprintf(buf, sizeof(buf), "%.*s#%06X %s", (int)(at - movie_msg), movie_msg, (unsigned)pal->text,
+           at + sizeof(kDarkText) - 1);
+  lv_label_set_text(lbl_movie_msg, buf);
+}
+
 void ui_set_movie_list(const char *msg, const MovieRow *rows, int n, int page, int pages) {
-  set_hidden(lbl_movie_msg, !msg);
-  if (msg) lv_label_set_text(lbl_movie_msg, msg);
+  movie_msg = msg;
+  show_movie_msg();
   for (int i = 0; i < kMovieRows; i++) {
     MovieRowUi &r = movie_rows[i];
     set_hidden(r.row, msg || i >= n);
@@ -1545,7 +1567,7 @@ void ui_set_music(const MusicPageView &v) {
       break;
     case PlayerCard::Empty:
       head = "还没有歌";
-      msg = "把 MP3、FLAC、WAV 放进 TF 卡的 music 文件夹，或者在网页设置的「音乐管理」里上传";
+      msg = "把 MP3、FLAC、WAV 放进 TF 卡的 music 文件夹，或者在网页设置的「显示 › 音乐」里上传";
       break;
     case PlayerCard::Ok: break;
   }
@@ -1854,9 +1876,10 @@ static void build_alert() {
 
   alert_body = make_label(scr_alert, &font_cn_16, COLOR_TEXT);
   lv_obj_set_width(alert_body, SCREEN_W - 40);
-  lv_label_set_long_mode(alert_body, LV_LABEL_LONG_WRAP);
+  lv_label_set_long_mode(alert_body, LV_LABEL_LONG_DOT);  // 超过 4 行（留言里换行多时）末尾显示省略号，不盖住下面的提示
   lv_obj_set_style_text_align(alert_body, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_line_space(alert_body, 4, 0);
+  lv_obj_set_height(alert_body, 4 * lv_font_get_line_height(&font_cn_16) + 3 * 4);
   lv_obj_align(alert_body, LV_ALIGN_TOP_MID, 0, 120);  // 最多 4 行，留言限 60 个字
 
   alert_foot = make_label(scr_alert, &font_cn_16, COLOR_SUBTLE);
@@ -2945,7 +2968,9 @@ void ui_set_stocks(const StockData &s) {
       lv_obj_set_style_bg_color(r.pill, COLOR_FLAT, 0);
       continue;
     }
-    snprintf(buf, sizeof(buf), q.price < 10 ? "%.3f" : "%.2f", q.price);
+    // 价格栏只有 96 像素宽，五六位数的价格少显示几位小数，免得折行
+    snprintf(buf, sizeof(buf), q.price < 10 ? "%.3f" : q.price < 10000 ? "%.2f" : q.price < 100000 ? "%.1f" : "%.0f",
+             q.price);
     lv_label_set_text(r.price, buf);
     snprintf(buf, sizeof(buf), "%+.2f%%", q.change_pct);
     lv_label_set_text(r.pct, buf);
@@ -3133,6 +3158,8 @@ void ui_set_theme(bool light) {
   if (have_github) ui_set_github(last_github);
   if (have_stocks) ui_set_stocks(last_stocks);
   if (news) render_news();
+  show_movie_msg();
+  if (lbl_music_lyric) lv_obj_set_style_text_color(lbl_music_lyric, lv_color_hex(light ? kLyricLight : kMovieOrange), 0);
   lv_obj_invalidate(lv_scr_act());
 }
 
