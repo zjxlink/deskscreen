@@ -123,7 +123,11 @@ std::string omni_error_message(int status, const std::string &body) {
     const char *m = doc["error"]["message"] | doc["message"] | (const char *)nullptr;
     if (m) server = m;
   }
-  if (server.size() > 120) server = server.substr(0, 120) + "…";
+  if (server.size() > 120) {
+    size_t n = 120;
+    while (n > 0 && ((uint8_t)server[n] & 0xC0) == 0x80) n--;  // 别切出半个汉字
+    server = server.substr(0, n) + "…";
+  }
   const char *hint = nullptr;
   switch (status) {
     case 401: hint = "API Key 不对或已失效"; break;

@@ -406,12 +406,18 @@ static void stop_playing(Session &s) {
 
 // 不要当前这次回答了：喇叭里没放的扔掉，告诉服务器停下（回答已经收完时服务器那边没什么可停的，不发，免得它报错）
 static void cut_answer(Session &s) {
-  if (!s.current_id.empty()) s.drop_id = s.current_id;
-  // 气泡里只留下已经念出来的
-  uint16_t said = get_state() == VoiceState::Speaking ? spoken_chars(s) : 0;
-  edit_log([&](ChatLog &log) { log.cut_reply(said); });
+  bool speaking = get_state() == VoiceState::Speaking;
+  // 气泡里只留下已经念出来的。还在想、这次回答还没开始时，最后一个气泡是上一次已经说完的回答，不动它
+  if (speaking || !s.current_id.empty()) {
+    uint16_t said = speaking ? spoken_chars(s) : 0;
+    edit_log([&](ChatLog &log) { log.cut_reply(said); });
+  }
   set_spoken(kSpokenAll);
-  if (!s.current_id.empty() || get_state() != VoiceState::Speaking) ws_send_text(s.client, rt_event("response.cancel"));
+  // 只有正在收的回答才取消：没有回答时发 cancel 服务器会报错
+  if (!s.current_id.empty()) {
+    s.drop_id = s.current_id;
+    ws_send_text(s.client, rt_event("response.cancel"));
+  }
   if (s.playing) audio_stream_flush();
   stop_playing(s);
 }
@@ -483,6 +489,7 @@ static void on_event(Session &s, RtEvent ev) {
         s.drop_next = false;
         s.drop_id = s.parser.response_id();
       } else {
+        s.drop_id.clear();  // 新回答开始了：之后的错误照常显示
         s.current_id = s.parser.response_id();
         s.audio_in = 0;
         s.mark_count = 0;
@@ -537,7 +544,11 @@ static void on_message(uint8_t opcode, std::string &payload, void *ctx) {
   } else if (opcode == kWsClose) {
     s.closed = true;
     if (payload.size() >= 2) s.close_code = (uint8_t)payload[0] << 8 | (uint8_t)payload[1];
-    if (payload.size() > 2) s.close_reason.assign(payload, 2, 120);
+    if (payload.size() > 2) {
+      size_t n = payload.size() - 2 > 120 ? 120 : payload.size() - 2;
+      while (n > 0 && payload.size() > 2 + n && ((uint8_t)payload[2 + n] & 0xC0) == 0x80) n--;  // 别切出半个汉字
+      s.close_reason.assign(payload, 2, n);
+    }
     log_w("voice: server closed %d: %s", s.close_code, s.close_reason.c_str());
   } else if (opcode == kWsText) {
     // 除了语音和逐字的文字，服务器发来的事件都记到日志里，出问题时好查
