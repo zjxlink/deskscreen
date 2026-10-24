@@ -108,6 +108,7 @@ static uint32_t last_save = 0;
 static int bad_in_row = 0;       // 连着几首打不开
 static bool song_silent = true;  // 这首打开后还一个采样都没解出来
 static int silent_in_row = 0;    // 连着几首打开了却解不出声音（只有文件头的空文件等）
+static int read_retries = 0;     // 歌没放到头就读不出来了（读卡出错）：已经从断点重开了几次
 
 // 放的时候播放任务和扫描任务都要读卡：每次读之前拿锁
 static size_t file_read(void *ctx, uint32_t off, uint8_t *buf, size_t len) {
@@ -836,6 +837,17 @@ static void player_task(void *) {
         play_order(order->next(true), true);
         continue;
       }
+      // 离结尾还远就读不出来了：多半是读卡出错，等一下从断点重开，别当成放完跳到下一首
+      uint32_t at = dec.pos_ms();
+      if (st.dur_ms > 5000 && at + 3000 < st.dur_ms && read_retries < 3 && order->current() >= 0) {
+        read_retries++;
+        vTaskDelay(pdMS_TO_TICKS(500));
+        if (open_song(queue_ids[order->current()], at)) {
+          song_silent = false;  // 前面放出过声音，不是空文件
+          continue;
+        }
+      }
+      read_retries = 0;
       // 这首放完了：单曲循环再放一遍，否则下一首（缓冲里剩的声音照常放完，几乎没有空隙）
       st.pos_ms = st.dur_ms;
       int next = order->next(false);
@@ -844,6 +856,7 @@ static void player_task(void *) {
     }
     song_silent = false;
     silent_in_row = 0;
+    read_retries = 0;
     st.loading = false;
     if (down > 1) {
       for (size_t i = 0; i < n / down; i++) {
