@@ -466,7 +466,7 @@ let pairing=false;
 async function showPair(){
  if(pairing)return;
  pairing=true;$('pair').hidden=false;$('pairCode').focus();
- try{await fetch('/pair/start',{method:'POST'});}catch(e){$('pairErr').textContent='连不上设备';}
+ try{const r=await rawFetch('/pair/start',{method:'POST'});if(r.status===429)$('pairErr').textContent=(await r.json()).error;}catch(e){$('pairErr').textContent='连不上设备';}
 }
 const rawFetch=window.fetch.bind(window);
 window.fetch=async(url,opt)=>{
@@ -492,7 +492,7 @@ $('pairForm').onsubmit=async e=>{
 };
 $('pairAgain').onclick=async()=>{
  $('pairErr').textContent='';$('pairCode').value='';
- try{await rawFetch('/pair/start',{method:'POST'});toast('屏幕上重新显示了配对码');}catch(e){$('pairErr').textContent='连不上设备';}
+ try{const r=await rawFetch('/pair/start',{method:'POST'});if(r.status===429){$('pairErr').textContent=(await r.json()).error;return;}toast('屏幕上重新显示了配对码');}catch(e){$('pairErr').textContent='连不上设备';}
 };
 async function post(url,body){
  const r=await fetch('/'+url,{method:'POST',body:body||new URLSearchParams()});

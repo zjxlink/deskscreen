@@ -155,8 +155,30 @@ static void test_app_image_check() {
   TEST_ASSERT_FALSE(ota_looks_like_app_image(app, 35));  // 太短
 }
 
+// 上传的固件里找板子标记，标记跨两段收到也要找得到
+static void test_board_tag() {
+  const char img[] = "\xE9junk DSBOARD more DSBOARD:desk_v1\0tail";
+  for (size_t cut = 0; cut < sizeof(img); cut++) {
+    OtaBoardTag t;
+    ota_board_tag_feed(t, (const uint8_t *)img, cut);
+    ota_board_tag_feed(t, (const uint8_t *)img + cut, sizeof(img) - cut);
+    TEST_ASSERT_TRUE(t.found);
+    TEST_ASSERT_EQUAL_STRING("desk_v1", t.name);
+  }
+  OtaBoardTag none;
+  const char old[] = "\xE9 no tag here DSBOARD:\0 DDSBOARD:box3";  // 空名字不算；没有结尾 0 也不算
+  ota_board_tag_feed(none, (const uint8_t *)old, sizeof(old) - 1);
+  TEST_ASSERT_FALSE(none.found);
+  OtaBoardTag dd;
+  const char dbl[] = "DDSBOARD:box3";
+  ota_board_tag_feed(dd, (const uint8_t *)dbl, sizeof(dbl));
+  TEST_ASSERT_TRUE(dd.found);
+  TEST_ASSERT_EQUAL_STRING("box3", dd.name);
+}
+
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(test_board_tag);
   RUN_TEST(test_parse_version);
   RUN_TEST(test_is_newer);
   RUN_TEST(test_parse_manifest);

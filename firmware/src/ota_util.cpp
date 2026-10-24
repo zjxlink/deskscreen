@@ -130,3 +130,31 @@ bool ota_looks_like_app_image(const uint8_t *data, size_t len) {
   // 镜像头 24 字节 + 第一个段头 8 字节之后，是应用描述信息 esp_app_desc_t，以 0xABCD5432 开头（小端）
   return data[32] == 0x32 && data[33] == 0x54 && data[34] == 0xCD && data[35] == 0xAB;
 }
+
+void ota_board_tag_feed(OtaBoardTag &t, const uint8_t *data, size_t len) {
+  static const char kNeedle[] = {'D', 'S', 'B', 'O', 'A', 'R', 'D', ':'};  // 不写成字符串，免得这里也成了一个空名字的标记
+  for (size_t i = 0; i < len && !t.found; i++) {
+    char c = (char)data[i];
+    if (t.got >= 0) {
+      if (c == 0 && t.got > 0) {
+        t.name[t.got] = 0;
+        t.found = true;
+      } else if (c > ' ' && c < 0x7F && t.got < (int)sizeof(t.name) - 1) {
+        t.name[t.got++] = c;
+        continue;
+      } else {
+        t.got = -1;  // 不是标记（名字太长或有怪字符）
+      }
+      t.match = 0;
+      if (t.found) break;
+    }
+    if (c == kNeedle[t.match]) {
+      if (++t.match == (int)sizeof(kNeedle)) {
+        t.got = 0;
+        t.match = 0;
+      }
+    } else {
+      t.match = c == kNeedle[0] ? 1 : 0;
+    }
+  }
+}

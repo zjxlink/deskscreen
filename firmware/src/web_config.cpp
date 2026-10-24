@@ -79,8 +79,16 @@ static bool authed() {
 
 using Handler = std::function<void()>;
 
+// Host 不是局域网地址（DNS 重绑定的恶意网页）：一律拒绝
+static bool bad_host() {
+  if (web_auth_host_ok(server.hostHeader().c_str())) return false;
+  server.send(403, "text/plain", "Forbidden");
+  return true;
+}
+
 static Handler guard(Handler h) {
   return [h] {
+    if (bad_host()) return;
     if (!authed()) {
       server.send(401, "application/json", "{\"ok\":false,\"error\":\"需要配对\"}");
       return;
@@ -92,22 +100,43 @@ static Handler guard(Handler h) {
 // 上传时没配对的请求直接丢掉数据，结束时由 guard 过的完成回调返回 401
 static Handler guard_upload(Handler h) {
   return [h] {
-    if (authed()) h();
+    if (web_auth_host_ok(server.hostHeader().c_str()) && authed()) h();
   };
+}
+
+static void send_locked() {
+  uint32_t wait = web_auth_locked_ms(auth, millis());
+  JsonDocument doc(psram_json());
+  doc["ok"] = false;
+  doc["error"] = String("配对码输错太多次，") + ((wait + 59999) / 60000) + " 分钟后再试";
+  doc["expired"] = true;
+  String out;
+  serializeJson(doc, out);
+  server.send(429, "application/json", out);
 }
 
 // 网页打不开接口时调用：屏幕上显示配对码
 static void handle_pair_start() {
+  if (bad_host()) return;
   const char *code = web_auth_start(auth, millis(), hw_random);
   if (pair_hook) pair_hook(code);
+  if (!code) {
+    send_locked();
+    return;
+  }
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
 static void handle_pair() {
+  if (bad_host()) return;
   char token[kWebAuthTokenLen + 1];
   if (!web_auth_pair(auth, server.arg("code").c_str(), millis(), hw_random, token)) {
     bool active = web_auth_code_active(auth, millis());
     if (!active && pair_hook) pair_hook(nullptr);
+    if (!active && web_auth_locked_ms(auth, millis())) {
+      send_locked();
+      return;
+    }
     JsonDocument doc(psram_json());
     doc["ok"] = false;
     doc["error"] = active ? "配对码不对，再看一下屏幕" : "配对码已失效，请重新获取";

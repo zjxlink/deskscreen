@@ -37,3 +37,13 @@ bool ota_is_valid_source_url(const char *url);
 // 判断上传的文件开头是不是 ESP32 程序固件（而不是带 bootloader 的单文件固件或其他文件）。
 // 程序固件的第 32 字节起是 esp_app_desc_t 的魔数 0xABCD5432；需要至少 36 字节
 bool ota_looks_like_app_image(const uint8_t *data, size_t len);
+
+// 每块板子的固件里都嵌着 "DSBOARD:<板子名>"（ota.cpp 的 ds_board_tag）。网页上传固件时边收边找它，
+// 收完对一下是不是本板子的，免得把别的板子的固件装上去。老固件里没有这个标记，找不到时不拦
+struct OtaBoardTag {
+  char name[16] = "";
+  int match = 0;   // 已经对上了 "DSBOARD:" 的几个字
+  int got = -1;    // 正在收板子名：已经收了几个字；-1 表示没在收
+  bool found = false;
+};
+void ota_board_tag_feed(OtaBoardTag &t, const uint8_t *data, size_t len);

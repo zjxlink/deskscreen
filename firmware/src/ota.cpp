@@ -24,6 +24,10 @@
 #define OTA_MANIFEST_URL "https://github.com/zjxlink/deskscreen/releases/latest/download/manifest.json"
 #endif
 
+// 网页上传固件时用它认出是哪块板子的固件（见 ota_board_tag_feed）。ota_upload_end 引用了它，链接时不会被丢掉
+extern "C" const char ds_board_tag[] = "DSBOARD:" BOARD_NAME;
+static OtaBoardTag upload_tag;
+
 static constexpr uint32_t kFirstCheckMs = 60 * 1000;            // 开机 1 分钟后第一次检查
 static constexpr uint32_t kCheckIntervalMs = 24 * 3600 * 1000;  // 之后每天检查一次
 static constexpr uint32_t kRetryMs = 3600 * 1000;               // 检查失败 1 小时后重试
@@ -352,10 +356,12 @@ bool ota_upload_begin(const uint8_t *first, size_t len, size_t total) {
   }
   upload_done = 0;
   upload_total = total;
+  upload_tag = OtaBoardTag();
   return ota_upload_write(first, len);
 }
 
 bool ota_upload_write(const uint8_t *data, size_t len) {
+  ota_board_tag_feed(upload_tag, data, len);
   if (Update.write((uint8_t *)data, len) != len) {
     Update.abort();
     fail(Update.errorString());
@@ -371,6 +377,14 @@ bool ota_upload_write(const uint8_t *data, size_t len) {
 }
 
 bool ota_upload_end() {
+  if (upload_tag.found && strcmp(upload_tag.name, ds_board_tag + 8) != 0) {
+    Update.abort();
+    char msg[96];
+    snprintf(msg, sizeof(msg), "这是 %s 板子的固件，本机是 %s，请上传 firmware-%s.bin", upload_tag.name, BOARD_NAME,
+             BOARD_NAME);
+    fail(msg);
+    return false;
+  }
   if (!Update.end(true)) {
     fail(Update.errorString());
     return false;
