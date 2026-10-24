@@ -50,6 +50,7 @@ static constexpr uint32_t kReminderShowMs = 5 * 60000;  // 久坐、喝水提醒
 static constexpr uint32_t kAlarmRingMs = 5 * 60000;     // 闹钟没人关时响多久
 static constexpr uint32_t kAlarmRepeatMs = 2500;        // 闹钟铃声的间隔
 static constexpr uint32_t kQuickHoldMs = 2000;          // 长按屏幕打开快捷设置
+static constexpr uint32_t kControlGraceMs = 400;  // 翻页后多久内点击只算翻页（滑入动画 250ms + 余量）
 static constexpr uint32_t kQuickIdleMs = 30000;         // 快捷设置页没人操作多久自动关掉
 static constexpr int kMoveSlop = 20;   // 手指移动超过这么多像素就不算点、也不算长按
 static constexpr uint32_t kMusicVolOpenMs = 4000;  // 音量条不碰它这么久就收起
@@ -1022,6 +1023,16 @@ static void update_saver(uint32_t now) {
   screen.go_to(PAGE_ALBUM, now);
 }
 
+// BOX-3 的 TF 卡槽在 SENSOR 底座上：没插底座时提示要底座，而不是让人去插卡
+static bool card_needs_dock() {
+#ifdef BOARD_BOX3
+  return !sensors_dock();
+#else
+  return false;
+#endif
+}
+static const char kNeedDock[] = "#E6EDF3 需要 SENSOR 底座#\n\nBOX-3 的 TF 卡槽在 SENSOR 底座上，插上底座和 FAT32 格式的 TF 卡就能用";
+
 static const char *album_message(const PhotoStatus &st, bool has_photo) {
   if (st.count > 0) {
     if (has_photo) return nullptr;
@@ -1038,6 +1049,7 @@ static const char *album_message(const PhotoStatus &st, bool has_photo) {
     case PhotoCard::NoSlot:
     case PhotoCard::NoCard:
       if (photos_busy()) return "正在读取 TF 卡…";
+      if (card_needs_dock()) return kNeedDock;
       return album_bing ? "#E6EDF3 没有检测到 TF 卡#\n\n必应每日一图下载好后会先在这里播放。插入 FAT32 格式的 TF 卡，就能放自己的照片，也能存下更多必应图片"
                         : "#E6EDF3 没有检测到 TF 卡#\n\n插入 FAT32 格式的 TF 卡，照片放在卡里的 photos 文件夹，也可以在网页设置里用手机上传";
     case PhotoCard::Empty:
@@ -1115,7 +1127,8 @@ static void render_movie_list() {
   switch (movie_card()) {
     case MovieCard::NoSlot:
     case MovieCard::NoCard:
-      msg = "#E6EDF3 没有检测到 TF 卡#\n\n插入 FAT32 格式的 TF 卡，把转好的影片放进卡里的 movies 文件夹";
+      msg = card_needs_dock() ? kNeedDock
+                              : "#E6EDF3 没有检测到 TF 卡#\n\n插入 FAT32 格式的 TF 卡（64GB 以上的卡多半是 exFAT，要先格式化成 FAT32），把转好的影片放进卡里的 movies 文件夹";
       break;
     case MovieCard::Reading: msg = "正在读取 TF 卡…"; break;
     case MovieCard::Empty:
@@ -1303,7 +1316,7 @@ static void render_music_list() {
   const char *msg = nullptr;
   switch (player_card()) {
     case PlayerCard::NoSlot: msg = "这块板子没有 TF 卡槽"; break;
-    case PlayerCard::NoCard: msg = "没有检测到 TF 卡"; break;
+    case PlayerCard::NoCard: msg = card_needs_dock() ? "需要 SENSOR 底座（TF 卡槽在底座上）" : "没有检测到 TF 卡（要 FAT32 格式）"; break;
     case PlayerCard::Empty: msg = "TF 卡的 music 文件夹里还没有歌"; break;
     case PlayerCard::Reading: if (n == 0) msg = "正在读取 TF 卡…"; break;
     case PlayerCard::Ok: if (n == 0) msg = "这个歌单里还没有歌"; break;
@@ -1582,6 +1595,17 @@ static void check_touch() {
   uint32_t now = millis();
   if (now - last_poll < 30) return;  // 每次读触摸都要走 I2C，没必要太频繁
   last_poll = now;
+  // 刚翻到的页面还在滑进来：这段时间里点哪儿都只算翻页，免得连点翻页时误按到新页面的按钮
+  // （番茄钟开始计时、聊天页接通语音）
+  static int seen_page = -1;
+  static uint32_t page_at = 0;
+  if (screen.page() != seen_page) {
+    seen_page = screen.page();
+    page_at = now;
+  }
+  bool settled = now - page_at >= kControlGraceMs;
+  static bool down_settled = true;  // 按下时页面已经停稳（松手时按这个判断，不看松手时）
+  static int down_page = -1;
 
   int x = 0, y = 0;
   bool raw = display_touch(x, y);
@@ -1601,6 +1625,8 @@ static void check_touch() {
     down_x = last_x = x;
     down_y = last_y = y;
     moved = false;
+    down_settled = settled;
+    down_page = screen.page();
     long_done = false;
     if (game_on) {
       long_done = true;  // 小游戏里按下就起跳，松手和长按都不再算
@@ -1608,7 +1634,7 @@ static void check_touch() {
       was_touched = touched;
       return;
     }
-    if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && !quick_on &&
+    if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && !quick_on && settled &&
         screen.page() == PAGE_CHAT && ui_chat_button_hit(x, y)) {
       long_done = true;  // 按下就算：开始、挂断或打断；不算翻页，也不打开快捷设置
       chat_busy_at = now;
@@ -1618,7 +1644,7 @@ static void check_touch() {
       return;
     }
     // 屏幕调暗时第一下只点亮，交给 ScreenCtrl 处理
-    on_ring = screen.started() && !screen.dimmed() && !ota_screen && !alert_on && !quick_on &&
+    on_ring = screen.started() && !screen.dimmed() && !ota_screen && !alert_on && !quick_on && settled &&
               screen.page() == PAGE_POMODORO && ui_pomodoro_hit(x, y);
   } else if (touched && !long_done && !moved && now - down_at >= (on_ring ? kPomoResetMs : kQuickHoldMs)) {
     // 有提醒或在快捷设置页时长按不算数，松手时照常当成点一下
@@ -1657,26 +1683,30 @@ static void check_touch() {
       screen.activity(now);
     }
   } else if (!touched && was_touched && !long_done) {
+    if (screen.page() != down_page) {
+      down_settled = false;  // 按着的时候自动轮播换了页：松手只算翻页，不点新页面上的按钮
+      on_ring = false;
+    }
     if (on_ring) {
       pomo_command(PomoCmd::Toggle);
     } else if (quick_on) {
       quick_tap(down_x, down_y, now);
-    } else if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && screen.page() == PAGE_PET &&
-               ui_pet_hit(down_x, down_y)) {
+    } else if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && down_settled &&
+               screen.page() == PAGE_PET && ui_pet_hit(down_x, down_y)) {
       open_game(now);
-    } else if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && screen.page() == PAGE_NEWS &&
-               ui_news_header_hit(down_x, down_y)) {
+    } else if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && down_settled &&
+               screen.page() == PAGE_NEWS && ui_news_header_hit(down_x, down_y)) {
       ui_news_channel(1);  // 点顶栏的频道名换下一个频道
       news_flip_at = now + kNewsFlipMs;
       screen.stay(now);
-    } else if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && screen.page() == PAGE_MOVIE &&
-               movie_tap(down_x, down_y, now)) {
+    } else if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && down_settled &&
+               screen.page() == PAGE_MOVIE && movie_tap(down_x, down_y, now)) {
       // 影片页：点片子、控制条
-    } else if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && screen.page() == PAGE_MUSIC &&
-               music_tap(down_x, down_y, now)) {
+    } else if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && down_settled &&
+               screen.page() == PAGE_MUSIC && music_tap(down_x, down_y, now)) {
       // 音乐页：按钮、进度条、列表
-    } else if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && screen.page() == PAGE_CLOCK &&
-               music_bar_tap(down_x, down_y, now)) {
+    } else if (screen.started() && !screen.dimmed() && !ota_screen && !alert_on && down_settled &&
+               screen.page() == PAGE_CLOCK && music_bar_tap(down_x, down_y, now)) {
       // 时钟页的迷你播放条
     } else {
       on_tap(now, down_x < SCREEN_W / 2);

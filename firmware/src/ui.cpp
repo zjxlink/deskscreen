@@ -1158,9 +1158,28 @@ static void set_hidden(lv_obj_t *o, bool hidden) {
   else lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
 }
 
+// 提示文字里标题用 #E6EDF3 ...# 着色（深色主题的字色），浅色主题时换成浅色主题的字色，不然白字白底看不见
+static const char *movie_msg = nullptr;
+
+static void show_movie_msg() {
+  if (!lbl_movie_msg) return;
+  set_hidden(lbl_movie_msg, !movie_msg);
+  if (!movie_msg) return;
+  static const char kDarkText[] = "#E6EDF3 ";
+  const char *at = strstr(movie_msg, kDarkText);
+  if (!at || pal == &kDark) {
+    lv_label_set_text(lbl_movie_msg, movie_msg);
+    return;
+  }
+  char buf[320];
+  snprintf(buf, sizeof(buf), "%.*s#%06X %s", (int)(at - movie_msg), movie_msg, (unsigned)pal->text,
+           at + sizeof(kDarkText) - 1);
+  lv_label_set_text(lbl_movie_msg, buf);
+}
+
 void ui_set_movie_list(const char *msg, const MovieRow *rows, int n, int page, int pages) {
-  set_hidden(lbl_movie_msg, !msg);
-  if (msg) lv_label_set_text(lbl_movie_msg, msg);
+  movie_msg = msg;
+  show_movie_msg();
   for (int i = 0; i < kMovieRows; i++) {
     MovieRowUi &r = movie_rows[i];
     set_hidden(r.row, msg || i >= n);
@@ -1854,9 +1873,10 @@ static void build_alert() {
 
   alert_body = make_label(scr_alert, &font_cn_16, COLOR_TEXT);
   lv_obj_set_width(alert_body, SCREEN_W - 40);
-  lv_label_set_long_mode(alert_body, LV_LABEL_LONG_WRAP);
+  lv_label_set_long_mode(alert_body, LV_LABEL_LONG_DOT);  // 超过 4 行（留言里换行多时）末尾显示省略号，不盖住下面的提示
   lv_obj_set_style_text_align(alert_body, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_line_space(alert_body, 4, 0);
+  lv_obj_set_height(alert_body, 4 * lv_font_get_line_height(&font_cn_16) + 3 * 4);
   lv_obj_align(alert_body, LV_ALIGN_TOP_MID, 0, 120);  // 最多 4 行，留言限 60 个字
 
   alert_foot = make_label(scr_alert, &font_cn_16, COLOR_SUBTLE);
@@ -3133,6 +3153,7 @@ void ui_set_theme(bool light) {
   if (have_github) ui_set_github(last_github);
   if (have_stocks) ui_set_stocks(last_stocks);
   if (news) render_news();
+  show_movie_msg();
   lv_obj_invalidate(lv_scr_act());
 }
 

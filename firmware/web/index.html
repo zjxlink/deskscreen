@@ -361,7 +361,7 @@ const CARDS=[
 {t:'services',title:'天气',icon:'cloud',meta:'Open-Meteo',f:[
  {type:'html',html:'<div class="fld"><label class="lab" for="f_city">城市（显示在屏幕上）</label><div class="inl"><input class="txt" id="f_city" name="city" maxlength="16"><button type="button" class="btn g" id="geo">查坐标</button></div><div class="res" id="results"></div></div>'},
  {type:'two',f:[{k:'lat',label:'纬度',dec:1},{k:'lon',label:'经度',dec:1}]}],
- hint:'查坐标需要手机能上网；连着板子的热点时可以手动填经纬度。'},
+ hint:'天气按经纬度查。改了城市后点「查坐标」选一个；没选的话保存时自动用第一个结果。查坐标需要手机能上网，连着板子的热点时可以手动填经纬度。'},
 {t:'services',title:'GitHub 贡献热力图',icon:'grid',meta:'has_token',f:[
  {type:'secret',k:'gh_token',clear:'gh_clear',label:'GitHub Token',ph:'ghp_...'}],
  hint:'打开 <a href="https://github.com/settings/tokens/new?description=DeskScreen" target="_blank">GitHub 创建 Token</a>（classic），<b>不用勾选任何权限</b>，生成后复制粘贴到这里。Token 只保存在设备上，不会显示出来。'},
@@ -528,19 +528,33 @@ function fill(s){
  meta('has_token',s.has_token?'● 已保存':'未设置',s.has_token);
  newsMeta();
  meta('has_ai',!s.voice?'这块板子没有麦克风':s.has_ai?'● 已保存':'未设置',s.has_ai&&s.voice);
- base=snap();dirty();
+ base=snap();dirty();geoCity=F.elements.city.value.trim();
 }
 // 资讯：标题栏显示选了几个来源
 function newsMeta(){const n=[...F.querySelectorAll('input[name^="ns_"]')].filter(e=>e.checked).length+(F.elements.news_rss.value.split(/\s+/).filter(u=>/^https?:\/\//.test(u)).length);meta('news',n?'已选 '+n+' 个':'未开启',n>0);}
 function meta(k,text,ok){for(const el of document.querySelectorAll(`[data-meta="${k}"]`)){el.textContent=text;el.classList.toggle('ok',!!ok);}}
 async function loadSettings(){fill(await (await fetch('/api/settings')).json());}
+// 天气按经纬度查：改了城市却没点「查坐标」选一个时，保存前自动取第一个结果，免得显示上海、天气还是北京的
+let geoCity='';
+async function autoGeo(){
+ const q=F.elements.city.value.trim();
+ if(!q||q===geoCity)return;
+ try{
+  const j=await (await fetch('https://geocoding-api.open-meteo.com/v1/search?count=1&language=zh&name='+encodeURIComponent(q),{signal:AbortSignal.timeout(5000)})).json();
+  const p=j.results&&j.results[0];
+  if(!p){toast('没找到「'+q+'」的坐标，天气还是按原来的经纬度');return;}
+  F.elements.lat.value=p.latitude.toFixed(4);F.elements.lon.value=p.longitude.toFixed(4);geoCity=q;
+ }catch(e){toast('手机没联网，查不到「'+q+'」的坐标，天气还是按原来的经纬度');}
+}
 async function save(){
  const b=$('saveBtn');b.disabled=true;
+ await autoGeo();
  try{await post('save',new URLSearchParams(new FormData(F)));await loadSettings();toast('已保存');}
  catch(e){toast('保存失败，请检查网络后重试');}
  b.disabled=false;
 }
 $('saveBtn').onclick=save;
+for(const k of ['lat','lon'])F.elements[k].addEventListener('input',()=>geoCity=F.elements.city.value.trim());  // 手填了经纬度就不自动查
 F.addEventListener('input',e=>{if(e.target.type==='range')rangeOut(e.target);dirty();});
 F.addEventListener('change',dirty);
 F.addEventListener('input',e=>{if(e.target.name&&(e.target.name.startsWith('ns_')||e.target.name==='news_rss'))newsMeta();});
@@ -605,7 +619,7 @@ $('geo').onclick=async()=>{
   for(const p of j.results){
    const b=document.createElement('button');b.type='button';b.className='btn g';
    b.textContent=[p.name,p.admin1,p.country].filter(Boolean).join('，');
-   b.onclick=()=>{F.elements.lat.value=p.latitude.toFixed(4);F.elements.lon.value=p.longitude.toFixed(4);box.textContent='';dirty();};
+   b.onclick=()=>{F.elements.lat.value=p.latitude.toFixed(4);F.elements.lon.value=p.longitude.toFixed(4);geoCity=q;box.textContent='';dirty();};
    box.appendChild(b);
   }
  }catch(e){box.textContent='查询失败（手机可能没联网），可以手动填写经纬度';}
