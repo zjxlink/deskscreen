@@ -81,8 +81,8 @@
 | | 说明 |
 |---|---|
 | 主板 | [乐鑫 ESP32-S3-BOX-3](https://github.com/espressif/esp-box)（ESP32-S3，16 MB Flash，16 MB PSRAM，2.4 寸 320×240 触摸屏，双麦克风，喇叭，姿态传感器） |
-| 选配 | BOX-3 SENSOR 底座：温湿度、毫米波雷达（没人熄屏）、TF 卡槽（相册、影片、音乐）。没插底座时这些功能自动不启用 |
-| TF 卡 | FAT32 格式（32 GB 以内的卡出厂就是），放 `photos`、`movies`、`music` 文件夹 |
+| 选配 | BOX-3 SENSOR 底座：温湿度、毫米波雷达（没人熄屏）、TF 卡槽（相册、影片、音乐）。没插底座时温湿度和没人熄屏自动不启用，相册、影片、音乐页会提示需要底座（可以在设置网页把这几页隐藏） |
+| TF 卡 | FAT32 格式（32 GB 以内的卡出厂就是；64 GB 以上的卡出厂多是 exFAT，要先用 DiskGenius 之类的软件格式化成 FAT32，Windows 自带的格式化不给 FAT32 选项），放 `photos`、`movies`、`music` 文件夹 |
 
 固件依赖 16 MB PSRAM（唤醒词、TLS、相册、影片和界面都放在 PSRAM 里）。仓库里还有一个给自制 PCB 准备的 `desk_v1` 编译环境，目前只停留在配置阶段，详见[开发指南](docs/development.md)。
 
@@ -90,15 +90,17 @@
 
 **1. 刷机**：用电脑上的 Chrome 或 Edge 打开 **<https://zjxlink.github.io/deskscreen/>**，用 USB-C 连上 BOX-3，点「连接板子并刷机」，几分钟就好。页面上有每一步的说明。
 
-**2. 配网**：板子开机后屏幕会显示一个 `DeskScreen-XXXX` 的 WiFi 热点。手机连上它，在弹出的页面里选你家的 WiFi（没弹出就用浏览器打开 `192.168.4.1`）。以后要换 WiFi，长按 BOOT 键 3 秒。
+**2. 配网**：板子开机后屏幕会显示一个 `DeskScreen-XXXX` 的 WiFi 热点。手机连上它，在弹出的页面里点「Configure WiFi」，选你家的 WiFi、输密码后点「Save」（没弹出就用浏览器打开 `192.168.4.1`）。只支持 2.4 GHz 的 WiFi；5 分钟没配好板子会自己重启再等。以后要换 WiFi，长按 BOOT 键 3 秒。
 
 <img src="docs/images/screen-wifi-setup.png" width="320" alt="首次配网提示">
 
-**3. 打开设置网页**：手机和板子在同一个 WiFi 下，用浏览器打开 `http://deskscreen.local`（或屏幕上显示的 IP），输入屏幕上显示的 6 位配对码。也可以长按屏幕 2 秒打开快捷设置，扫里面的二维码。
+**3. 打开设置网页**：手机和板子在同一个 WiFi 下，用浏览器打开屏幕上显示的 IP（连上 WiFi 后显示几秒，也可以长按屏幕 2 秒在快捷设置里看；iPhone 和电脑也能用 `http://deskscreen.local`，很多安卓手机不认这个名字），输入屏幕上显示的 6 位配对码。也可以长按屏幕 2 秒打开快捷设置，扫里面的二维码。
 
-**4. 按需填写服务**：城市、[GitHub Token](docs/features.md#设置-github-热力图)、[自选股](docs/features.md#设置自选股)、[资讯来源](docs/features.md#设置资讯)、[AI 语音聊天的百炼 API Key](docs/features.md#设置-ai-语音聊天)，都在设置网页的「服务」里。
+**4. 按需填写服务**：城市（填好后点「查坐标」选一个，天气按这个坐标查；没选的话保存时自动用第一个结果）、[GitHub Token](docs/features.md#设置-github-热力图)、[自选股](docs/features.md#设置自选股)、[资讯来源](docs/features.md#设置资讯)、[AI 语音聊天的百炼 API Key](docs/features.md#设置-ai-语音聊天)，都在设置网页的「服务」里。
 
 > 只想用时钟、天气、番茄钟和小猫的话，第 4 步可以跳过。
+
+**5. 影片、音乐转换工具**（可选）：手机里的视频和 M4A、APE 这些歌要先在电脑上转换。到 [Releases](https://github.com/zjxlink/deskscreen/releases/latest) 下载 `deskscreen-tools.zip`，解压后把文件拖到 `转换影片.bat` 或 `转换音乐.bat` 上，第一次会提示安装 ffmpeg（装好后要重新登录一下 Windows 才找得到）。从网上下载的 .bat 第一次运行时 Windows 可能弹出「已保护你的电脑」，点「更多信息 › 仍要运行」。
 
 ## 🔄 在线升级
 

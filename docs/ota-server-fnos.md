@@ -1,13 +1,13 @@
 # 在飞牛 fnOS 上部署自建升级服务器
 
-板子默认从 GitHub 在线升级，有的网络（比如公司网络）连不上 GitHub 的下载地址。照这份文档在家里的飞牛 NAS 上跑一个小服务，板子就会先从 `https://ota.zjxlink.cn` 升级，连不上再用 GitHub。
+板子默认从 GitHub 在线升级，有的网络（比如公司网络）连不上 GitHub 的下载地址。照这份文档在家里的飞牛 NAS 上跑一个小服务，板子就会先从 `https://ota.example.com` 升级，连不上再用 GitHub。文档里的 `ota.example.com` 都换成你自己的域名。
 
 整体是这样：
 
 ```
 GitHub Release ──(每小时拉一次)──> 飞牛 NAS 上的 deskscreen-ota 容器（端口 18266，HTTP）
                                           │
-                              反向代理 https://ota.zjxlink.cn
+                              反向代理 https://ota.example.com
                                           │
                                         板子
 ```
@@ -17,7 +17,7 @@ GitHub Release ──(每小时拉一次)──> 飞牛 NAS 上的 deskscreen-ot
 ## 准备
 
 - 飞牛 fnOS，已经装好「Docker」应用（应用中心里搜 Docker）
-- 你现有的反向代理和 `ota.zjxlink.cn` 的 HTTPS 证书
+- 你现有的反向代理和 `ota.example.com` 的 HTTPS 证书
 - 需要的两个文件，在仓库的 [`server/ota-mirror`](../server/ota-mirror) 文件夹里：
   - [`mirror.py`](../server/ota-mirror/mirror.py)：同步和提供下载的程序
   - [`docker-compose.yml`](../server/ota-mirror/docker-compose.yml)：容器配置
@@ -65,13 +65,13 @@ GitHub Release ──(每小时拉一次)──> 飞牛 NAS 上的 deskscreen-ot
 
 | 项目 | 填什么 |
 | --- | --- |
-| 域名 | `ota.zjxlink.cn` |
+| 域名 | `ota.example.com` |
 | 协议 | HTTPS（用你的证书） |
 | 转发到 | `http://NAS的局域网IP:18266`（反向代理就跑在这台 NAS 上时也可以填 `http://127.0.0.1:18266`） |
 
 不需要 WebSocket，也不需要特别的请求头。固件约 3 MB，如果反向代理限制了响应大小，放宽到 10 MB 以上。
 
-然后在浏览器打开 `https://ota.zjxlink.cn/manifest.json`，能看到同样的 JSON 就好了。最好用手机流量（不连家里 WiFi）也试一次，确认外网能访问。
+然后在浏览器打开 `https://ota.example.com/manifest.json`，能看到同样的 JSON 就好了。最好用手机流量（不连家里 WiFi）也试一次，确认外网能访问。
 
 ### 证书要注意
 
@@ -84,7 +84,7 @@ GitHub Release ──(每小时拉一次)──> 飞牛 NAS 上的 deskscreen-ot
 板子装上支持自建服务器的固件后：
 
 1. 打开设置网页 `http://deskscreen.local`，进入「系统 › 固件升级」
-2. 「自建升级服务器」填 `https://ota.zjxlink.cn/manifest.json`，点底部的「保存」
+2. 「自建升级服务器」填 `https://ota.example.com/manifest.json`，点底部的「保存」
 3. 点「检查更新」，状态里出现「来自自建服务器」就成功了
 
 自建服务器连不上、证书不认或者文件不对时，板子会自动改用 GitHub，状态里会同时写出两边失败的原因。

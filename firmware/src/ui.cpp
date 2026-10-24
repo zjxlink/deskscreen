@@ -1564,7 +1564,7 @@ void ui_set_music(const MusicPageView &v) {
       break;
     case PlayerCard::Empty:
       head = "还没有歌";
-      msg = "把 MP3、FLAC、WAV 放进 TF 卡的 music 文件夹，或者在网页设置的「音乐管理」里上传";
+      msg = "把 MP3、FLAC、WAV 放进 TF 卡的 music 文件夹，或者在网页设置的「显示 › 音乐」里上传";
       break;
     case PlayerCard::Ok: break;
   }
