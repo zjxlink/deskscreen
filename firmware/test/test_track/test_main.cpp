@@ -290,6 +290,50 @@ static void test_wav() {
   TEST_ASSERT_FALSE(track_probe(read_vec, &f, f.size(), TrackFormat::Wav, p));
 }
 
+// 块长度接近 4GB 的坏文件：位置会绕回去，以前在这里死循环（还占着 TF 卡）
+static void test_wav_bad_chunk_len() {
+  Bytes f;
+  put(f, "RIFF");
+  le32(f, 0);
+  put(f, "WAVE");
+  put(f, "fmt ");
+  le32(f, 0xFFFFFFF8);
+  f.resize(116, 0);
+  TrackProbe p;
+  TEST_ASSERT_FALSE(track_probe(read_vec, &f, f.size(), TrackFormat::Wav, p));
+}
+
+// FLAC 封面块里 MIME 长度乱写：不能越界读
+static void test_flac_bad_picture() {
+  Bytes f;
+  put(f, "fLaC");
+  Bytes info(18, 0);
+  info[10] = 0x0A;  // 44100Hz
+  info[11] = 0xC4;
+  info[12] = 0x42;
+  info[13] = 0xF0;
+  f.push_back(0x00);
+  f.push_back(0);
+  f.push_back(0);
+  f.push_back(18);
+  put(f, info.data(), info.size());
+  Bytes pic(64, 0);
+  pic[3] = 3;
+  pic[4] = 0xFF;  // MIME 长度 0xFFFFFFF8
+  pic[5] = 0xFF;
+  pic[6] = 0xFF;
+  pic[7] = 0xF8;
+  f.push_back(0x80 | 6);
+  f.push_back(0);
+  f.push_back(0);
+  f.push_back((uint8_t)pic.size());
+  put(f, pic.data(), pic.size());
+  f.resize(f.size() + 256, 0);
+  TrackProbe p;
+  track_probe(read_vec, &f, f.size(), TrackFormat::Flac, p);
+  TEST_ASSERT_EQUAL(0, p.cover_len);
+}
+
 static void test_name_from_file() {
   char title[kTagMax], artist[kTagMax];
   track_name_from_file("华语/周杰伦 - 晴天.mp3", title, artist, sizeof(title));
@@ -457,6 +501,8 @@ int main() {
   RUN_TEST(test_mp3_cbr_and_v1);
   RUN_TEST(test_flac);
   RUN_TEST(test_wav);
+  RUN_TEST(test_wav_bad_chunk_len);
+  RUN_TEST(test_flac_bad_picture);
   RUN_TEST(test_name_from_file);
   RUN_TEST(test_safe_name);
   RUN_TEST(test_lrc);

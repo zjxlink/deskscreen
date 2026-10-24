@@ -63,6 +63,11 @@ bool rt_is_goodbye(const std::string &heard) {
     chars++;
   }
   if (chars == 0 || chars > 10) return false;
+  // 「别挂了」「再见是什么意思」「要说再见吗」不是要挂断
+  static const char *const kNot[] = {"别", "不要", "什么", "怎么", "意思", "吗"};
+  for (const char *n : kNot) {
+    if (s.find(n) != std::string::npos) return false;
+  }
   static const char *const kBye[] = {"拜拜", "再见", "白白", "不聊了", "先这样", "退下", "挂了", "挂断", "bye"};
   for (const char *b : kBye) {
     if (s.find(b) != std::string::npos) return true;

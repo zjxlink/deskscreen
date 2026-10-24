@@ -335,6 +335,10 @@ static void test_rt_is_goodbye() {
   TEST_ASSERT_FALSE(rt_is_goodbye("今天天气怎么样"));
   // 长句里提到「再见」不算道别
   TEST_ASSERT_FALSE(rt_is_goodbye("你知道再见这个词用英语怎么说吗"));
+  TEST_ASSERT_FALSE(rt_is_goodbye("再见是什么意思"));
+  TEST_ASSERT_FALSE(rt_is_goodbye("别挂了"));
+  TEST_ASSERT_FALSE(rt_is_goodbye("先别挂断"));
+  TEST_ASSERT_FALSE(rt_is_goodbye("不要挂断"));
 }
 
 int main() {

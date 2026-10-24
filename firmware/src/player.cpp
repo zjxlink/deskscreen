@@ -24,6 +24,8 @@ static constexpr const char *kState = "/music/.state";
 static constexpr const char *kStateTmp = "/music/.state.tmp";
 static constexpr uint32_t kAheadMs = 500;         // 喇叭的缓冲里攒着这么多（暂停时扔掉的也就这么多）
 static constexpr size_t kChunk = 1152;            // 一次解这么多采样
+static constexpr uint32_t kMinRate = 4000;        // 低于它要重复 5 次以上，pcm 缓冲（kChunk * 4）放不下
+static constexpr uint32_t kMaxRate = 192000;
 static constexpr uint32_t kSaveEveryMs = 30000;   // 放的时候每 30 秒记一次放到哪里
 static constexpr uint32_t kRestartPrevMs = 3000;  // 放了 3 秒以上点「上一首」是从头放这首
 static constexpr uint32_t kFadeMs = 10000;        // 睡眠定时到点前 10 秒慢慢变小
@@ -98,12 +100,14 @@ static SongDecoder dec;
 static uint32_t song_rate = 0;   // 歌的采样率
 static uint32_t io_rate = 0;     // 喇叭的采样率
 static int up = 1;               // 采样率低于 16kHz 的歌每个采样重复几次
-static bool down = false;        // 高于 48kHz 的歌两个采样取一个
+static int down = 1;             // 高于 48kHz 的歌几个采样并成一个（1、2 或 4）
 static bool music_on = false;    // 拿着喇叭
 static uint32_t music_rate = 0;
 static bool at_end = false;
 static uint32_t last_save = 0;
 static int bad_in_row = 0;       // 连着几首打不开
+static bool song_silent = true;  // 这首打开后还一个采样都没解出来
+static int silent_in_row = 0;    // 连着几首打开了却解不出声音（只有文件头的空文件等）
 
 // 放的时候播放任务和扫描任务都要读卡：每次读之前拿锁
 static size_t file_read(void *ctx, uint32_t off, uint8_t *buf, size_t len) {
@@ -541,13 +545,22 @@ static bool open_song(int id, uint32_t start_ms) {
     return false;
   }
   song_rate = dec.rate();
-  down = song_rate > 48000;
-  uint32_t r = down ? song_rate / 2 : song_rate;
+  // 4kHz 以下重复采样会超出 pcm 缓冲（最多放大 4 倍），192kHz 以上也不支持
+  if (song_rate < kMinRate || song_rate > kMaxRate) {
+    close_song();
+    st.error = "这首歌的采样率不支持（要在 4kHz 到 192kHz 之间）";
+    st.loading = false;
+    return false;
+  }
+  down = 1;
+  while (song_rate / down > 48000) down *= 2;
+  uint32_t r = song_rate / down;
   up = 1;
   while (r * up < 16000) up++;
   io_rate = r * up;
   if (p.dur_ms) st.dur_ms = p.dur_ms;
   at_end = false;
+  song_silent = true;
   if (lrc) {
     xSemaphoreTake(meta_lock, portMAX_DELAY);
     lrc_parse(lrc, lrc_len, lyrics);
@@ -809,16 +822,36 @@ static void player_task(void *) {
     size_t n = dec.read(pcm, kChunk);
     photos_card_unlock();
     if (n == 0) {
+      if (song_silent) {
+        // 一个声音都解不出来：当成坏文件跳过，不然单曲循环或只有一首时会不停重开它
+        if (++silent_in_row >= queue_n || silent_in_row >= 20) {
+          silent_in_row = 0;
+          want_play = false;
+          close_song();
+          st.error = "这首歌没有声音，可能文件坏了";
+          st.loading = false;
+          continue;
+        }
+        vTaskDelay(pdMS_TO_TICKS(300));
+        play_order(order->next(true), true);
+        continue;
+      }
       // 这首放完了：单曲循环再放一遍，否则下一首（缓冲里剩的声音照常放完，几乎没有空隙）
       st.pos_ms = st.dur_ms;
       int next = order->next(false);
       play_order(next, true);
       continue;
     }
+    song_silent = false;
+    silent_in_row = 0;
     st.loading = false;
-    if (down) {
-      for (size_t i = 0; i < n / 2; i++) pcm[i] = (int16_t)(((int32_t)pcm[2 * i] + pcm[2 * i + 1]) >> 1);
-      n /= 2;
+    if (down > 1) {
+      for (size_t i = 0; i < n / down; i++) {
+        int32_t sum = 0;
+        for (int k = 0; k < down; k++) sum += pcm[i * down + k];
+        pcm[i] = (int16_t)(sum / down);
+      }
+      n /= down;
     }
     if (up > 1) {
       for (size_t i = n; i-- > 0;) {
