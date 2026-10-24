@@ -1,4 +1,5 @@
 #include "ota.h"
+#include "psram_alloc.h"
 
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
@@ -162,7 +163,7 @@ static bool fetch_manifest(const char *url, OtaManifest &m, char *err, size_t n)
     snprintf(err, n, "HTTP %d", code);
     return false;
   }
-  JsonDocument doc;
+  JsonDocument doc(psram_json());
   DeserializationError e = deserializeJson(doc, c.http.getString());
   c.http.end();
   if (e || !ota_parse_manifest(doc, BOARD_NAME, m, url)) {
@@ -243,7 +244,14 @@ static void download() {
   }
   Update.setMD5(m.md5);
 
-  static uint8_t buf[4096];
+  static constexpr size_t kBuf = 4096;
+  static uint8_t *buf = (uint8_t *)psram_malloc(kBuf);  // 不常驻内部内存
+  if (!buf) {
+    Update.abort();
+    http.end();
+    fail("内存不够");
+    return;
+  }
   WiFiClient *stream = http.getStreamPtr();
   uint32_t written = 0;
   uint32_t last_data = millis();
@@ -254,7 +262,7 @@ static void download() {
       delay(2);
       continue;
     }
-    size_t want = avail < sizeof(buf) ? avail : sizeof(buf);
+    size_t want = avail < kBuf ? avail : kBuf;
     if (want > m.size - written) want = m.size - written;
     size_t n = stream->readBytes(buf, want);
     if (Update.write(buf, n) != n) {

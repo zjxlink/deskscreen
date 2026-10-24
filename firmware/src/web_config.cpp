@@ -1,4 +1,5 @@
 #include "web_config.h"
+#include "psram_alloc.h"
 
 #include <ArduinoJson.h>
 #include <Preferences.h>
@@ -107,7 +108,7 @@ static void handle_pair() {
   if (!web_auth_pair(auth, server.arg("code").c_str(), millis(), hw_random, token)) {
     bool active = web_auth_code_active(auth, millis());
     if (!active && pair_hook) pair_hook(nullptr);
-    JsonDocument doc;
+    JsonDocument doc(psram_json());
     doc["ok"] = false;
     doc["error"] = active ? "配对码不对，再看一下屏幕" : "配对码已失效，请重新获取";
     doc["expired"] = !active;
@@ -185,7 +186,7 @@ static void send_ok() {
 // 字段名和 /save 提交的名字一致，网页按名字填进表单
 static void handle_api_settings() {
   Settings s = settings_get();
-  JsonDocument doc;
+  JsonDocument doc(psram_json());
   char hhmm[8];
   auto put_time = [&](const char *key, uint16_t minutes) {
     night_format_hhmm(minutes, hhmm, sizeof(hhmm));
@@ -282,7 +283,7 @@ static const char *ota_state_name(OtaState s) {
 }
 
 static void handle_api_status() {
-  JsonDocument doc;
+  JsonDocument doc(psram_json());
   doc["ver"] = ota_current_version();
   doc["uptime"] = millis() / 1000;
   JsonObject wifi = doc["wifi"].to<JsonObject>();
@@ -560,7 +561,7 @@ static void handle_upload_chunk() {
 }
 
 static void handle_upload_done() {
-  JsonDocument doc;
+  JsonDocument doc(psram_json());
   doc["ok"] = upload_ok;
   if (!upload_ok) doc["error"] = String(ota_status().error);
   send_doc(doc);
@@ -576,7 +577,7 @@ static const char *photo_error = "";
 static String photo_name;
 
 static void send_json(bool ok, const char *error) {
-  JsonDocument doc;
+  JsonDocument doc(psram_json());
   doc["ok"] = ok;
   if (!ok) doc["error"] = error;
   if (ok && photo_name.length()) doc["name"] = photo_name;
@@ -646,7 +647,7 @@ static char movie_saved[kMovieNameMax];
 
 static void handle_movie_list() {
   movie_rescan_now();  // 刚用读卡器拷进去的片子也能看到
-  JsonDocument doc;
+  JsonDocument doc(psram_json());
   MovieCard c = movie_card();
   doc["card"] = c == MovieCard::NoSlot ? "noslot" : c == MovieCard::NoCard ? "none" : "ok";
   uint64_t total = 0, used = 0;
@@ -692,7 +693,7 @@ static void handle_movie_chunk() {
 
 static void handle_movie_done() {
   if (movie_hook) movie_hook(0, 0);  // 出错时没走到 END，这里也收起进度画面
-  JsonDocument doc;
+  JsonDocument doc(psram_json());
   doc["ok"] = movie_ok;
   if (movie_ok) doc["name"] = movie_saved;
   else doc["error"] = movie_upload_error();
@@ -729,7 +730,7 @@ static void handle_music_chunk() {
 
 static void handle_music_done() {
   if (music_hook) music_hook(0, 0);  // 收完、出错都收起进度画面
-  JsonDocument doc;
+  JsonDocument doc(psram_json());
   doc["ok"] = music_ok;
   if (music_ok) doc["name"] = music_saved;
   else doc["error"] = player_upload_error();
@@ -786,7 +787,7 @@ void web_config_begin() {
   server.on("/movies/list", HTTP_GET, guard(handle_movie_list));
   server.on("/movies/upload", HTTP_POST, guard(handle_movie_done), guard_upload(handle_movie_chunk));
   server.on("/movies/delete", HTTP_POST, guard([] {
-    JsonDocument doc;
+    JsonDocument doc(psram_json());
     bool ok = movie_delete(server.arg("name").c_str());
     doc["ok"] = ok;
     if (!ok) doc["error"] = "删除失败";
@@ -799,14 +800,14 @@ void web_config_begin() {
   }));
   server.on("/music/upload", HTTP_POST, guard(handle_music_done), guard_upload(handle_music_chunk));
   server.on("/music/delete", HTTP_POST, guard([] {
-    JsonDocument doc;
+    JsonDocument doc(psram_json());
     bool ok = player_delete(server.arg("name").c_str());
     doc["ok"] = ok;
     if (!ok) doc["error"] = "删除失败";
     send_doc(doc);
   }));
   server.on("/music/mkdir", HTTP_POST, guard([] {
-    JsonDocument doc;
+    JsonDocument doc(psram_json());
     bool ok = player_mkdir(server.arg("name").c_str());
     doc["ok"] = ok;
     if (!ok) doc["error"] = "建不了这个歌单，换个名字试试";

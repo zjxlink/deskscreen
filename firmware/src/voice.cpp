@@ -73,6 +73,17 @@ static ChatLog chat_log;       // 这次聊天说过的话（lock 保护）
 
 // 要上传的声音（PSRAM）：采集任务（或回声消除后的输出）写，聊天任务读。计数只增不减，相减就是缓冲里的采样数
 static int16_t *ring;
+
+// 聊天时用的收发缓冲，第一次聊天时在 PSRAM 里申请（以前是静态数组，常年占着 12KB 内部内存）
+struct Scratch {
+  uint8_t tx[1460];
+  uint8_t rx[2048];
+  char http[1024];
+  int16_t pcm[kChunk];
+  char b64[(kChunk * 2 + 2) / 3 * 4];
+};
+static Scratch *scratch;
+static bool mic_ok = false;  // 有麦克风，能聊天（任务和 AFE 到第一次要用时才建）
 static volatile uint32_t ring_w = 0;
 static uint32_t ring_r = 0;
 static volatile uint8_t level = 0;
@@ -243,18 +254,19 @@ static bool afe_begin() {
   cfg.pcm_config.ref_num = 1;
   cfg.pcm_config.sample_rate = kRate;
   size_t before = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-  afe = afe_handle->create_from_config(&cfg);
-  if (!afe) {
+  esp_afe_sr_data_t *a = afe_handle->create_from_config(&cfg);
+  if (!a) {
     log_w("voice: AFE create failed, no wake word or echo cancellation");
     return false;
   }
-  feed_chunk = afe_handle->get_feed_chunksize(afe);
+  feed_chunk = afe_handle->get_feed_chunksize(a);
   feed_buf = (int16_t *)heap_caps_malloc(feed_chunk * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (!feed_buf) {
-    afe_handle->destroy(afe);
-    afe = nullptr;
+    afe_handle->destroy(a);
     return false;
   }
+  feed_fill = 0;
+  afe = a;  // 最后才设：采集任务看到 afe 不为空就开始喂数据
   log_i("voice: AFE ready, wake word %s, feed %d, internal RAM used %u", cfg.wakenet_model_name ? cfg.wakenet_model_name : "-",
         feed_chunk, (unsigned)(before - heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
   // 唤醒词模型推理比较吃栈
@@ -319,11 +331,11 @@ static bool ws_send(WiFiClientSecure &c, uint8_t opcode, const char *const parts
   uint8_t head[14];
   size_t hn = ws_frame_header(opcode, len, mask, head);
   if (!write_all(c, head, hn)) return false;
-  static uint8_t buf[1460];
+  uint8_t *buf = scratch->tx;
   uint64_t off = 0;
   for (int i = 0; i < count; i++) {
     for (size_t at = 0; at < sizes[i];) {
-      size_t take = sizes[i] - at < sizeof(buf) ? sizes[i] - at : sizeof(buf);
+      size_t take = sizes[i] - at < sizeof(scratch->tx) ? sizes[i] - at : sizeof(scratch->tx);
       memcpy(buf, parts[i] + at, take);
       ws_mask(buf, take, mask, off);
       if (!write_all(c, buf, take)) return false;
@@ -559,12 +571,12 @@ static void on_message(uint8_t opcode, std::string &payload, void *ctx) {
 
 // 读收到的数据，一次最多处理 limit 字节，免得长时间顾不上发麦克风的声音
 static size_t pump(Session &s, WsReader &reader, size_t limit) {
-  static uint8_t buf[2048];
+  uint8_t *buf = scratch->rx;
   size_t total = 0;
   while (total < limit && !s.fatal.size()) {
     int avail = s.client.available();
     if (avail <= 0) break;
-    int n = s.client.read(buf, avail < (int)sizeof(buf) ? avail : sizeof(buf));
+    int n = s.client.read(buf, avail < (int)sizeof(scratch->rx) ? avail : sizeof(scratch->rx));
     if (n <= 0) break;
     total += n;
     if (!reader.feed(buf, n, on_message, &s)) s.fatal = "服务器返回的数据不对";
@@ -624,7 +636,7 @@ static std::string connect_session(Session &s, WsReader &reader) {
 
   HttpHead http;
   std::string body;
-  static char buf[1024];
+  char *buf = scratch->http;
   uint32_t last = millis();
   while (!hangup) {
     int avail = s.client.available();
@@ -638,7 +650,7 @@ static std::string connect_session(Session &s, WsReader &reader) {
       delay(5);
       continue;
     }
-    int n = s.client.read((uint8_t *)buf, avail < (int)sizeof(buf) ? avail : sizeof(buf));
+    int n = s.client.read((uint8_t *)buf, avail < (int)sizeof(scratch->http) ? avail : sizeof(scratch->http));
     if (n <= 0) continue;
     last = millis();
     size_t pos = 0;
@@ -676,8 +688,8 @@ static std::string connect_session(Session &s, WsReader &reader) {
 
 // 上传一块声音（100ms）
 static bool send_chunk(Session &s) {
-  static int16_t pcm[kChunk];
-  static char b64[(kChunk * 2 + 2) / 3 * 4];
+  int16_t *pcm = scratch->pcm;
+  char *b64 = scratch->b64;
   for (size_t i = 0; i < kChunk; i++) pcm[i] = ring[(ring_r + i) & (kRing - 1)];
   ring_r += kChunk;
   xSemaphoreTake(lock, portMAX_DELAY);
@@ -900,7 +912,25 @@ static void on_wake() {
   woke = true;
 }
 
-bool voice_available() { return task != nullptr; }
+bool voice_available() { return mic_ok; }
+
+// 第一次要用（点了聊天，或者打开了唤醒词且填了 API Key）时才建聊天任务、AFE 和缓冲：
+// 不用 AI 聊天的人省下约 24KB 任务栈和 AFE 占的内部内存。只在主循环里调用
+static bool ensure_started() {
+  if (task) return true;
+  if (!mic_ok) return false;
+  if (!scratch) scratch = (Scratch *)heap_caps_malloc(sizeof(Scratch), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!scratch) {
+    log_w("voice: no memory for buffers");
+    return false;
+  }
+#ifdef HAS_SR
+  if (!afe) afe_begin();
+#endif
+  // TLS 和 JSON 解析比较吃栈
+  xTaskCreatePinnedToCore(voice_task, "voice", 16384, nullptr, 3, &task, 1);
+  return task != nullptr;
+}
 
 void voice_begin() {
   if (!audio_available() || !audio_mic_available()) return;
@@ -911,21 +941,19 @@ void voice_begin() {
   }
   lock = xSemaphoreCreateMutex();
   status.state = VoiceState::Idle;
-#ifdef HAS_SR
-  afe_begin();
-#endif
-  // TLS 和 JSON 解析比较吃栈
-  xTaskCreatePinnedToCore(voice_task, "voice", 16384, nullptr, 3, &task, 1);
+  mic_ok = true;
   audio_set_capture_sink(on_capture, nullptr);
 }
 
 void voice_set_options(bool wake, bool barge) {
   wake_on = wake;
   barge_on = barge;
+  // 唤醒词要一直听：填了 API Key 才建（没 Key 喊了也聊不了）
+  if (wake && settings_get().ai_key.length()) ensure_started();
 }
 
 void voice_tap() {
-  if (!task) return;
+  if (!ensure_started()) return;
   if (start_session()) return;
   VoiceState st = get_state();
   if (st == VoiceState::Thinking || st == VoiceState::Speaking) {
@@ -975,7 +1003,7 @@ bool voice_chat_log(ChatLog &out) {
 
 VoiceStatus voice_status() {
   VoiceStatus s;
-  if (!task) {
+  if (!mic_ok) {
     s = {};
     s.state = VoiceState::Off;
     return s;
@@ -983,7 +1011,7 @@ VoiceStatus voice_status() {
   xSemaphoreTake(lock, portMAX_DELAY);
   s = status;
   xSemaphoreGive(lock);
-  s.wake_word = afe != nullptr && wake_on;
+  s.wake_word = (afe != nullptr || !task) && wake_on;  // 还没建 AFE 时按建得起来算
   s.full_duplex = afe != nullptr && barge_on;
   return s;
 }

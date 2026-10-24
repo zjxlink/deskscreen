@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "album.h"
+#include "psram_alloc.h"
 #include "avi.h"
 #include "avplay.h"
 #include "bing.h"
@@ -27,16 +28,17 @@ static constexpr uint64_t kMinFreeBytes = 1024 * 1024;    // 卡快满时不再�
 static constexpr int kMaxTries = 5;  // 一次最多试几张，都读不出来就等下一次
 static constexpr size_t kCaptionMax = 160;
 
+// 文件名和列表都放 PSRAM：卡上上千张照片时，用 String 会在内部内存里占几十 KB
 struct PhotoFile {
-  String name;
+  PsString name;
   uint32_t size;
-  String caption;  // 必应图片的说明
+  PsString caption;  // 必应图片的说明
 };
 
 // 一个图片来源对应卡上的一个文件夹
 struct Source {
   const char *dir;
-  std::vector<PhotoFile> files;
+  std::vector<PhotoFile, PsramStl<PhotoFile>> files;
   bool dirty = true;
   PhotoOrder order;
 };
@@ -154,12 +156,12 @@ static bool scan_locked(Source &s) {
     if (slash) name = slash + 1;
     if (f.isDirectory() || !album_is_photo(name)) continue;
     if (bing && !bing_is_file(name)) continue;
-    s.files.push_back({String(name), (uint32_t)f.size(), String()});
+    s.files.push_back({PsString(name), (uint32_t)f.size(), PsString()});
   }
   dir.close();
   std::sort(s.files.begin(), s.files.end(), [](const PhotoFile &a, const PhotoFile &b) { return a.name < b.name; });
   if (bing) {
-    for (PhotoFile &f : s.files) f.caption = read_caption_locked(f.name);
+    for (PhotoFile &f : s.files) f.caption = read_caption_locked(String(f.name.c_str())).c_str();
   }
   order_shuffle = want_shuffle;
   s.order.reset(s.files.size(), order_shuffle, esp_random());
@@ -252,8 +254,8 @@ static uint8_t *pick_locked(String &name, String &caption, size_t &len, int &src
     k = s.order.next();
   }
   if (k < 0) return nullptr;
-  name = s.files[k].name;
-  caption = s.files[k].caption;
+  name = s.files[k].name.c_str();
+  caption = s.files[k].caption.c_str();
   kind = album_media_kind(name.c_str());
   if (kind == MediaKind::Video) return nullptr;
   return read_locked(path_of(s, name), len);
@@ -538,14 +540,14 @@ static void list_files(JsonDocument &doc, const char *key, const Source &s, bool
   JsonArray arr = doc[key].to<JsonArray>();
   for (const PhotoFile &f : s.files) {
     JsonObject o = arr.add<JsonObject>();
-    o["n"] = f.name;
+    o["n"] = f.name.c_str();
     o["s"] = f.size;
-    if (with_caption) o["c"] = f.caption;
+    if (with_caption) o["c"] = f.caption.c_str();
   }
 }
 
 String photos_list_json() {
-  JsonDocument doc;
+  JsonDocument doc(psram_json());  // 上千张照片时有几十 KB
   xSemaphoreTake(lock, portMAX_DELAY);
   tried = false;  // 打开网页时立即重试挂载，刚插上的卡不用等
   bool ok = mount_locked();

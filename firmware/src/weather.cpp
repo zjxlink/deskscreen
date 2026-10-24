@@ -1,4 +1,5 @@
 #include "weather.h"
+#include "psram_alloc.h"
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -41,7 +42,7 @@ static int fetch(WeatherData &out) {
   String body = http.getString();
   http.end();
 
-  JsonDocument doc;
+  JsonDocument doc(psram_json());
   DeserializationError err = deserializeJson(doc, body);
   if (err) {
     net_report(NetService::Weather, kNetBadData, client, (String("JSON: ") + err.c_str()).c_str());
