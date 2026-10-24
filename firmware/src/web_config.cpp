@@ -70,9 +70,12 @@ static void load_tokens() {
 // 浏览器用 Cookie，电脑上的脚本可以用 X-Auth-Token 头
 static bool authed() {
   char token[kWebAuthTokenLen + 1];
-  if (web_auth_cookie(server.header("Cookie").c_str(), kAuthCookie, token, sizeof(token)) &&
-      web_auth_check(auth, token)) {
-    return true;
+  String cookie = server.header("Cookie");
+  // 浏览器里可能留着一个旧的（已失效）令牌排在前面，挨个试
+  for (int i = 0; i < 4; i++) {
+    if (web_auth_cookie(cookie.c_str(), kAuthCookie, token, sizeof(token), i) && web_auth_check(auth, token)) {
+      return true;
+    }
   }
   return web_auth_check(auth, server.header("X-Auth-Token").c_str());
 }
@@ -371,6 +374,12 @@ static void handle_api_status() {
 
 static void handle_save() {
   Settings s = settings_get();
+  // 没勾的复选框浏览器不会提交。只有设置页整张表单（带 full）提交时才把没提交的当成关掉，
+  // 脚本只传几个字段时其他开关保持原样
+  bool full = server.hasArg("full");
+  auto flag = [full](const char *name, bool &field) {
+    if (full || server.hasArg(name)) field = server.hasArg(name);
+  };
   String city = server.arg("city");
   city.trim();
   if (city.length() > 0) s.city = city;
@@ -419,25 +428,29 @@ static void handle_save() {
   } else if (ai_key.length() > 0) {
     s.ai_key = ai_key;
   }
-  String ai_model = server.arg("ai_model");
-  ai_model.trim();
-  s.ai_model = ai_model.length() > 0 ? ai_model : String("qwen3.8-omni-flash-realtime");
-  String ai_voice = server.arg("ai_voice");
-  ai_voice.trim();
-  s.ai_voice = ai_voice == "Cherry" ? String() : ai_voice;  // 留空用模型默认的
+  if (full || server.hasArg("ai_model")) {
+    String ai_model = server.arg("ai_model");
+    ai_model.trim();
+    s.ai_model = ai_model.length() > 0 ? ai_model : String("qwen3.8-omni-flash-realtime");
+  }
+  if (full || server.hasArg("ai_voice")) {
+    String ai_voice = server.arg("ai_voice");
+    ai_voice.trim();
+    s.ai_voice = ai_voice == "Cherry" ? String() : ai_voice;  // 留空用模型默认的
+  }
 
   // 复选框不勾选时浏览器不会提交这个字段
-  s.night_on = server.hasArg("night_on");
-  s.night_sun = server.hasArg("night_sun");
-  s.auto_update = server.hasArg("auto_update");
+  flag("night_on", s.night_on);
+  flag("night_sun", s.night_sun);
+  flag("auto_update", s.auto_update);
   if (server.hasArg("ota_url")) {
     String ota_url = server.arg("ota_url");
     ota_url.trim();
     // 填错了就当没填，照样用 GitHub；网页上会提示格式
     s.ota_url = ota_is_valid_source_url(ota_url.c_str()) ? ota_url : String("");
   }
-  s.sound_on = server.hasArg("sound_on");
-  s.sound_quiet_night = server.hasArg("sound_quiet");
+  flag("sound_on", s.sound_on);
+  flag("sound_quiet", s.sound_quiet_night);
   long vol = server.arg("sound_volume").toInt();
   if (server.hasArg("sound_volume") && vol >= 0 && vol <= 100) s.sound_volume = vol;
   int start = night_parse_hhmm(server.arg("night_start").c_str());
@@ -461,14 +474,14 @@ static void handle_save() {
   minutes_arg("pomo_every", s.pomo_every, 1, 8);
   minutes_arg("sit_min", s.sit_min, 10, 240);
   minutes_arg("water_min", s.water_min, 10, 240);
-  s.sit_on = server.hasArg("sit_on");
-  s.water_on = server.hasArg("water_on");
-  s.rain_on = server.hasArg("rain_on");
-  s.music_on = server.hasArg("music_on");
-  s.wake_on = server.hasArg("wake_on");
-  s.barge_on = server.hasArg("barge_on");
-  s.chime_on = server.hasArg("chime_on");
-  s.alarm_on = server.hasArg("alarm_on");
+  flag("sit_on", s.sit_on);
+  flag("water_on", s.water_on);
+  flag("rain_on", s.rain_on);
+  flag("music_on", s.music_on);
+  flag("wake_on", s.wake_on);
+  flag("barge_on", s.barge_on);
+  flag("chime_on", s.chime_on);
+  flag("alarm_on", s.alarm_on);
   int at = night_parse_hhmm(server.arg("alarm_time").c_str());
   if (at >= 0) s.alarm_time = at;
   if (server.hasArg("alarm_time")) {  // 确认是设置表单提交的，再更新星期

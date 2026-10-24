@@ -112,7 +112,7 @@ void web_auth_load_tokens(WebAuth &a, const char *s) {
   }
 }
 
-bool web_auth_cookie(const char *header, const char *name, char *out, size_t n) {
+bool web_auth_cookie(const char *header, const char *name, char *out, size_t n, int skip) {
   if (!header || !n) return false;
   size_t name_len = strlen(name);
   const char *p = header;
@@ -120,7 +120,7 @@ bool web_auth_cookie(const char *header, const char *name, char *out, size_t n) 
     while (*p == ' ' || *p == ';') p++;
     const char *end = strchr(p, ';');
     size_t len = end ? (size_t)(end - p) : strlen(p);
-    if (len > name_len && strncmp(p, name, name_len) == 0 && p[name_len] == '=') {
+    if (len > name_len && strncmp(p, name, name_len) == 0 && p[name_len] == '=' && skip-- == 0) {
       size_t vlen = len - name_len - 1;
       if (vlen >= n) return false;
       memcpy(out, p + name_len + 1, vlen);

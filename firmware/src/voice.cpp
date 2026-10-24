@@ -825,6 +825,11 @@ static std::string converse(bool &idle, bool &retry) {
         why = "好久没听到声音，先挂了喵";
         break;
       }
+    } else if (st == VoiceState::Hearing && now - s.last_activity > kVoiceHearingMaxMs) {
+      // 一直「在听」不结束：多半是旁边有电视、风扇这类不停的声音，服务器一直当成有人在说话
+      idle = true;
+      why = "周围一直有声音，听不清你说话，先挂了喵";
+      break;
     } else if (st == VoiceState::Thinking && now - s.stopped_at > kAnswerMs) {
       set_text(status.error, sizeof(status.error), std::string("这句没等到回答，再说一遍吧"));
       net_report(NetService::Voice, -3, "等回答超时");

@@ -38,7 +38,7 @@ bool ota_is_newer(const char *current, const char *latest) {
 static bool is_md5_hex(const char *s) {
   if (!s || strlen(s) != 32) return false;
   for (; *s; s++) {
-    if (!isdigit((unsigned char)*s) && !(*s >= 'a' && *s <= 'f')) return false;
+    if (!isdigit((unsigned char)*s) && !isxdigit((unsigned char)*s)) return false;
   }
   return true;
 }
@@ -120,7 +120,7 @@ bool ota_parse_manifest(JsonDocument &doc, const char *board, OtaManifest &out, 
   strncpy(out.version, version, sizeof(out.version) - 1);
   out.version[sizeof(out.version) - 1] = 0;
   strcpy(out.url, url);
-  strcpy(out.md5, md5);
+  for (int i = 0; i < 33; i++) out.md5[i] = (char)tolower((unsigned char)md5[i]);  // Update.setMD5 比较时区分大小写
   out.size = size;
   return true;
 }

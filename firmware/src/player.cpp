@@ -71,7 +71,8 @@ static int view_n = 0;
 
 // ---- 播放（播放任务写，主循环读） ----
 
-static TaskHandle_t task;     // 播放任务，第一次要放歌时才建（省下 10KB 内部内存，开机时 WiFi 和 TLS 要用）
+static TaskHandle_t task;     // 播放任务，第一次要放歌时才建，停了 10 分钟自己退出（省下 10KB 内部内存，WiFi 和 TLS 要用）
+static constexpr uint32_t kTaskIdleExitMs = 10 * 60 * 1000;
 static bool ready = false;    // player_begin 成功了
 static void start_player_task();
 static portMUX_TYPE cmd_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -131,17 +132,26 @@ static uint32_t take_cmds() {
   return c;
 }
 
+// 播放任务会自己退出，task 要在 cmd_mux 里读写
+static void notify_task() {
+  portENTER_CRITICAL(&cmd_mux);
+  TaskHandle_t t = task;
+  portEXIT_CRITICAL(&cmd_mux);
+  if (t) xTaskNotifyGive(t);
+}
+
 static void send(uint32_t cmd) {
   portENTER_CRITICAL(&cmd_mux);
   cmds |= cmd;
   portEXIT_CRITICAL(&cmd_mux);
-  if (task) xTaskNotifyGive(task);
+  notify_task();
 }
 
-// 主循环和网页发来的命令：播放任务还没建时先建好（列表变了这种不用放歌的命令不建，等它建好后一起处理）
+// 主循环和网页发来的命令：播放任务还没建时建好（列表变了这种不用放歌的命令不建，等它建好后一起处理）。
+// 先记下命令再建：任务正好在退出时，看到有命令就不退了
 static void send_play(uint32_t cmd) {
-  start_player_task();
   send(cmd);
+  start_player_task();
 }
 
 static void *psram_calloc(size_t n, size_t size) {
@@ -766,6 +776,7 @@ static int sleep_gain() {
 static int16_t *pcm;  // 解出来的声音（kChunk * 4 个采样，放在 PSRAM）
 
 static void player_task(void *) {
+  uint32_t idle_since = 0;
   for (;;) {
     // 睡眠定时到了：暂停（暂停着也照样倒计时）
     uint32_t until = sleep_until;
@@ -783,10 +794,23 @@ static void player_task(void *) {
     if (!playing) {
       stop_music();
       st.playing = false;
+      if (!idle_since) idle_since = millis();
       ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
       handle_cmds(take_cmds());
+      // 停了很久又没开睡眠定时：退出，把栈还给内部 RAM。歌、进度这些都在全局变量里，下次建好接着用
+      if (millis() - idle_since >= kTaskIdleExitMs) {
+        portENTER_CRITICAL(&cmd_mux);
+        bool quit = cmds == 0 && !sleep_until;
+        if (quit) task = nullptr;
+        portEXIT_CRITICAL(&cmd_mux);
+        if (quit) {
+          log_i("player: idle, task exits");
+          vTaskDelete(nullptr);
+        }
+      }
       continue;
     }
+    idle_since = 0;
     uint32_t c = take_cmds();
     if (c) {
       handle_cmds(c);
@@ -913,17 +937,26 @@ void player_begin() {
 }
 
 static void start_player_task() {
-  if (!ready || task) return;  // 只在主循环里调用（按钮、网页），不会同时建两个
-  // 刚建好的任务先看一遍列表（还没建时扫完的那几次没发给它），再处理命令
+  if (!ready) return;  // 只在主循环里调用（按钮、网页），不会同时建两个
+  static bool first = true;
   portENTER_CRITICAL(&cmd_mux);
-  cmds |= kCmdListChanged;
+  bool have = task != nullptr;
+  // 第一次建好的任务先看一遍列表（恢复上次放到哪），再处理命令。之后再建的不用：
+  // 列表变了的命令没有任务时也记着，重看一遍会把随机顺序打乱
+  if (!have && first) cmds |= kCmdListChanged;
   portEXIT_CRITICAL(&cmd_mux);
+  if (have) return;
+  first = false;
   // 解码在 1 号核（界面那个核，0 号核上有 WiFi 和唤醒词），比界面优先级高一点，放歌不卡；
   // 栈要装下 dr_flac 打开文件时的 5KB 左右
-  if (xTaskCreatePinnedToCore(player_task, "player", 10240, nullptr, 3, &task, 1) != pdPASS) {
-    task = nullptr;
+  TaskHandle_t t = nullptr;
+  if (xTaskCreatePinnedToCore(player_task, "player", 10240, nullptr, 3, &t, 1) != pdPASS) {
     log_e("player: no memory for task");
+    return;
   }
+  portENTER_CRITICAL(&cmd_mux);
+  task = t;
+  portEXIT_CRITICAL(&cmd_mux);
 }
 
 bool player_supported() { return ready; }
@@ -1049,13 +1082,16 @@ void player_seek_to(uint32_t ms) {
 void player_cycle_mode() { send_play(kCmdMode); }
 
 void player_cycle_sleep() {
-  start_player_task();  // 倒计时在播放任务里走
+  // 倒计时在播放任务里走
   int m = sleep_next_choice(sleep_minutes);
   sleep_minutes = m;
   uint32_t until = m ? millis() + (uint32_t)m * 60000 : 0;
+  portENTER_CRITICAL(&cmd_mux);
   sleep_until = until == 0 && m ? 1 : until;
+  portEXIT_CRITICAL(&cmd_mux);
   st.sleep_left_s = m * 60;
-  if (task) xTaskNotifyGive(task);
+  start_player_task();  // 放在设好之后：任务正要退出时看到有定时就不退了
+  notify_task();
 }
 
 PlayerStatus player_status() {

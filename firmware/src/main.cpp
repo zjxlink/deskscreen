@@ -198,9 +198,14 @@ static void apply_settings() {
   news_style = s.news_style;
   news_ticker = news_on && s.news_ticker;
   if (news_data) ui_set_news(*news_data, news_style);
+  uint32_t was_hidden = screen_cfg.page_hidden;
   c.page_hidden = pages_parse_hidden(s.pages_off.c_str());
   chat_has_key = s.ai_key.length() > 0;
   screen.configure(c);  // 番茄钟页、AI 聊天页和相册页不参与轮播，番茄钟进行中时固定显示
+  // 在网页上把当前这页隐藏了：马上回时钟页（快捷设置里隐藏的等关掉快捷设置时再走）。
+  // 只看这次新隐藏的，屏保、番茄钟这些用 go_to 跳过去的隐藏页不受影响
+  uint32_t cur = 1u << screen.page();
+  if (screen.started() && !quick_on && (c.page_hidden & cur) && !(was_hidden & cur)) screen.go_to(PAGE_CLOCK, millis());
   album_sec = s.album_sec;
   album_shuffle = s.album_shuffle;
   saver_on = s.saver_on && photos_supported();
@@ -520,7 +525,7 @@ static void react(PetMood mood, uint32_t ms, bool show) {
   if (!screen.started()) return;
   screen.activity(now);  // 有人在动它，当然有人
   // 摇一摇、倒过来时跳到小猫页让你看到；急刹车只在已经显示小猫时有反应，开车时不乱翻页
-  if (show && !alert_on && !quick_on && !game_on && !ota_screen) screen.go_to(PAGE_PET, now);
+  if (show && !alert_on && !quick_on && !game_on && !ota_screen && !screen.skipped(PAGE_PET)) screen.go_to(PAGE_PET, now);
 }
 
 // 每 20ms 读一次加速度
@@ -559,16 +564,20 @@ static void update_music() {
     Page p = screen.page();
     if (music_on_setting && screen.started() && p != PAGE_PET && p != PAGE_MUSIC && p != PAGE_POMODORO && p != PAGE_CHAT && p != PAGE_ALBUM &&
         p != PAGE_MOVIE && now - last_input >= kMusicIdleMs && !screen.night() && !screen.dimmed() && !alert_on &&
-        !quick_on && !game_on && !ota_screen && !pomo.running()) {
+        !quick_on && !game_on && !ota_screen && !pomo.running() && !screen.skipped(PAGE_PET)) {
       music_return = p;
       music_switched = true;
       screen.go_to(PAGE_PET, now);
     }
-  } else if (!music.playing && was) {
-    if (music_switched && screen.page() == PAGE_PET && last_input < music_start && !alert_on && !quick_on &&
-        !game_on && !ota_screen)
+  }
+  // 音乐停了切回去。提醒、快捷设置等开着时先等它们关掉；中间有人碰过屏幕或翻走了就不切了
+  if (music_switched && !music.playing) {
+    if (screen.page() != PAGE_PET || last_input >= music_start) {
+      music_switched = false;
+    } else if (!alert_on && !quick_on && !game_on && !ota_screen) {
       screen.go_to(music_return, now);
-    music_switched = false;
+      music_switched = false;
+    }
   }
   if (music.playing && screen.page() == PAGE_PET) screen.stay(now);  // 放音乐时不轮播走
 }
@@ -707,6 +716,7 @@ static void update_news() {
 
 static void update_screen() {
   static int last_brightness = -1;
+  if (quick_on) screen.stay(millis());  // 快捷设置开着时不轮播，关掉时还在原来那页
   screen.tick(millis(), local_minutes());
   if (screen.brightness() != last_brightness) {
     last_brightness = screen.brightness();
@@ -1606,6 +1616,7 @@ static void check_touch() {
   bool settled = now - page_at >= kControlGraceMs;
   static bool down_settled = true;  // 按下时页面已经停稳（松手时按这个判断，不看松手时）
   static int down_page = -1;
+  static bool down_alert = false;  // 按下时提醒已经在显示
 
   int x = 0, y = 0;
   bool raw = display_touch(x, y);
@@ -1620,7 +1631,13 @@ static void check_touch() {
     // 快捷设置「显示页面」那一屏：上下滑动跟着手指滚动
     if (moved && quick_on && !long_done) ui_quick_drag(down_y - y);
   }
+  // 按着的时候弹出了提醒：这次松手不算，免得还没看清就被关掉
+  if (!touched && was_touched && alert_on && !down_alert) {
+    was_touched = false;
+    return;
+  }
   if (touched && !was_touched) {
+    down_alert = alert_on;
     down_at = now;
     down_x = last_x = x;
     down_y = last_y = y;

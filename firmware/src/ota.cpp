@@ -182,14 +182,24 @@ static bool fetch_manifest(const char *url, OtaManifest &m, char *err, size_t n)
 static bool check() {
   set_state(OtaState::Checking, "");
   String own = settings_get().ota_url;
-  OtaManifest m;
+  OtaManifest m = {};
   bool mirror = false;
   char own_err[32] = "", gh_err[32] = "";
   if (own.length() > 0) {
     mirror = fetch_manifest(own.c_str(), m, own_err, sizeof(own_err));
+    if (!mirror) m = {};  // 失败时可能只填了一半
     if (!mirror) log_w("ota: own server failed (%s), trying GitHub", own_err);
   }
-  if (!mirror && !fetch_manifest(OTA_MANIFEST_URL, m, gh_err, sizeof(gh_err))) {
+  if (mirror && !ota_is_newer(FW_VERSION, m.version)) {
+    // 自建服务器说没有新版本：可能是它还没同步到最新的，再问一下 GitHub，那边有新的就用那边的
+    OtaManifest gh = {};
+    if (fetch_manifest(OTA_MANIFEST_URL, gh, gh_err, sizeof(gh_err)) && ota_is_newer(m.version, gh.version)) {
+      log_w("ota: own server has %s, GitHub has %s", m.version, gh.version);
+      m = gh;
+      mirror = false;
+    }
+  }
+  if (!mirror && !m.version[0] && !fetch_manifest(OTA_MANIFEST_URL, m, gh_err, sizeof(gh_err))) {
     char err[64];
     if (own.length() > 0) {
       snprintf(err, sizeof(err), "检查更新失败（自建 %s，GitHub %s）", own_err, gh_err);

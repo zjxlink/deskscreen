@@ -69,11 +69,9 @@ static void test_reject_bad_manifest() {
   // 不是 https
   check_bad_manifest("{\"version\":\"v1.0.0\",\"boards\":{\"box3\":{\"url\":\"http://x/f.bin\","
                      "\"md5\":\"0123456789abcdef0123456789abcdef\",\"size\":1}}}");
-  // MD5 不对（长度、大写、非十六进制）
+  // MD5 不对（长度、非十六进制）
   check_bad_manifest("{\"version\":\"v1.0.0\",\"boards\":{\"box3\":{\"url\":\"https://x/f.bin\","
                      "\"md5\":\"0123\",\"size\":1}}}");
-  check_bad_manifest("{\"version\":\"v1.0.0\",\"boards\":{\"box3\":{\"url\":\"https://x/f.bin\","
-                     "\"md5\":\"0123456789ABCDEF0123456789ABCDEF\",\"size\":1}}}");
   check_bad_manifest("{\"version\":\"v1.0.0\",\"boards\":{\"box3\":{\"url\":\"https://x/f.bin\","
                      "\"md5\":\"0123456789abcdef0123456789abcdeg\",\"size\":1}}}");
   // 大小为 0、版本号不对、缺字段
@@ -83,6 +81,16 @@ static void test_reject_bad_manifest() {
                      "\"md5\":\"0123456789abcdef0123456789abcdef\",\"size\":1}}}");
   check_bad_manifest("{\"version\":\"v1.0.0\"}");
   check_bad_manifest("{}");
+}
+
+static void test_upper_md5() {
+  // 大写的 MD5 也收，存成小写
+  JsonDocument doc;
+  deserializeJson(doc, "{\"version\":\"v1.0.0\",\"boards\":{\"box3\":{\"url\":\"https://x/f.bin\","
+                       "\"md5\":\"0123456789ABCDEF0123456789ABCDEF\",\"size\":1}}}");
+  OtaManifest m{};
+  TEST_ASSERT_TRUE(ota_parse_manifest(doc, "box3", m));
+  TEST_ASSERT_EQUAL_STRING("0123456789abcdef0123456789abcdef", m.md5);
 }
 
 static void check_resolve(const char *base, const char *ref, const char *want) {
@@ -183,6 +191,7 @@ int main() {
   RUN_TEST(test_is_newer);
   RUN_TEST(test_parse_manifest);
   RUN_TEST(test_reject_bad_manifest);
+  RUN_TEST(test_upper_md5);
   RUN_TEST(test_resolve_url);
   RUN_TEST(test_source_url);
   RUN_TEST(test_mirror_manifest);

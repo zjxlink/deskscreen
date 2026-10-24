@@ -31,7 +31,12 @@ enum : uint32_t {
   kCmdClose = 32,
 };
 
+// 播放任务：第一次有命令时才建，片子关着又过了几分钟没命令就自己退出（省下 8KB 内部内存）
 static TaskHandle_t task;
+static bool task_starting = false;
+static bool ready = false;  // movie_begin 成功了（有 TF 卡槽，内存够）
+static constexpr uint32_t kTaskIdleExitMs = 3 * 60 * 1000;
+static void movie_task(void *);
 static SemaphoreHandle_t list_lock;
 static portMUX_TYPE cmd_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint32_t cmds = 0;
@@ -72,10 +77,28 @@ static uint32_t take_cmds() {
 }
 
 static void send(uint32_t cmd) {
+  if (!ready) return;
   portENTER_CRITICAL(&cmd_mux);
   cmds |= cmd;
+  TaskHandle_t t = task;
+  bool start = !t && !task_starting;
+  if (start) task_starting = true;
   portEXIT_CRITICAL(&cmd_mux);
-  if (task) xTaskNotifyGive(task);
+  if (t) {
+    xTaskNotifyGive(t);
+    return;
+  }
+  if (!start) return;  // 别处正在建，建好后会看到这条命令
+  // 和相册一样放在 WiFi 那个核上；优先级比相册高一点，放片子时不卡
+  TaskHandle_t created = nullptr;
+  if (xTaskCreatePinnedToCore(movie_task, "movie", 8192, nullptr, 2, &created, 0) != pdPASS) {
+    created = nullptr;
+    log_e("movie: no memory for task");
+  }
+  portENTER_CRITICAL(&cmd_mux);
+  task = created;
+  task_starting = false;
+  portEXIT_CRITICAL(&cmd_mux);
 }
 
 static size_t file_read(void *ctx, uint32_t off, uint8_t *buf, size_t len) {
@@ -319,7 +342,16 @@ static bool reopen_at(uint32_t frame) {
 static void movie_task(void *) {
   for (;;) {
     bool playing = st_open && !st_paused && !st_ended && !st_error;
-    if (!playing) ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    if (!playing && !cmds && !ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(kTaskIdleExitMs)) && !st_open) {
+      portENTER_CRITICAL(&cmd_mux);
+      bool quit = cmds == 0;
+      if (quit) task = nullptr;
+      portEXIT_CRITICAL(&cmd_mux);
+      if (quit) {
+        log_i("movie: idle, task exits");
+        vTaskDelete(nullptr);
+      }
+    }
     uint32_t c = take_cmds();
     if (c & kCmdScan) scan();
     if (c & kCmdClose) close_movie();
@@ -381,15 +413,14 @@ void movie_begin() {
       return;
     }
   }
-  // 和相册一样放在 WiFi 那个核上；优先级比相册高一点，放片子时不卡
-  xTaskCreatePinnedToCore(movie_task, "movie", 8192, nullptr, 2, &task, 0);
+  ready = true;
 }
 
-bool movie_supported() { return task != nullptr; }
+bool movie_supported() { return ready; }
 
 void movie_rescan() { send(kCmdScan); }
 
-MovieCard movie_card() { return task ? card : MovieCard::NoSlot; }
+MovieCard movie_card() { return ready ? card : MovieCard::NoSlot; }
 
 uint32_t movie_list_version() { return version; }
 
@@ -480,7 +511,7 @@ static void stop_playing() {
 }
 
 void movie_rescan_now() {
-  if (task) scan();
+  if (ready) scan();
 }
 
 bool movie_card_space(uint64_t &total, uint64_t &used) {
@@ -513,7 +544,7 @@ bool movie_upload_begin(uint64_t size) {
   upload_ok = false;
   upload_fill = 0;
   upload_total = 0;
-  if (!task) {
+  if (!ready) {
     upload_err = "这块板子没有 TF 卡槽";
     return false;
   }
@@ -544,6 +575,10 @@ bool movie_upload_begin(uint64_t size) {
 }
 
 bool movie_upload_write(const uint8_t *data, size_t len) {
+  // Content-Length 可能是假的（或者分块上传没有），按实际收到的再拦一次
+  if (upload_ok && upload_total + len > kMaxFileBytes) {
+    upload_fail("文件超过 2GB，板子放不了后半部分。请在电脑上分成几段再转换");
+  }
   while (upload_ok && len > 0) {
     size_t n = std::min(len, kUploadBuf - upload_fill);
     memcpy(upload_buf + upload_fill, data, n);
@@ -594,7 +629,7 @@ void movie_upload_abort() {
 const char *movie_upload_error() { return upload_err; }
 
 bool movie_delete(const char *name) {
-  if (!task || !movie_is_file(name) || strchr(name, '/') || strchr(name, '\\')) return false;
+  if (!ready || !movie_is_file(name) || strchr(name, '/') || strchr(name, '\\')) return false;
   stop_playing();
   bool ok = photos_card_lock() && SD_MMC.remove(path_of(name));
   photos_card_unlock();

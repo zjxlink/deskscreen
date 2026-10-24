@@ -95,6 +95,10 @@ static void test_cookie() {
   TEST_ASSERT_FALSE(web_auth_cookie("", "ds_auth", v, sizeof(v)));
   TEST_ASSERT_FALSE(web_auth_cookie(nullptr, "ds_auth", v, sizeof(v)));
   TEST_ASSERT_FALSE(web_auth_cookie("ds_auth=0123456789", "ds_auth", v, 5));  // 放不下
+  // 同名的有两个：skip 取后面那个
+  TEST_ASSERT_TRUE(web_auth_cookie("ds_auth=old; x=1; ds_auth=new", "ds_auth", v, sizeof(v), 1));
+  TEST_ASSERT_EQUAL_STRING("new", v);
+  TEST_ASSERT_FALSE(web_auth_cookie("ds_auth=old; x=1; ds_auth=new", "ds_auth", v, sizeof(v), 2));
 }
 
 // 输错作废一个码后要等，越错等得越久，配对成功后清零

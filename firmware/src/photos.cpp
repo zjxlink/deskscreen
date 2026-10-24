@@ -44,7 +44,8 @@ struct Source {
 };
 
 static SemaphoreHandle_t lock;
-static TaskHandle_t task;
+static TaskHandle_t task;    // 相册任务，可能自己退出了（见 photo_task）
+static bool frames_ok = false;  // 两帧的内存分到了
 static bool mounted = false;
 static bool tried = false;
 static uint32_t last_try = 0;
@@ -438,20 +439,55 @@ static void decode_next() {
   }
 }
 
+// 相册任务：开机先挂载、扫描一次；之后不在放相册时，过几分钟自己退出，要用时再建（省下 8KB 内部内存）
+static portMUX_TYPE task_mux = portMUX_INITIALIZER_UNLOCKED;
+static constexpr uint32_t kTaskIdleExitMs = 3 * 60 * 1000;
+
 static void photo_task(void *) {
-  xSemaphoreTake(lock, portMAX_DELAY);
-  if (mount_locked()) {
-    for (Source &s : sources) {
-      if (!scan_locked(s)) break;
+  static bool scanned = false;
+  if (!scanned) {
+    scanned = true;
+    xSemaphoreTake(lock, portMAX_DELAY);
+    if (mount_locked()) {
+      for (Source &s : sources) {
+        if (!scan_locked(s)) break;
+      }
     }
-  }
-  xSemaphoreGive(lock);
-  busy = false;
-  for (;;) {
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    decode_next();
+    xSemaphoreGive(lock);
     busy = false;
   }
+  for (;;) {
+    // 只看 busy：新建的任务没有通知也要干活，通知可能是上一次留下的
+    uint32_t got = ulTaskNotifyTake(pdTRUE, busy ? 0 : pdMS_TO_TICKS(kTaskIdleExitMs));
+    if (busy) {
+      decode_next();
+      busy = false;
+      continue;
+    }
+    if (got) continue;
+    // 要图的先把 busy 设好再看 task，所以这里看到 busy 还是 false 就可以放心退出
+    portENTER_CRITICAL(&task_mux);
+    bool quit = !busy;
+    if (quit) task = nullptr;
+    portEXIT_CRITICAL(&task_mux);
+    if (quit) {
+      log_i("photos: idle, task exits");
+      vTaskDelete(nullptr);
+    }
+  }
+}
+
+static bool start_task() {
+  // 解码时间长，放在 WiFi 那个核上低优先级跑，不影响界面
+  TaskHandle_t t = nullptr;
+  if (xTaskCreatePinnedToCore(photo_task, "photos", 8192, nullptr, 1, &t, 0) != pdPASS) {
+    log_e("photos: no memory for task");
+    return false;
+  }
+  portENTER_CRITICAL(&task_mux);
+  task = t;
+  portEXIT_CRITICAL(&task_mux);
+  return true;
 }
 
 void photos_begin() {
@@ -469,8 +505,8 @@ void photos_begin() {
     }
   }
   busy = true;  // 开机先挂载、扫描一次
-  // 解码时间长，放在 WiFi 那个核上低优先级跑，不影响界面
-  xTaskCreatePinnedToCore(photo_task, "photos", 8192, nullptr, 1, &task, 0);
+  frames_ok = true;
+  if (!start_task()) busy = false;
 }
 
 bool photos_supported() {
@@ -510,12 +546,19 @@ void photos_card_unlock() {
 }
 
 void photos_request_next(bool shuffle, uint32_t gif_ms) {
-  if (!task || busy || frame_ready) return;
+  if (!frames_ok || busy || frame_ready) return;  // 只在主循环里调用
   want_shuffle = shuffle;
   gif_min_ms = gif_ms;
   stop_req = false;
   busy = true;
-  xTaskNotifyGive(task);
+  portENTER_CRITICAL(&task_mux);
+  TaskHandle_t t = task;
+  portEXIT_CRITICAL(&task_mux);
+  if (t) {
+    xTaskNotifyGive(t);  // 新建的任务一开始就看 busy，不用通知
+  } else if (!start_task()) {
+    busy = false;
+  }
 }
 
 void photos_stop() {

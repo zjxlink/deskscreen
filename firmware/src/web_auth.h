@@ -53,8 +53,9 @@ void web_auth_forget_all(WebAuth &a);
 void web_auth_save_tokens(const WebAuth &a, char *out, size_t n);
 void web_auth_load_tokens(WebAuth &a, const char *s);
 
-// 从 Cookie 头里取出 name 的值（如 "a=1; ds_auth=xxx"）。没有或放不下时返回 false
-bool web_auth_cookie(const char *header, const char *name, char *out, size_t n);
+// 从 Cookie 头里取出 name 的值（如 "a=1; ds_auth=xxx"）。没有或放不下时返回 false。
+// 同名的可能有好几个（不同路径、IP 和 .local 各存了一个），skip 跳过前面几个
+bool web_auth_cookie(const char *header, const char *name, char *out, size_t n, int skip = 0);
 
 // 浏览器发来的 Host 是不是局域网里的地址（IP、deskscreen.local、路由器给的 xxx.lan 这类）。
 // 外网域名一律不认：防止恶意网页用 DNS 重绑定，借访客的浏览器来猜配对码、改设置
